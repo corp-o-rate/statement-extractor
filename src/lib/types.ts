@@ -1,0 +1,102 @@
+/**
+ * Core types for statement extraction
+ */
+
+export type EntityType =
+  | 'ORG'
+  | 'PERSON'
+  | 'GPE'
+  | 'LOC'
+  | 'PRODUCT'
+  | 'EVENT'
+  | 'WORK_OF_ART'
+  | 'LAW'
+  | 'DATE'
+  | 'MONEY'
+  | 'PERCENT'
+  | 'QUANTITY'
+  | 'UNKNOWN';
+
+export interface Entity {
+  name: string;
+  type: EntityType;
+}
+
+export interface Statement {
+  subject: Entity;
+  object: Entity;
+  predicate: string;
+  text: string;
+}
+
+export interface ExtractionResult {
+  statements: Statement[];
+  cached: boolean;
+  message?: string;
+  inputText?: string;
+}
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: EntityType;
+  x?: number;
+  y?: number;
+  fx?: number | null;
+  fy?: number | null;
+}
+
+export interface GraphLink {
+  source: string | GraphNode;
+  target: string | GraphNode;
+  predicate: string;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  links: GraphLink[];
+}
+
+/**
+ * Get CSS class for entity type badge
+ */
+export function getEntityBadgeClass(type: EntityType): string {
+  const typeMap: Record<EntityType, string> = {
+    ORG: 'badge-org',
+    PERSON: 'badge-person',
+    GPE: 'badge-gpe',
+    LOC: 'badge-loc',
+    PRODUCT: 'badge-product',
+    EVENT: 'badge-event',
+    WORK_OF_ART: 'badge-default',
+    LAW: 'badge-default',
+    DATE: 'badge-default',
+    MONEY: 'badge-default',
+    PERCENT: 'badge-default',
+    QUANTITY: 'badge-default',
+    UNKNOWN: 'badge-default',
+  };
+  return typeMap[type] || 'badge-default';
+}
+
+/**
+ * Get color for entity type (for graph visualization)
+ */
+export function getEntityColor(type: EntityType): string {
+  const colorMap: Record<EntityType, string> = {
+    ORG: '#3b82f6',
+    PERSON: '#8b5cf6',
+    GPE: '#10b981',
+    LOC: '#06b6d4',
+    PRODUCT: '#f59e0b',
+    EVENT: '#ec4899',
+    WORK_OF_ART: '#6b7280',
+    LAW: '#6b7280',
+    DATE: '#6b7280',
+    MONEY: '#6b7280',
+    PERCENT: '#6b7280',
+    QUANTITY: '#6b7280',
+    UNKNOWN: '#6b7280',
+  };
+  return colorMap[type] || '#6b7280';
+}

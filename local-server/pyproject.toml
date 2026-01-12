@@ -1,0 +1,29 @@
+[project]
+name = "statement-extractor-server"
+version = "1.0.0"
+description = "Local API server for T5-Gemma 2 statement extraction model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "corp-o-rate", email = "hello@corp-o-rate.com" }
+]
+keywords = ["nlp", "statement-extraction", "t5", "gemma", "fastapi"]
+
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "torch>=2.0.0",
+    "transformers>=4.35.0",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.uv]
+# This is a script-only project, not a package
+package = false
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "httpx>=0.24.0",
+]

@@ -1,0 +1,15 @@
+[project]
+name = "statement-extractor-scripts"
+version = "1.0.0"
+description = "Scripts for Statement Extractor model management"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+dependencies = [
+    "huggingface-hub>=0.20.0",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.uv]
+# This is a script-only project, not a package
+package = false

@@ -1,65 +1,169 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import { Header } from '@/components/header';
+import { Footer } from '@/components/footer';
+import { StatementInput } from '@/components/statement-input';
+import { StatementList } from '@/components/statement-list';
+import { RelationshipGraph } from '@/components/relationship-graph';
+import { RateLimitBanner } from '@/components/rate-limit-banner';
+import { Documentation } from '@/components/documentation';
+import { LLMPrompts } from '@/components/llm-prompts';
+import { ExtractionResult, Statement } from '@/lib/types';
+import { toast } from 'sonner';
+import { Network, FileText, BookOpen, Bot } from 'lucide-react';
 
 export default function Home() {
+  const [statements, setStatements] = useState<Statement[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [rateLimitMessage, setRateLimitMessage] = useState<string | undefined>();
+
+  const handleExtract = async (text: string) => {
+    setIsLoading(true);
+    setRateLimitMessage(undefined);
+
+    try {
+      const response = await fetch('/api/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to extract statements');
+      }
+
+      const result: ExtractionResult = await response.json();
+
+      setStatements(result.statements);
+
+      if (result.cached && result.message) {
+        setRateLimitMessage(result.message);
+        toast.warning(result.message);
+      } else if (result.statements.length === 0) {
+        toast.info('No statements found in the text');
+      } else {
+        toast.success(`Extracted ${result.statements.length} statement${result.statements.length !== 1 ? 's' : ''}`);
+      }
+    } catch (error) {
+      console.error('Extraction error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to extract statements');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+    <div className="min-h-screen flex flex-col">
+      <Header />
+
+      <main className="flex-1">
+        {/* Hero Section */}
+        <section className="py-12 px-4 sm:px-6 lg:px-8 border-b">
+          <div className="max-w-6xl mx-auto">
+            <div className="text-center mb-8">
+              <span className="section-label">NLP MODEL DEMO</span>
+              <h1 className="text-4xl md:text-5xl font-black mt-4 tracking-tight">
+                EXTRACT STATEMENTS.
+                <br />
+                <span className="text-gray-400">VISUALIZE RELATIONSHIPS.</span>
+              </h1>
+              <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
+                Transform unstructured text into structured statements using our T5-Gemma 2 model.
+                Identify subjects, objects, predicates, and entity types automatically.
+              </p>
+            </div>
+
+            {/* Input Section */}
+            <div className="brutal-card p-6 md:p-8">
+              <StatementInput onExtract={handleExtract} isLoading={isLoading} />
+            </div>
+          </div>
+        </section>
+
+        {/* Results Section */}
+        <section className="py-12 px-4 sm:px-6 lg:px-8">
+          <div className="max-w-6xl mx-auto">
+            <RateLimitBanner message={rateLimitMessage} />
+
+            <div className="grid lg:grid-cols-2 gap-8">
+              {/* Statements List */}
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <FileText className="w-5 h-5 text-red-600" />
+                  <h2 className="font-bold text-xl">Statements</h2>
+                </div>
+                <div className="editorial-card p-4 md:p-6 min-h-[400px]">
+                  <StatementList statements={statements} />
+                </div>
+              </div>
+
+              {/* Relationship Graph */}
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <Network className="w-5 h-5 text-red-600" />
+                  <h2 className="font-bold text-xl">Relationship Graph</h2>
+                </div>
+                <RelationshipGraph statements={statements} />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Documentation Section */}
+        <section className="py-12 px-4 sm:px-6 lg:px-8 bg-gray-50/50">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center gap-2 mb-6">
+              <BookOpen className="w-5 h-5 text-red-600" />
+              <h2 className="font-bold text-xl">Documentation</h2>
+            </div>
+            <Documentation />
+          </div>
+        </section>
+
+        {/* LLM Prompts Section */}
+        <section className="py-12 px-4 sm:px-6 lg:px-8">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex items-center gap-2 mb-6">
+              <Bot className="w-5 h-5 text-red-600" />
+              <h2 className="font-bold text-xl">For AI Assistants</h2>
+            </div>
+            <LLMPrompts />
+          </div>
+        </section>
+
+        {/* About Section */}
+        <section className="py-16 px-4 sm:px-6 lg:px-8 bg-gray-50 border-t">
+          <div className="max-w-4xl mx-auto text-center">
+            <span className="section-label">ABOUT THE MODEL</span>
+            <h2 className="text-2xl md:text-3xl font-black mt-4">
+              T5-Gemma 2 Statement Extractor
+            </h2>
+            <div className="mt-6 text-gray-600 space-y-4 text-left max-w-2xl mx-auto">
+              <p>
+                This model is based on Google&apos;s T5-Gemma 2 architecture (540M parameters) and has been
+                fine-tuned on 77,515 examples of statement extraction from corporate and news documents.
+              </p>
+              <p>
+                <strong>Key capabilities:</strong>
+              </p>
+              <ul className="list-disc list-inside space-y-1 ml-4">
+                <li>Extract subject-predicate-object triples from text</li>
+                <li>Identify entity types (ORG, PERSON, GPE, EVENT, etc.)</li>
+                <li>Resolve coreferences (pronouns → entity names)</li>
+                <li>Generate full resolved statement text</li>
+              </ul>
+              <p>
+                <strong>Training details:</strong> Final eval loss of 0.209, trained with beam search
+                (num_beams=4) for high-quality outputs.
+              </p>
+            </div>
+          </div>
+        </section>
       </main>
+
+      <Footer />
     </div>
   );
 }
