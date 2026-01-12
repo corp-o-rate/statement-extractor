@@ -106,13 +106,17 @@ def handler(job):
         "output": "<statements>...</statements>"
     }
     """
-    job_input = job.get("input", {})
+    logger.info(f"Received job: {job}")
 
-    # Get text from input
-    text = job_input.get("text", "")
+    job_input = job.get("input", {})
+    logger.info(f"Job input: {job_input}")
+
+    # Get text from input - support both "text" and "prompt" keys
+    text = job_input.get("text") or job_input.get("prompt", "")
 
     if not text:
-        return {"error": "No text provided"}
+        logger.error(f"No text provided. Job keys: {list(job.keys())}, Input keys: {list(job_input.keys()) if isinstance(job_input, dict) else 'not a dict'}")
+        return {"error": "No text provided. Send {\"input\": {\"text\": \"your text here\"}}"}
 
     # Wrap in page tags if not already wrapped
     if not text.startswith("<page>"):
