@@ -20,7 +20,7 @@ Visit [statement-extractor.vercel.app](https://statement-extractor.vercel.app) t
 
 ```bash
 # Clone the repository
-git clone https://github.com/corp-o-rate/statement-extractor
+git clone https://github.com/neilellis/statement-extractor
 cd statement-extractor
 
 # Install dependencies

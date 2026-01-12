@@ -24,7 +24,7 @@ export function RateLimitBanner({ message }: RateLimitBannerProps) {
               <ExternalLink className="w-3 h-3" />
             </a>
             <a
-              href="https://github.com/sponsors/nfleming"
+              href="https://github.com/sponsors/neilellis"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-gray-600 hover:text-gray-900"

@@ -37,7 +37,7 @@ export function Footer() {
               <ExternalLink className="w-4 h-4" />
             </a>
             <a
-              href="https://github.com/nfleming/statement-extractor"
+              href="https://github.com/neilellis/statement-extractor"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-6 py-3 border border-white/20 text-white font-semibold hover:bg-white/5 transition-all"
@@ -54,7 +54,7 @@ export function Footer() {
           </div>
           <div className="flex items-center gap-4">
             <a
-              href="https://huggingface.co/nfleming/statement-extractor-t5gemma2"
+              href="https://huggingface.co/Corp-o-Rate-Community/statement-extractor"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-white transition-colors"

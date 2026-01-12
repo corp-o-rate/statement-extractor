@@ -43,7 +43,7 @@ export function Header() {
               AI Prompts
             </a>
             <a
-              href="https://huggingface.co/nfleming/statement-extractor-t5gemma2"
+              href="https://huggingface.co/Corp-o-Rate-Community/statement-extractor"
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm text-gray-600 hover:text-black transition-colors flex items-center gap-1"
@@ -52,7 +52,7 @@ export function Header() {
               <ExternalLink className="w-3 h-3" />
             </a>
             <a
-              href="https://github.com/nfleming/statement-extractor"
+              href="https://github.com/neilellis/statement-extractor"
               target="_blank"
               rel="noopener noreferrer"
               className="p-2 hover:bg-gray-100 rounded transition-colors"
