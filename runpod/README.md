@@ -8,6 +8,8 @@ Deploy the Statement Extractor model to RunPod Serverless for production use.
 2. [Docker](https://docker.com) installed locally
 3. [Docker Hub](https://hub.docker.com) account (or another container registry)
 
+> **Note**: The model uses the T5Gemma2 architecture which requires the development version of `transformers` from GitHub. The Dockerfile handles this automatically.
+
 ## Deployment Steps
 
 ### 1. Build the Docker Image

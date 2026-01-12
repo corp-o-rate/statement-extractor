@@ -5,13 +5,14 @@ FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 # Set working directory
 WORKDIR /app
 
-# Install Python dependencies with compatible versions
+# Install Python dependencies
+# NOTE: T5Gemma2 requires the dev version of transformers from GitHub
 RUN pip install --no-cache-dir \
     runpod \
-    transformers==4.46.0 \
     accelerate \
     safetensors \
-    sentencepiece
+    sentencepiece \
+    "transformers @ git+https://github.com/huggingface/transformers.git"
 
 # Copy handler
 COPY handler.py /app/handler.py
