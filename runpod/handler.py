@@ -87,6 +87,13 @@ def extract_statements(text: str) -> str:
 
     # Decode and return
     result = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+    # Truncate at first </statements> to prevent runaway generation
+    end_tag = "</statements>"
+    if end_tag in result:
+        end_pos = result.find(end_tag) + len(end_tag)
+        result = result[:end_pos]
+
     return result
 
 
