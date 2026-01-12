@@ -60,9 +60,11 @@ export async function POST(request: NextRequest) {
       console.warn('No HF_TOKEN configured, returning cached example');
       return NextResponse.json({
         ...CACHED_EXAMPLE,
-        message: 'API not configured. Showing cached example. See documentation to run locally.',
+        message: 'API not configured (no HF_TOKEN). Showing cached example. See documentation to run locally.',
       });
     }
+
+    console.log(`Calling HuggingFace API: model=${HF_MODEL}, inputLength=${modelInput.length}`);
 
     try {
       const hfResponse = await fetch(
@@ -95,7 +97,7 @@ export async function POST(request: NextRequest) {
 
       if (!hfResponse.ok) {
         const errorText = await hfResponse.text();
-        console.error('HuggingFace API error:', hfResponse.status, errorText);
+        console.error(`HuggingFace API error: status=${hfResponse.status}, body=${errorText}`);
 
         // Model might be loading
         if (hfResponse.status === 503 || errorText.includes('loading')) {
@@ -105,9 +107,20 @@ export async function POST(request: NextRequest) {
           });
         }
 
+        // Parse error for more detail
+        let errorDetail = `Status ${hfResponse.status}`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorDetail = errorJson.error || errorJson.message || errorDetail;
+        } catch {
+          if (errorText.length < 200) {
+            errorDetail = errorText || errorDetail;
+          }
+        }
+
         return NextResponse.json({
           ...CACHED_EXAMPLE,
-          message: 'API error. Showing cached example.',
+          message: `API error: ${errorDetail}. Showing cached example.`,
         });
       }
 
