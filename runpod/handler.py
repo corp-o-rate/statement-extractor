@@ -9,6 +9,9 @@ import runpod
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 import logging
+import hashlib
+import os
+from collections import OrderedDict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,6 +23,34 @@ MODEL_ID = "Corp-o-Rate-Community/statement-extractor"
 model = None
 tokenizer = None
 stop_token_ids = None
+
+# Cache configuration (default 10GB)
+MAX_CACHE_SIZE_BYTES = int(os.environ.get("MAX_CACHE_SIZE_BYTES", 10 * 1024 * 1024 * 1024))
+
+# In-memory LRU cache for results (persists while worker is warm)
+result_cache: OrderedDict[str, str] = OrderedDict()
+cache_size_bytes = 0
+
+
+def get_cache_key(text: str) -> str:
+    """Generate a cache key from input text."""
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def get_entry_size(key: str, value: str) -> int:
+    """Estimate memory size of a cache entry in bytes."""
+    return len(key.encode()) + len(value.encode())
+
+
+def evict_if_needed(new_entry_size: int):
+    """Evict oldest entries if cache would exceed size limit."""
+    global cache_size_bytes
+
+    while result_cache and (cache_size_bytes + new_entry_size) > MAX_CACHE_SIZE_BYTES:
+        oldest_key, oldest_value = result_cache.popitem(last=False)
+        evicted_size = get_entry_size(oldest_key, oldest_value)
+        cache_size_bytes -= evicted_size
+        logger.info(f"Evicted cache entry: {oldest_key[:16]}... (freed {evicted_size} bytes)")
 
 
 class StopOnToken(StoppingCriteria):
@@ -80,7 +111,15 @@ def load_model():
 
 def extract_statements(text: str) -> str:
     """Extract statements from the input text."""
-    global model, tokenizer, stop_token_ids
+    global model, tokenizer, stop_token_ids, cache_size_bytes
+
+    # Check cache first
+    cache_key = get_cache_key(text)
+    if cache_key in result_cache:
+        # Move to end for LRU ordering
+        result_cache.move_to_end(cache_key)
+        logger.info(f"Cache hit for key: {cache_key[:16]}...")
+        return result_cache[cache_key]
 
     # Ensure model is loaded
     load_model()
@@ -116,6 +155,13 @@ def extract_statements(text: str) -> str:
     if end_tag in result:
         end_pos = result.find(end_tag) + len(end_tag)
         result = result[:end_pos]
+
+    # Store in cache with size tracking
+    entry_size = get_entry_size(cache_key, result)
+    evict_if_needed(entry_size)
+    result_cache[cache_key] = result
+    cache_size_bytes += entry_size
+    logger.info(f"Cached result for key: {cache_key[:16]}... (entries: {len(result_cache)}, size: {cache_size_bytes / 1024 / 1024:.1f}MB)")
 
     return result
 
