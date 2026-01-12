@@ -1,9 +1,15 @@
 # RunPod Serverless Dockerfile for Statement Extractor
-# Use a newer base image with compatible torch/transformers versions
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 # Set working directory
 WORKDIR /app
+
+# Upgrade PyTorch to 2.6+ (required for T5Gemma2 masking_utils)
+RUN pip install --no-cache-dir --upgrade \
+    torch==2.6.0 \
+    torchvision \
+    torchaudio \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # Install Python dependencies
 # NOTE: T5Gemma2 requires the dev version of transformers from GitHub
