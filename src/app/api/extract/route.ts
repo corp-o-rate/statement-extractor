@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 
     try {
       const hfResponse = await fetch(
-        `https://api-inference.huggingface.co/models/${HF_MODEL}`,
+        `https://router.huggingface.co/hf-inference/models/${HF_MODEL}`,
         {
           method: 'POST',
           headers: {
