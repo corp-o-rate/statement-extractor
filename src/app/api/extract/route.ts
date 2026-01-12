@@ -3,6 +3,9 @@ import { parseStatements } from '@/lib/statement-parser';
 import { CACHED_EXAMPLE } from '@/lib/cached-example';
 import { ExtractionResult } from '@/lib/types';
 
+// Extend Vercel function timeout to 3 minutes (requires Pro plan)
+export const maxDuration = 180;
+
 // Environment configuration
 const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID;
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
