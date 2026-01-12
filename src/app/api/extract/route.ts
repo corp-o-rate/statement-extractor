@@ -8,8 +8,8 @@ const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID;
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL;
 
-// Timeout for RunPod requests (30 seconds)
-const RUNPOD_TIMEOUT = 30000;
+// Timeout for RunPod requests (180 seconds for cold starts)
+const RUNPOD_TIMEOUT = 180000;
 
 export async function POST(request: NextRequest) {
   try {
