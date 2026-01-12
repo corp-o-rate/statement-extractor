@@ -1,14 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { Copy, Check, ExternalLink, Terminal, Code2, Server } from 'lucide-react';
+import { Copy, Check, ExternalLink, Terminal, Code2, Server, Cloud } from 'lucide-react';
 import { toast } from 'sonner';
 
-type TabId = 'python' | 'typescript' | 'local' | 'output';
+type TabId = 'python' | 'typescript' | 'runpod' | 'local' | 'output';
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'python', label: 'Python', icon: <Code2 className="w-4 h-4" /> },
   { id: 'typescript', label: 'TypeScript', icon: <Code2 className="w-4 h-4" /> },
+  { id: 'runpod', label: 'RunPod', icon: <Cloud className="w-4 h-4" /> },
   { id: 'local', label: 'Run Locally', icon: <Server className="w-4 h-4" /> },
   { id: 'output', label: 'Output Format', icon: <Terminal className="w-4 h-4" /> },
 ];
@@ -85,13 +86,67 @@ async function extractStatements(text: string): Promise<string> {
   return response.generated_text;
 }
 
-// For production use, we recommend running locally
-// See the "Run Locally" tab for setup instructions
+// For production use, we recommend RunPod or running locally
+// See the "RunPod" or "Run Locally" tabs for setup instructions
 
 // Example usage
 const text = "Apple Inc. announced a commitment to carbon neutrality by 2030.";
 const result = await extractStatements(text);
 console.log(result);`,
+
+  runpod: `# Deploy to RunPod Serverless (~$0.0002/sec GPU)
+
+## 1. Build and push Docker image
+\`\`\`bash
+git clone https://github.com/corp-o-rate/statement-extractor
+cd statement-extractor/runpod
+
+# Build the image (--platform flag required on Mac)
+docker build --platform linux/amd64 -t statement-extractor-runpod .
+
+# Push to Docker Hub
+docker tag statement-extractor-runpod YOUR_USERNAME/statement-extractor-runpod
+docker push YOUR_USERNAME/statement-extractor-runpod
+\`\`\`
+
+## 2. Create RunPod Endpoint
+1. Go to runpod.io/console/serverless
+2. Click "New Endpoint"
+3. Set container image to your pushed image
+4. Select GPU (RTX 3090+ recommended)
+5. Set Active Workers: 0, Max Workers: 1-3
+
+## 3. Call the API
+\`\`\`bash
+curl -X POST https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/runsync \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"input": {"text": "<page>Your text here</page>"}}'
+\`\`\`
+
+## TypeScript Client
+\`\`\`typescript
+const response = await fetch(
+  \`https://api.runpod.ai/v2/\${ENDPOINT_ID}/runsync\`,
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': \`Bearer \${RUNPOD_API_KEY}\`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      input: { text: \`<page>\${text}</page>\` },
+    }),
+  }
+);
+const data = await response.json();
+const output = data.output.output; // XML statements
+\`\`\`
+
+## Pricing (pay only when processing)
+- RTX 3090: ~$0.00031/sec (~$1.12/hr active)
+- Idle: $0 (scales to zero)
+- 1000 requests/day: ~$1.86/month`,
 
   local: `# Run Locally (No API Limits)
 

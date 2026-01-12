@@ -15,8 +15,8 @@ Deploy the Statement Extractor model to RunPod Serverless for production use.
 ```bash
 cd runpod
 
-# Build the image
-docker build -t statement-extractor-runpod .
+# Build the image (use --platform flag on Mac)
+docker build --platform linux/amd64 -t statement-extractor-runpod .
 
 # Tag for your registry
 docker tag statement-extractor-runpod:latest YOUR_DOCKERHUB_USERNAME/statement-extractor-runpod:latest
@@ -24,6 +24,8 @@ docker tag statement-extractor-runpod:latest YOUR_DOCKERHUB_USERNAME/statement-e
 # Push to registry
 docker push YOUR_DOCKERHUB_USERNAME/statement-extractor-runpod:latest
 ```
+
+> **Note for Mac users**: The `--platform linux/amd64` flag is required because RunPod runs on x86_64 Linux servers.
 
 ### 2. Create RunPod Serverless Endpoint
 

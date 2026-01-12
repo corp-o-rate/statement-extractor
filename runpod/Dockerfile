@@ -1,14 +1,14 @@
 # RunPod Serverless Dockerfile for Statement Extractor
-# Base image with CUDA support
-FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel-ubuntu22.04
+# Use a newer base image with compatible torch/transformers versions
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 # Set working directory
 WORKDIR /app
 
-# Install Python dependencies
+# Install Python dependencies with compatible versions
 RUN pip install --no-cache-dir \
     runpod \
-    transformers>=4.35.0 \
+    transformers==4.46.0 \
     accelerate \
     safetensors \
     sentencepiece

@@ -99,7 +99,46 @@ print(result)
 | PERCENT | Percentages |
 | QUANTITY | Quantities and measurements |
 
-## Local Server
+## Deployment Options
+
+### RunPod Serverless (Recommended for Production)
+
+Deploy to [RunPod](https://runpod.io) for scalable, pay-per-use GPU inference (~$0.0002/sec).
+
+```bash
+cd runpod
+
+# Build and push Docker image (--platform flag required on Mac)
+docker build --platform linux/amd64 -t statement-extractor-runpod .
+docker tag statement-extractor-runpod YOUR_USERNAME/statement-extractor-runpod
+docker push YOUR_USERNAME/statement-extractor-runpod
+```
+
+Then on RunPod:
+1. Go to [runpod.io/console/serverless](https://www.runpod.io/console/serverless)
+2. Click **New Endpoint**
+3. Set container image to your pushed image
+4. Select GPU (RTX 3090+ recommended)
+5. Set Active Workers: 0, Max Workers: 1-3
+
+Call the API:
+```bash
+curl -X POST https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/runsync \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"text": "<page>Your text here</page>"}}'
+```
+
+**Pricing** (pay only when processing):
+| Usage | Monthly Cost |
+|-------|--------------|
+| 100 req/day | ~$0.19 |
+| 1,000 req/day | ~$1.86 |
+| Idle | $0 |
+
+See [runpod/README.md](runpod/README.md) for detailed instructions.
+
+### Local Server
 
 For unlimited usage without API rate limits, run the model locally using [uv](https://github.com/astral-sh/uv):
 
@@ -125,8 +164,8 @@ uv run python upload_model.py
 
 | Variable | Description |
 |----------|-------------|
-| `HF_TOKEN` | HuggingFace API token (for cloud inference) |
-| `HF_MODEL` | Model ID (default: `Corp-o-Rate-Community/statement-extractor`) |
+| `RUNPOD_ENDPOINT_ID` | RunPod endpoint ID (recommended for production) |
+| `RUNPOD_API_KEY` | RunPod API key |
 | `LOCAL_MODEL_URL` | Local server URL (e.g., `http://localhost:8000`) |
 
 ## Tech Stack
