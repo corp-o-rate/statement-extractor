@@ -1,26 +1,39 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
 import { StatementInput } from '@/components/statement-input';
 import { StatementList } from '@/components/statement-list';
+import { StatementEditor } from '@/components/statement-editor';
 import { RelationshipGraph } from '@/components/relationship-graph';
 import { RateLimitBanner } from '@/components/rate-limit-banner';
 import { Documentation } from '@/components/documentation';
 import { LLMPrompts } from '@/components/llm-prompts';
 import { ExtractionResult, Statement } from '@/lib/types';
+import { getUserUuid } from '@/lib/user-uuid';
 import { toast } from 'sonner';
-import { Network, FileText, BookOpen, Bot } from 'lucide-react';
+import { Network, FileText, BookOpen, Bot, Edit3, Eye } from 'lucide-react';
 
 export default function Home() {
   const [statements, setStatements] = useState<Statement[]>([]);
+  const [editedStatements, setEditedStatements] = useState<Statement[]>([]);
+  const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
   const [rateLimitMessage, setRateLimitMessage] = useState<string | undefined>();
+  const [userUuid, setUserUuid] = useState('');
+
+  useEffect(() => {
+    setUserUuid(getUserUuid());
+  }, []);
 
   const handleExtract = async (text: string) => {
     setIsLoading(true);
     setRateLimitMessage(undefined);
+    setInputText(text);
 
     try {
       const response = await fetch('/api/extract', {
@@ -37,6 +50,9 @@ export default function Home() {
       const result: ExtractionResult = await response.json();
 
       setStatements(result.statements);
+      setEditedStatements(JSON.parse(JSON.stringify(result.statements)));
+      setHasChanges(false);
+      setIsEditMode(false);
 
       if (result.cached && result.message) {
         setRateLimitMessage(result.message);
@@ -52,6 +68,55 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleStatementsChange = (newStatements: Statement[]) => {
+    setEditedStatements(newStatements);
+    setHasChanges(JSON.stringify(newStatements) !== JSON.stringify(statements));
+  };
+
+  const handleSubmitCorrection = async () => {
+    if (!inputText) {
+      toast.error('No input text to submit');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch('/api/corrections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inputText,
+          statements: editedStatements,
+          userUuid,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to submit correction');
+      }
+
+      toast.success('Correction submitted! Thank you for contributing.');
+      setStatements(editedStatements);
+      setHasChanges(false);
+    } catch (error) {
+      console.error('Submit error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to submit correction');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const toggleEditMode = () => {
+    if (isEditMode) {
+      // Switching to view mode - reset changes if any
+      setEditedStatements(JSON.parse(JSON.stringify(statements)));
+      setHasChanges(false);
+    }
+    setIsEditMode(!isEditMode);
   };
 
   return (
@@ -88,14 +153,44 @@ export default function Home() {
             <RateLimitBanner message={rateLimitMessage} />
 
             <div className="grid lg:grid-cols-2 gap-8">
-              {/* Statements List */}
+              {/* Statements List / Editor */}
               <div>
-                <div className="flex items-center gap-2 mb-4">
-                  <FileText className="w-5 h-5 text-red-600" />
-                  <h2 className="font-bold text-xl">Statements</h2>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-red-600" />
+                    <h2 className="font-bold text-xl">Statements</h2>
+                  </div>
+                  {statements.length > 0 && (
+                    <button
+                      onClick={toggleEditMode}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-gray-600 hover:text-black border rounded transition-colors"
+                    >
+                      {isEditMode ? (
+                        <>
+                          <Eye className="w-4 h-4" />
+                          View
+                        </>
+                      ) : (
+                        <>
+                          <Edit3 className="w-4 h-4" />
+                          Edit
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
                 <div className="editorial-card p-4 md:p-6 min-h-[400px]">
-                  <StatementList statements={statements} />
+                  {isEditMode ? (
+                    <StatementEditor
+                      statements={editedStatements}
+                      onChange={handleStatementsChange}
+                      onSubmit={handleSubmitCorrection}
+                      isSubmitting={isSubmitting}
+                      hasChanges={hasChanges}
+                    />
+                  ) : (
+                    <StatementList statements={statements} />
+                  )}
                 </div>
               </div>
 
@@ -105,7 +200,7 @@ export default function Home() {
                   <Network className="w-5 h-5 text-red-600" />
                   <h2 className="font-bold text-xl">Relationship Graph</h2>
                 </div>
-                <RelationshipGraph statements={statements} />
+                <RelationshipGraph statements={isEditMode ? editedStatements : statements} />
               </div>
             </div>
           </div>
