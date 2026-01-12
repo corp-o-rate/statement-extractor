@@ -7,7 +7,7 @@ requests to extract structured statements from text.
 
 import runpod
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -19,11 +19,26 @@ MODEL_ID = "Corp-o-Rate-Community/statement-extractor"
 # Global model and tokenizer (loaded once, reused across requests)
 model = None
 tokenizer = None
+stop_token_ids = None
+
+
+class StopOnToken(StoppingCriteria):
+    """Stop generation when a specific token sequence is generated."""
+
+    def __init__(self, stop_ids: list):
+        self.stop_ids = stop_ids
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        # Check if any of the stop token IDs appear in the last generated tokens
+        for stop_id in self.stop_ids:
+            if input_ids[0, -1].item() == stop_id:
+                return True
+        return False
 
 
 def load_model():
     """Load the model and tokenizer into memory."""
-    global model, tokenizer
+    global model, tokenizer, stop_token_ids
 
     if model is not None:
         logger.info("Model already loaded")
@@ -56,12 +71,16 @@ def load_model():
         )
         model = model.to(device)
 
+    # Get the token ID for </statements> to use as stopping criteria
+    stop_token_ids = tokenizer.encode("</statements>", add_special_tokens=False)
+    logger.info(f"Stop token IDs for </statements>: {stop_token_ids}")
+
     logger.info("Model loaded successfully")
 
 
 def extract_statements(text: str) -> str:
     """Extract statements from the input text."""
-    global model, tokenizer
+    global model, tokenizer, stop_token_ids
 
     # Ensure model is loaded
     load_model()
@@ -76,6 +95,9 @@ def extract_statements(text: str) -> str:
         truncation=True,
     ).to(device)
 
+    # Create stopping criteria to stop at </statements>
+    stopping_criteria = StoppingCriteriaList([StopOnToken(stop_token_ids)])
+
     # Generate output
     with torch.no_grad():
         outputs = model.generate(
@@ -83,12 +105,13 @@ def extract_statements(text: str) -> str:
             max_new_tokens=2048,
             num_beams=4,
             do_sample=False,
+            stopping_criteria=stopping_criteria,
         )
 
     # Decode and return
     result = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    # Truncate at first </statements> to prevent runaway generation
+    # Safety: also truncate at first </statements> in case stopping didn't work perfectly
     end_tag = "</statements>"
     if end_tag in result:
         end_pos = result.find(end_tag) + len(end_tag)
