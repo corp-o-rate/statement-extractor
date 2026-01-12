@@ -173,7 +173,7 @@ export default function Home() {
                       ) : (
                         <>
                           <Edit3 className="w-4 h-4" />
-                          Edit
+                          Correct
                         </>
                       )}
                     </button>
