@@ -36,6 +36,21 @@ export interface ExtractionResult {
   inputText?: string;
 }
 
+// Job submission response (for async RunPod)
+export interface JobSubmissionResponse {
+  jobId: string;
+  status: 'IN_QUEUE' | 'IN_PROGRESS';
+  inputText: string;
+}
+
+// Job status response
+export interface JobStatusResponse {
+  status: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  statements?: Statement[];
+  cached?: boolean;
+  error?: string;
+}
+
 export interface GraphNode {
   id: string;
   name: string;

@@ -10,16 +10,20 @@ import { RelationshipGraph } from '@/components/relationship-graph';
 import { RateLimitBanner } from '@/components/rate-limit-banner';
 import { Documentation } from '@/components/documentation';
 import { LLMPrompts } from '@/components/llm-prompts';
-import { ExtractionResult, Statement } from '@/lib/types';
+import { ExtractionResult, Statement, JobSubmissionResponse, JobStatusResponse } from '@/lib/types';
 import { getUserUuid } from '@/lib/user-uuid';
 import { toast } from 'sonner';
 import { Network, FileText, BookOpen, Bot, Edit3, Eye } from 'lucide-react';
+
+// Polling interval in milliseconds
+const POLL_INTERVAL = 5000;
 
 export default function Home() {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [editedStatements, setEditedStatements] = useState<Statement[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -30,10 +34,26 @@ export default function Home() {
     setUserUuid(getUserUuid());
   }, []);
 
+  const pollJobStatus = async (jobId: string): Promise<JobStatusResponse> => {
+    const response = await fetch(`/api/extract/status?jobId=${jobId}`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to check job status');
+    }
+    return response.json();
+  };
+
   const handleExtract = async (text: string) => {
     setIsLoading(true);
+    setElapsedSeconds(0);
     setRateLimitMessage(undefined);
     setInputText(text);
+
+    // Start elapsed time counter
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
 
     try {
       const response = await fetch('/api/extract', {
@@ -47,26 +67,61 @@ export default function Home() {
         throw new Error(error.error || 'Failed to extract statements');
       }
 
-      const result: ExtractionResult = await response.json();
+      const result = await response.json();
 
-      setStatements(result.statements);
-      setEditedStatements(JSON.parse(JSON.stringify(result.statements)));
-      setHasChanges(false);
-      setIsEditMode(false);
+      // Check if this is a job submission (has jobId) or immediate result (has statements)
+      if (result.jobId) {
+        // Async job - poll for result
+        const jobSubmission = result as JobSubmissionResponse;
+        console.log(`Job submitted: ${jobSubmission.jobId}`);
 
-      if (result.cached && result.message) {
-        setRateLimitMessage(result.message);
-        toast.warning(result.message);
-      } else if (result.statements.length === 0) {
-        toast.info('No statements found in the text');
+        let statusResult: JobStatusResponse;
+        do {
+          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+          statusResult = await pollJobStatus(jobSubmission.jobId);
+          console.log(`Job status: ${statusResult.status}`);
+        } while (statusResult.status === 'IN_QUEUE' || statusResult.status === 'IN_PROGRESS');
+
+        if (statusResult.status === 'FAILED') {
+          throw new Error(statusResult.error || 'Job failed');
+        }
+
+        // Job completed
+        const statements = statusResult.statements || [];
+        setStatements(statements);
+        setEditedStatements(JSON.parse(JSON.stringify(statements)));
+        setHasChanges(false);
+        setIsEditMode(false);
+
+        if (statements.length === 0) {
+          toast.info('No statements found in the text');
+        } else {
+          toast.success(`Extracted ${statements.length} statement${statements.length !== 1 ? 's' : ''}`);
+        }
       } else {
-        toast.success(`Extracted ${result.statements.length} statement${result.statements.length !== 1 ? 's' : ''}`);
+        // Immediate result (local model or cached)
+        const extractionResult = result as ExtractionResult;
+        setStatements(extractionResult.statements);
+        setEditedStatements(JSON.parse(JSON.stringify(extractionResult.statements)));
+        setHasChanges(false);
+        setIsEditMode(false);
+
+        if (extractionResult.cached && extractionResult.message) {
+          setRateLimitMessage(extractionResult.message);
+          toast.warning(extractionResult.message);
+        } else if (extractionResult.statements.length === 0) {
+          toast.info('No statements found in the text');
+        } else {
+          toast.success(`Extracted ${extractionResult.statements.length} statement${extractionResult.statements.length !== 1 ? 's' : ''}`);
+        }
       }
     } catch (error) {
       console.error('Extraction error:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to extract statements');
     } finally {
+      clearInterval(timerInterval);
       setIsLoading(false);
+      setElapsedSeconds(0);
     }
   };
 
@@ -142,7 +197,7 @@ export default function Home() {
 
             {/* Input Section */}
             <div className="brutal-card p-6 md:p-8">
-              <StatementInput onExtract={handleExtract} isLoading={isLoading} />
+              <StatementInput onExtract={handleExtract} isLoading={isLoading} elapsedSeconds={elapsedSeconds} />
             </div>
           </div>
         </section>

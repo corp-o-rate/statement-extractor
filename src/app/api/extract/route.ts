@@ -3,16 +3,10 @@ import { parseStatements } from '@/lib/statement-parser';
 import { CACHED_EXAMPLE } from '@/lib/cached-example';
 import { ExtractionResult } from '@/lib/types';
 
-// Extend Vercel function timeout to 3 minutes (requires Pro plan)
-export const maxDuration = 180;
-
 // Environment configuration
 const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID;
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL;
-
-// Timeout for RunPod requests (180 seconds for cold starts)
-const RUNPOD_TIMEOUT = 180000;
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,16 +30,13 @@ export async function POST(request: NextRequest) {
     // Wrap text in page tags as expected by the model
     const modelInput = `<page>${text}</page>`;
 
-    // Try RunPod first (primary production option)
+    // Try RunPod first (primary production option) - use async /run endpoint
     if (RUNPOD_ENDPOINT_ID && RUNPOD_API_KEY) {
       try {
-        console.log(`Calling RunPod endpoint: ${RUNPOD_ENDPOINT_ID}`);
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), RUNPOD_TIMEOUT);
+        console.log(`Submitting job to RunPod endpoint: ${RUNPOD_ENDPOINT_ID}`);
 
         const runpodResponse = await fetch(
-          `https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync`,
+          `https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/run`,
           {
             method: 'POST',
             headers: {
@@ -55,58 +46,31 @@ export async function POST(request: NextRequest) {
             body: JSON.stringify({
               input: { text: modelInput },
             }),
-            signal: controller.signal,
           }
         );
 
-        clearTimeout(timeoutId);
-
         if (runpodResponse.ok) {
           const data = await runpodResponse.json();
+          console.log(`RunPod job submitted: ${data.id}, status: ${data.status}`);
 
-          if (data.status === 'COMPLETED' && data.output) {
-            const outputText = data.output.output || data.output;
-            const statements = parseStatements(outputText);
-
-            const result: ExtractionResult = {
-              statements,
-              cached: false,
-              inputText: text,
-            };
-
-            return NextResponse.json(result);
-          }
-
-          // Handle RunPod errors
-          if (data.status === 'FAILED') {
-            console.error('RunPod job failed:', data.error);
-            throw new Error(data.error || 'RunPod job failed');
-          }
-
-          // Handle timeout/in-progress (shouldn't happen with runsync but just in case)
-          if (data.status === 'IN_PROGRESS' || data.status === 'IN_QUEUE') {
-            console.warn('RunPod job still processing, returning cached example');
-            return NextResponse.json({
-              ...CACHED_EXAMPLE,
-              message: 'Model is processing. Showing cached example. Try again shortly.',
-            });
-          }
+          // Return job ID for polling
+          return NextResponse.json({
+            jobId: data.id,
+            status: data.status,
+            inputText: text,
+          });
         } else {
           const errorText = await runpodResponse.text();
           console.error(`RunPod API error: status=${runpodResponse.status}, body=${errorText}`);
           throw new Error(`RunPod API error: ${runpodResponse.status}`);
         }
       } catch (runpodError) {
-        if (runpodError instanceof Error && runpodError.name === 'AbortError') {
-          console.warn('RunPod request timed out');
-        } else {
-          console.warn('RunPod unavailable:', runpodError);
-        }
+        console.warn('RunPod unavailable:', runpodError);
         // Fall through to next option
       }
     }
 
-    // Try local model if configured
+    // Try local model if configured (returns result directly, no polling needed)
     if (LOCAL_MODEL_URL) {
       try {
         console.log(`Calling local model: ${LOCAL_MODEL_URL}`);

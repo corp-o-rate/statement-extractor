@@ -7,6 +7,7 @@ import { CACHED_INPUT } from '@/lib/cached-example';
 interface StatementInputProps {
   onExtract: (text: string) => void;
   isLoading: boolean;
+  elapsedSeconds?: number;
 }
 
 const EXAMPLE_TEXTS = [
@@ -24,7 +25,7 @@ const EXAMPLE_TEXTS = [
   },
 ];
 
-export function StatementInput({ onExtract, isLoading }: StatementInputProps) {
+export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: StatementInputProps) {
   const [text, setText] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -92,7 +93,7 @@ export function StatementInput({ onExtract, isLoading }: StatementInputProps) {
               {isLoading ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 spinner" />
-                  Extracting...
+                  {elapsedSeconds > 0 ? `Processing... (${elapsedSeconds}s)` : 'Submitting...'}
                 </>
               ) : (
                 <>

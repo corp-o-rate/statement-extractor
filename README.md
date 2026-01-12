@@ -14,7 +14,7 @@ A web demo for the T5-Gemma 2 statement extraction model from [corp-o-rate.com](
 
 ### Online Demo
 
-Visit [statement-extractor.vercel.app](https://statement-extractor.vercel.app) to try the demo.
+Visit [extractor.corp-o-rate.com](https://extractor.corp-o-rate.com) to try the demo.
 
 ### Run Locally
 

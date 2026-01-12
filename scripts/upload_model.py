@@ -129,7 +129,7 @@ The model outputs XML with extracted statements:
 
 ## Demo
 
-Try the interactive demo at [statement-extractor.vercel.app](https://statement-extractor.vercel.app)
+Try the interactive demo at [extractor.corp-o-rate.com](https://extractor.corp-o-rate.com)
 
 ## Training
 

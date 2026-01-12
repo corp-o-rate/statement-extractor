@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Statement Extractor | corp-o-rate",
     description: "Extract structured statements from text using our T5-Gemma 2 model.",
-    url: "https://statement-extractor.vercel.app",
+    url: "https://extractor.corp-o-rate.com",
     siteName: "Statement Extractor",
     type: "website",
   },
