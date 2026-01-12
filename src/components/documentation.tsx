@@ -97,7 +97,7 @@ console.log(result);`,
 
 ## 1. Clone the demo site
 \`\`\`bash
-git clone https://github.com/neilellis/statement-extractor
+git clone https://github.com/corp-o-rate/statement-extractor
 cd statement-extractor
 pnpm install
 \`\`\`

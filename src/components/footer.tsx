@@ -37,7 +37,7 @@ export function Footer() {
               <ExternalLink className="w-4 h-4" />
             </a>
             <a
-              href="https://github.com/neilellis/statement-extractor"
+              href="https://github.com/corp-o-rate/statement-extractor"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-6 py-3 border border-white/20 text-white font-semibold hover:bg-white/5 transition-all"

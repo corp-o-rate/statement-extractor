@@ -52,7 +52,7 @@ export function Header() {
               <ExternalLink className="w-3 h-3" />
             </a>
             <a
-              href="https://github.com/neilellis/statement-extractor"
+              href="https://github.com/corp-o-rate/statement-extractor"
               target="_blank"
               rel="noopener noreferrer"
               className="p-2 hover:bg-gray-100 rounded transition-colors"
