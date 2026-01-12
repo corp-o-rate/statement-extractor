@@ -3,9 +3,13 @@ import { parseStatements } from '@/lib/statement-parser';
 import { CACHED_EXAMPLE } from '@/lib/cached-example';
 import { ExtractionResult } from '@/lib/types';
 
-const HF_MODEL = process.env.HF_MODEL || 'Corp-o-Rate-Community/statement-extractor';
-const HF_TOKEN = process.env.HF_TOKEN;
+// Environment configuration
+const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID;
+const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL;
+
+// Timeout for RunPod requests (30 seconds)
+const RUNPOD_TIMEOUT = 30000;
 
 export async function POST(request: NextRequest) {
   try {
@@ -29,9 +33,81 @@ export async function POST(request: NextRequest) {
     // Wrap text in page tags as expected by the model
     const modelInput = `<page>${text}</page>`;
 
-    // Try local model first if configured
+    // Try RunPod first (primary production option)
+    if (RUNPOD_ENDPOINT_ID && RUNPOD_API_KEY) {
+      try {
+        console.log(`Calling RunPod endpoint: ${RUNPOD_ENDPOINT_ID}`);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), RUNPOD_TIMEOUT);
+
+        const runpodResponse = await fetch(
+          `https://api.runpod.ai/v2/${RUNPOD_ENDPOINT_ID}/runsync`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${RUNPOD_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              input: { text: modelInput },
+            }),
+            signal: controller.signal,
+          }
+        );
+
+        clearTimeout(timeoutId);
+
+        if (runpodResponse.ok) {
+          const data = await runpodResponse.json();
+
+          if (data.status === 'COMPLETED' && data.output) {
+            const outputText = data.output.output || data.output;
+            const statements = parseStatements(outputText);
+
+            const result: ExtractionResult = {
+              statements,
+              cached: false,
+              inputText: text,
+            };
+
+            return NextResponse.json(result);
+          }
+
+          // Handle RunPod errors
+          if (data.status === 'FAILED') {
+            console.error('RunPod job failed:', data.error);
+            throw new Error(data.error || 'RunPod job failed');
+          }
+
+          // Handle timeout/in-progress (shouldn't happen with runsync but just in case)
+          if (data.status === 'IN_PROGRESS' || data.status === 'IN_QUEUE') {
+            console.warn('RunPod job still processing, returning cached example');
+            return NextResponse.json({
+              ...CACHED_EXAMPLE,
+              message: 'Model is processing. Showing cached example. Try again shortly.',
+            });
+          }
+        } else {
+          const errorText = await runpodResponse.text();
+          console.error(`RunPod API error: status=${runpodResponse.status}, body=${errorText}`);
+          throw new Error(`RunPod API error: ${runpodResponse.status}`);
+        }
+      } catch (runpodError) {
+        if (runpodError instanceof Error && runpodError.name === 'AbortError') {
+          console.warn('RunPod request timed out');
+        } else {
+          console.warn('RunPod unavailable:', runpodError);
+        }
+        // Fall through to next option
+      }
+    }
+
+    // Try local model if configured
     if (LOCAL_MODEL_URL) {
       try {
+        console.log(`Calling local model: ${LOCAL_MODEL_URL}`);
+
         const localResponse = await fetch(`${LOCAL_MODEL_URL}/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -51,107 +127,17 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(result);
         }
       } catch (localError) {
-        console.warn('Local model unavailable, falling back to HuggingFace:', localError);
+        console.warn('Local model unavailable:', localError);
       }
     }
 
-    // Try HuggingFace Inference API
-    if (!HF_TOKEN) {
-      console.warn('No HF_TOKEN configured, returning cached example');
-      return NextResponse.json({
-        ...CACHED_EXAMPLE,
-        message: 'API not configured (no HF_TOKEN). Showing cached example. See documentation to run locally.',
-      });
-    }
+    // No model available, return cached example
+    console.log('No model endpoint configured, returning cached example');
+    return NextResponse.json({
+      ...CACHED_EXAMPLE,
+      message: 'No model endpoint configured. Showing cached example. See documentation to run locally or deploy to RunPod.',
+    });
 
-    console.log(`Calling HuggingFace API: model=${HF_MODEL}, inputLength=${modelInput.length}`);
-
-    try {
-      const hfResponse = await fetch(
-        `https://router.huggingface.co/hf-inference/models/${HF_MODEL}`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${HF_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            inputs: modelInput,
-            parameters: {
-              max_new_tokens: 2048,
-              num_beams: 4,
-              do_sample: false,
-            },
-          }),
-        }
-      );
-
-      // Handle rate limits
-      if (hfResponse.status === 429 || hfResponse.status === 503) {
-        console.warn('HuggingFace rate limit hit, returning cached example');
-        return NextResponse.json({
-          ...CACHED_EXAMPLE,
-          message: 'API rate limit reached. Showing cached example. Consider running locally for unlimited usage.',
-        });
-      }
-
-      if (!hfResponse.ok) {
-        const errorText = await hfResponse.text();
-        console.error(`HuggingFace API error: status=${hfResponse.status}, body=${errorText}`);
-
-        // Model might be loading
-        if (hfResponse.status === 503 || errorText.includes('loading')) {
-          return NextResponse.json({
-            ...CACHED_EXAMPLE,
-            message: 'Model is loading. Showing cached example. Please try again in a few minutes.',
-          });
-        }
-
-        // Parse error for more detail
-        let errorDetail = `Status ${hfResponse.status}`;
-        try {
-          const errorJson = JSON.parse(errorText);
-          errorDetail = errorJson.error || errorJson.message || errorDetail;
-        } catch {
-          if (errorText.length < 200) {
-            errorDetail = errorText || errorDetail;
-          }
-        }
-
-        return NextResponse.json({
-          ...CACHED_EXAMPLE,
-          message: `API error: ${errorDetail}. Showing cached example.`,
-        });
-      }
-
-      const data = await hfResponse.json();
-
-      // HuggingFace returns different formats depending on the model type
-      let outputText = '';
-      if (Array.isArray(data)) {
-        outputText = data[0]?.generated_text || data[0]?.text || '';
-      } else if (typeof data === 'object') {
-        outputText = data.generated_text || data[0]?.generated_text || '';
-      } else if (typeof data === 'string') {
-        outputText = data;
-      }
-
-      const statements = parseStatements(outputText);
-
-      const result: ExtractionResult = {
-        statements,
-        cached: false,
-        inputText: text,
-      };
-
-      return NextResponse.json(result);
-    } catch (hfError) {
-      console.error('HuggingFace API error:', hfError);
-      return NextResponse.json({
-        ...CACHED_EXAMPLE,
-        message: 'API temporarily unavailable. Showing cached example.',
-      });
-    }
   } catch (error) {
     console.error('Extract API error:', error);
     return NextResponse.json(
