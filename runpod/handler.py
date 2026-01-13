@@ -130,6 +130,7 @@ def run_single_extraction(inputs) -> str:
             num_return_sequences=num_seqs,
             diversity_penalty=1.0,
             do_sample=False,
+            trust_remote_code=True,
         )
 
     # Decode all sequences and select the longest valid one
