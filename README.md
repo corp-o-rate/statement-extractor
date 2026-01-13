@@ -103,7 +103,7 @@ print(result)
 
 ### RunPod Serverless (Recommended for Production)
 
-Deploy to [RunPod](https://runpod.io) for scalable, pay-per-use GPU inference (~$0.0002/sec).
+Deploy to [RunPod](https://runpod.io?ref=sjoylkgj) for scalable, pay-per-use GPU inference (~$0.0002/sec).
 
 ```bash
 cd runpod
@@ -115,7 +115,7 @@ docker push YOUR_USERNAME/statement-extractor-runpod
 ```
 
 Then on RunPod:
-1. Go to [runpod.io/console/serverless](https://www.runpod.io/console/serverless)
+1. Go to [runpod.io/console/serverless](https://www.runpod.io/console/serverless?ref=sjoylkgj)
 2. Click **New Endpoint**
 3. Set container image to your pushed image
 4. Select GPU (RTX 3090+ recommended)

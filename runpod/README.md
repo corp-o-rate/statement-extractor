@@ -4,7 +4,7 @@ Deploy the Statement Extractor model to RunPod Serverless for production use.
 
 ## Prerequisites
 
-1. [RunPod account](https://runpod.io)
+1. [RunPod account](https://runpod.io?ref=sjoylkgj)
 2. [Docker](https://docker.com) installed locally
 3. [Docker Hub](https://hub.docker.com) account (or another container registry)
 
@@ -31,7 +31,7 @@ docker push YOUR_DOCKERHUB_USERNAME/statement-extractor-runpod:latest
 
 ### 2. Create RunPod Serverless Endpoint
 
-1. Go to [RunPod Console](https://www.runpod.io/console/serverless)
+1. Go to [RunPod Console](https://www.runpod.io/console/serverless?ref=sjoylkgj)
 2. Click **"New Endpoint"**
 3. Configure:
    - **Name**: `statement-extractor`

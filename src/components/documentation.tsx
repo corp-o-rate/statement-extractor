@@ -110,7 +110,7 @@ docker push YOUR_USERNAME/statement-extractor-runpod
 \`\`\`
 
 ## 2. Create RunPod Endpoint
-1. Go to runpod.io/console/serverless
+1. Go to runpod.io/console/serverless?ref=sjoylkgj
 2. Click "New Endpoint"
 3. Set container image to your pushed image
 4. Select GPU (RTX 3090+ recommended)
