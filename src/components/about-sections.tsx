@@ -307,8 +307,9 @@ export function AboutCorpORate() {
           </p>
 
           <p className="text-gray-400">
-            This statement extraction model is one piece of that puzzle &mdash; automatically structuring claims
-            from corporate documents so they can be tracked, verified, and compared against actual outcomes.
+            This statement extraction model is one piece of that puzzle &mdash; automatically extracting relationships and meaningful statements
+            from research, news, and corporate documents. This is the first part of our analysis and we'll be releasing other re-usable components
+            as we progress.
           </p>
         </div>
 

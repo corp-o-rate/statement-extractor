@@ -75,6 +75,36 @@ function parseStatementElement(stmtElement: Element): Statement | null {
 }
 
 /**
+ * Create a normalized key for deduplication
+ * Uses lowercase trimmed subject name + predicate + object name
+ */
+function getStatementKey(statement: Statement): string {
+  const subject = statement.subject.name.toLowerCase().trim();
+  const predicate = statement.predicate.toLowerCase().trim();
+  const object = statement.object.name.toLowerCase().trim();
+  return `${subject}|||${predicate}|||${object}`;
+}
+
+/**
+ * Remove duplicate statements based on subject-predicate-object triples
+ * Keeps the first occurrence of each unique triple
+ */
+function deduplicateStatements(statements: Statement[]): Statement[] {
+  const seen = new Set<string>();
+  const unique: Statement[] = [];
+
+  for (const statement of statements) {
+    const key = getStatementKey(statement);
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(statement);
+    }
+  }
+
+  return unique;
+}
+
+/**
  * Parse XML string containing statements
  */
 export function parseStatements(xmlString: string): Statement[] {
@@ -108,7 +138,7 @@ export function parseStatements(xmlString: string): Statement[] {
     if (parseError) {
       console.error('XML parse error:', parseError.textContent);
       // Try fallback regex-based parsing
-      return parseStatementsRegex(trimmed);
+      return deduplicateStatements(parseStatementsRegex(trimmed));
     }
 
     // Extract all statement elements
@@ -123,10 +153,11 @@ export function parseStatements(xmlString: string): Statement[] {
   } catch (error) {
     console.error('Error parsing XML statements:', error);
     // Try fallback regex-based parsing
-    return parseStatementsRegex(trimmed);
+    return deduplicateStatements(parseStatementsRegex(trimmed));
   }
 
-  return statements;
+  // Deduplicate before returning
+  return deduplicateStatements(statements);
 }
 
 /**
