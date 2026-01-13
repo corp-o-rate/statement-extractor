@@ -118,15 +118,17 @@ def extract_statements(text: str) -> str:
         truncation=True,
     ).to(device)
 
-    # Generate multiple candidate outputs using beam search
-    # num_beams must be >= num_return_sequences
+    # Generate multiple diverse candidate outputs using diverse beam search
+    # This encourages different beam groups to explore different paths
     num_seqs = NUM_RETURN_SEQUENCES
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=2048,
-            num_beams=max(4, num_seqs),
+            num_beams=num_seqs,
+            num_beam_groups=num_seqs,  # Each sequence gets its own beam group
             num_return_sequences=num_seqs,
+            diversity_penalty=1.0,  # Penalize similarity between groups
             do_sample=False,
         )
 
