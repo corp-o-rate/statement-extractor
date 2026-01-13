@@ -31,7 +31,7 @@ export async function POST() {
 
   try {
     const { text } = await generateText({
-      model: openai('gpt-4o-mini'),
+      model: openai('gpt-5-nano'),
       prompt: `Write a realistic news article or press release about ${topic}.
 
 Requirements:
@@ -42,7 +42,6 @@ Requirements:
 - Write in a professional journalistic style
 - Make it factual-sounding (but fictional) with clear subject-predicate-object relationships
 - Do not include a headline or title, just the body text`,
-      maxTokens: 500,
     });
 
     return NextResponse.json({ text: text.trim() });
