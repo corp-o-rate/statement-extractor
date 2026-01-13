@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Loader2, Sparkles, Trash2 } from 'lucide-react';
+import { Loader2, Sparkles, Trash2, Shuffle } from 'lucide-react';
 import { CACHED_INPUT } from '@/lib/cached-example';
+import { toast } from 'sonner';
 
 interface StatementInputProps {
   onExtract: (text: string) => void;
@@ -27,6 +28,7 @@ const EXAMPLE_TEXTS = [
 
 export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: StatementInputProps) {
   const [text, setText] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +39,25 @@ export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: Sta
 
   const loadExample = (exampleText: string) => {
     setText(exampleText);
+  };
+
+  const generateRandomText = async () => {
+    setIsGenerating(true);
+    try {
+      const response = await fetch('/api/generate', { method: 'POST' });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to generate text');
+      }
+      const { text: generatedText } = await response.json();
+      setText(generatedText);
+      toast.success('Random text generated!');
+    } catch (error) {
+      console.error('Generation error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to generate text');
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const clearText = () => {
@@ -58,11 +79,29 @@ export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: Sta
               type="button"
               onClick={() => loadExample(example.text)}
               className="px-3 py-1.5 text-sm font-medium border border-gray-200 hover:border-black transition-colors"
-              disabled={isLoading}
+              disabled={isLoading || isGenerating}
             >
               {example.label}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={generateRandomText}
+            className="px-3 py-1.5 text-sm font-medium border border-gray-300 bg-gray-800 text-white hover:bg-gray-700 transition-colors inline-flex items-center gap-1.5"
+            disabled={isLoading || isGenerating}
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 spinner" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Shuffle className="w-3.5 h-3.5" />
+                Randomly Generated
+              </>
+            )}
+          </button>
         </div>
 
         {/* Textarea */}
