@@ -15,6 +15,7 @@ import { getUserUuid } from '@/lib/user-uuid';
 import { toast } from 'sonner';
 import { ExportFormats } from '@/components/export-formats';
 import { Network, FileText, BookOpen, Bot, Edit3, Eye, Code } from 'lucide-react';
+import { HowItWorks, AboutCorpORate } from '@/components/about-sections';
 
 // Polling interval in milliseconds
 const POLL_INTERVAL = 5000;
@@ -389,6 +390,12 @@ export default function Home() {
             </div>
           </div>
         </section>
+
+        {/* How It Works Section */}
+        <HowItWorks />
+
+        {/* About Corp-o-Rate Section */}
+        <AboutCorpORate />
       </main>
 
       <Footer />
