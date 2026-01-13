@@ -115,7 +115,7 @@ def load_model():
     logger.info("Model loaded successfully")
 
 
-def run_single_extraction(inputs, device) -> str:
+def run_single_extraction(inputs) -> str:
     """Run a single extraction attempt and return the best candidate."""
     global model, tokenizer
 
@@ -135,7 +135,7 @@ def run_single_extraction(inputs, device) -> str:
     # Decode all sequences and select the longest valid one
     end_tag = "</statements>"
     candidates = []
-    for i, output in enumerate(outputs):
+    for output in outputs:
         decoded = tokenizer.decode(output, skip_special_tokens=True)
 
         # Truncate at </statements>
@@ -184,7 +184,7 @@ def extract_statements(text: str) -> str:
     # Run extraction with retry logic
     all_results = []
     for attempt in range(MAX_EXTRACTION_ATTEMPTS):
-        result = run_single_extraction(inputs, device)
+        result = run_single_extraction(inputs)
         num_stmts = count_statements(result)
         all_results.append((result, num_stmts))
         logger.info(f"Attempt {attempt + 1}/{MAX_EXTRACTION_ATTEMPTS}: {num_stmts} statements, {len(result)} chars")
