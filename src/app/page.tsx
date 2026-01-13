@@ -228,8 +228,29 @@ export default function Home() {
                 <span className="text-gray-400">VISUALIZE RELATIONSHIPS.</span>
               </h1>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                Transform unstructured text into structured statements using our T5-Gemma 2 model.
-                Identify subjects, objects, predicates, and entity types automatically.
+                This demo showcases a fine-tuned{' '}
+                <a
+                  href="https://blog.google/technology/developers/t5gemma-2/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-red-600 hover:underline font-medium"
+                >
+                  T5-Gemma 2
+                </a>{' '}
+                model that extracts structured subject-predicate-object statements from unstructured text,
+                inspired by{' '}
+                <a
+                  href="https://www.microsoft.com/en-us/research/publication/towards-effective-extraction-and-evaluation-of-factual-claims/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-red-600 hover:underline font-medium"
+                >
+                  Microsoft Research&apos;s work on factual claim extraction
+                </a>.
+                The model identifies entities (organizations, people, locations, dates, etc.) and their
+                relationships, resolves coreferences (e.g., pronouns to named entities), and outputs
+                structured data for downstream tasks like fact-checking, knowledge graph construction,
+                and information retrieval.
               </p>
             </div>
 

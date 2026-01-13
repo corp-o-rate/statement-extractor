@@ -20,13 +20,13 @@ RUN pip install --no-cache-dir \
     sentencepiece \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
-# Copy handler
-COPY handler.py /app/handler.py
-
 # Download model at build time for faster cold starts
 RUN python -c "from transformers import AutoModelForSeq2SeqLM, AutoTokenizer; \
     AutoTokenizer.from_pretrained('Corp-o-Rate-Community/statement-extractor', trust_remote_code=True); \
     AutoModelForSeq2SeqLM.from_pretrained('Corp-o-Rate-Community/statement-extractor', trust_remote_code=True)"
+
+# Copy handler
+COPY handler.py /app/handler.py
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
