@@ -32,7 +32,7 @@ NUM_RETURN_SEQUENCES = int(os.environ.get("NUM_RETURN_SEQUENCES", 4))
 
 # Retry configuration for under-extraction
 # If statements < sentences * MIN_STATEMENT_RATIO, retry extraction
-MIN_STATEMENT_RATIO = float(os.environ.get("MIN_STATEMENT_RATIO", 0.5))
+MIN_STATEMENT_RATIO = float(os.environ.get("MIN_STATEMENT_RATIO", 1.0))
 MAX_EXTRACTION_ATTEMPTS = int(os.environ.get("MAX_EXTRACTION_ATTEMPTS", 3))
 
 # In-memory LRU cache for results (persists while worker is warm)

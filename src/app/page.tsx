@@ -13,7 +13,8 @@ import { LLMPrompts } from '@/components/llm-prompts';
 import { ExtractionResult, Statement, JobSubmissionResponse, JobStatusResponse } from '@/lib/types';
 import { getUserUuid } from '@/lib/user-uuid';
 import { toast } from 'sonner';
-import { Network, FileText, BookOpen, Bot, Edit3, Eye } from 'lucide-react';
+import { ExportFormats } from '@/components/export-formats';
+import { Network, FileText, BookOpen, Bot, Edit3, Eye, Code } from 'lucide-react';
 
 // Polling interval in milliseconds
 const POLL_INTERVAL = 5000;
@@ -321,6 +322,15 @@ export default function Home() {
                 </div>
                 <RelationshipGraph statements={isEditMode ? editedStatements : statements} />
               </div>
+            </div>
+
+            {/* Export Formats */}
+            <div className="mt-8">
+              <div className="flex items-center gap-2 mb-4">
+                <Code className="w-5 h-5 text-red-600" />
+                <h2 className="font-bold text-xl">Export</h2>
+              </div>
+              <ExportFormats statements={isEditMode ? editedStatements : statements} />
             </div>
           </div>
         </section>

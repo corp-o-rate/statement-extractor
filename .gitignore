@@ -59,3 +59,4 @@ uv.lock
 
 # Model files (too large for git)
 /model/
+/.claude/settings.local.json
