@@ -61,6 +61,42 @@ def count_statements(xml_output: str) -> int:
     return len(re.findall(r'<stmt>', xml_output))
 
 
+def deduplicate_statements(xml_output: str) -> str:
+    """Remove duplicate <stmt> blocks from the output using XML parsing."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_output)
+    except ET.ParseError:
+        # If parsing fails, return original
+        return xml_output
+
+    if root.tag != 'statements':
+        return xml_output
+
+    # Build unique key for each statement
+    seen = set()
+    unique_stmts = []
+
+    for stmt in root.findall('stmt'):
+        # Create a normalized key from the statement's content
+        subject = stmt.findtext('subject', '').strip()
+        predicate = stmt.findtext('predicate', '').strip()
+        obj = stmt.findtext('object', '').strip()
+        key = (subject, predicate, obj)
+
+        if key not in seen:
+            seen.add(key)
+            unique_stmts.append(stmt)
+
+    # Rebuild XML with unique statements
+    new_root = ET.Element('statements')
+    for stmt in unique_stmts:
+        new_root.append(stmt)
+
+    return ET.tostring(new_root, encoding='unicode')
+
+
 def get_entry_size(key: str, value: str) -> int:
     """Estimate memory size of a cache entry in bytes."""
     return len(key.encode()) + len(value.encode())
@@ -133,7 +169,7 @@ def run_single_extraction(inputs) -> str:
             trust_remote_code=True,
         )
 
-    # Decode all sequences and select the longest valid one
+    # Decode all sequences, truncate, deduplicate, and select the longest valid one
     end_tag = "</statements>"
     candidates = []
     for output in outputs:
@@ -143,14 +179,17 @@ def run_single_extraction(inputs) -> str:
         if end_tag in decoded:
             end_pos = decoded.find(end_tag) + len(end_tag)
             decoded = decoded[:end_pos]
+            # Remove duplicate statements
+            decoded = deduplicate_statements(decoded)
             candidates.append(decoded)
 
-    # Select longest candidate
+    # Select longest candidate (after deduplication)
     if candidates:
         return max(candidates, key=len)
     else:
         # Fallback to first output if none have valid closing tag
-        return tokenizer.decode(outputs[0], skip_special_tokens=True)
+        fallback = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return deduplicate_statements(fallback) if '<stmt>' in fallback else fallback
 
 
 def extract_statements(text: str) -> str:
