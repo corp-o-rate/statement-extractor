@@ -26,6 +26,9 @@ tokenizer = None
 # Cache configuration (default 10GB)
 MAX_CACHE_SIZE_BYTES = int(os.environ.get("MAX_CACHE_SIZE_BYTES", 10 * 1024 * 1024 * 1024))
 
+# Number of candidate sequences to generate (default 4)
+NUM_RETURN_SEQUENCES = int(os.environ.get("NUM_RETURN_SEQUENCES", 4))
+
 # In-memory LRU cache for results (persists while worker is warm)
 result_cache: OrderedDict[str, str] = OrderedDict()
 cache_size_bytes = 0
@@ -115,23 +118,39 @@ def extract_statements(text: str) -> str:
         truncation=True,
     ).to(device)
 
-    # Generate output
+    # Generate multiple candidate outputs using beam search
+    # num_beams must be >= num_return_sequences
+    num_seqs = NUM_RETURN_SEQUENCES
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             max_new_tokens=2048,
-            num_beams=4,
+            num_beams=max(4, num_seqs),
+            num_return_sequences=num_seqs,
             do_sample=False,
         )
 
-    # Decode and return
-    result = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    # Truncate at </statements> to prevent any extra tokens after the closing tag
+    # Decode all sequences and select the longest valid one
     end_tag = "</statements>"
-    if end_tag in result:
-        end_pos = result.find(end_tag) + len(end_tag)
-        result = result[:end_pos]
+    candidates = []
+    for i, output in enumerate(outputs):
+        decoded = tokenizer.decode(output, skip_special_tokens=True)
+
+        # Truncate at </statements>
+        if end_tag in decoded:
+            end_pos = decoded.find(end_tag) + len(end_tag)
+            decoded = decoded[:end_pos]
+            candidates.append(decoded)
+            logger.info(f"Candidate {i+1}: {len(decoded)} chars")
+
+    # Select longest candidate (most statements extracted)
+    if candidates:
+        result = max(candidates, key=len)
+        logger.info(f"Selected candidate with {len(result)} chars from {len(candidates)} valid candidates")
+    else:
+        # Fallback to first output if none have valid closing tag
+        result = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        logger.warning("No candidates had valid </statements> tag, using first output")
 
     # Store in cache with size tracking
     entry_size = get_entry_size(cache_key, result)
