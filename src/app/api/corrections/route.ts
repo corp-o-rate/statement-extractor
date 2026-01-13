@@ -19,9 +19,11 @@ function statementsToXml(statements: Statement[]): string {
   return `<statements>${stmts}</statements>`;
 }
 
+type Source = 'upload' | 'correction' | 'liked';
+
 export async function POST(request: NextRequest) {
   try {
-    const { inputText, statements, userUuid } = await request.json();
+    const { inputText, statements, userUuid, source = 'correction' } = await request.json();
 
     if (!inputText || !statements) {
       return NextResponse.json(
@@ -29,6 +31,10 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Validate source
+    const validSources: Source[] = ['upload', 'correction', 'liked'];
+    const validatedSource: Source = validSources.includes(source) ? source : 'correction';
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -38,6 +44,7 @@ export async function POST(request: NextRequest) {
       num_statements: statements.length,
       accepted: null, // Not yet accepted - needs review
       user_uuid: userUuid || null,
+      source: validatedSource,
     });
 
     if (error) {

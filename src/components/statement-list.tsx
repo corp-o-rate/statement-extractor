@@ -1,10 +1,13 @@
 'use client';
 
 import { Statement, getEntityBadgeClass } from '@/lib/types';
-import { ArrowRight, Quote } from 'lucide-react';
+import { ArrowRight, Quote, ThumbsUp, Loader2 } from 'lucide-react';
 
 interface StatementListProps {
   statements: Statement[];
+  onLike?: () => void;
+  isLiking?: boolean;
+  hasLiked?: boolean;
 }
 
 function EntityBadge({ name, type }: { name: string; type: string }) {
@@ -53,7 +56,7 @@ function StatementCard({ statement, index }: { statement: Statement; index: numb
   );
 }
 
-export function StatementList({ statements }: StatementListProps) {
+export function StatementList({ statements, onLike, isLiking, hasLiked }: StatementListProps) {
   if (statements.length === 0) {
     return (
       <div className="text-center py-12 text-gray-500">
@@ -77,6 +80,31 @@ export function StatementList({ statements }: StatementListProps) {
       {statements.map((statement, index) => (
         <StatementCard key={index} statement={statement} index={index} />
       ))}
+
+      {/* Like button */}
+      {onLike && (
+        <div className="pt-4 border-t mt-4">
+          <button
+            onClick={onLike}
+            disabled={isLiking || hasLiked}
+            className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold transition-all ${
+              hasLiked
+                ? 'text-green-600 bg-green-50 border border-green-200 cursor-default'
+                : isLiking
+                ? 'text-gray-400 bg-gray-50 border border-gray-200 cursor-wait'
+                : 'text-gray-600 hover:text-green-600 hover:bg-green-50 border border-gray-200 hover:border-green-200'
+            }`}
+            title={hasLiked ? 'Thanks for the feedback!' : 'Mark extraction as correct'}
+          >
+            {isLiking ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <ThumbsUp className={`w-4 h-4 ${hasLiked ? 'fill-current' : ''}`} />
+            )}
+            {hasLiked ? 'Saved!' : 'Looks good'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

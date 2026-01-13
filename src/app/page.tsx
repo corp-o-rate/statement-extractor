@@ -29,6 +29,8 @@ export default function Home() {
   const [hasChanges, setHasChanges] = useState(false);
   const [rateLimitMessage, setRateLimitMessage] = useState<string | undefined>();
   const [userUuid, setUserUuid] = useState('');
+  const [isLiking, setIsLiking] = useState(false);
+  const [hasLiked, setHasLiked] = useState(false);
 
   useEffect(() => {
     setUserUuid(getUserUuid());
@@ -48,6 +50,7 @@ export default function Home() {
     setElapsedSeconds(0);
     setRateLimitMessage(undefined);
     setInputText(text);
+    setHasLiked(false); // Reset like status for new extraction
 
     // Start elapsed time counter
     const startTime = Date.now();
@@ -146,6 +149,7 @@ export default function Home() {
           inputText,
           statements: editedStatements,
           userUuid,
+          source: 'correction',
         }),
       });
 
@@ -162,6 +166,40 @@ export default function Home() {
       toast.error(error instanceof Error ? error.message : 'Failed to submit correction');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleLike = async () => {
+    if (!inputText || statements.length === 0) {
+      return;
+    }
+
+    setIsLiking(true);
+
+    try {
+      const response = await fetch('/api/corrections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inputText,
+          statements,
+          userUuid,
+          source: 'liked',
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to save');
+      }
+
+      setHasLiked(true);
+      toast.success('Thanks for the feedback!');
+    } catch (error) {
+      console.error('Like error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to save');
+    } finally {
+      setIsLiking(false);
     }
   };
 
@@ -244,7 +282,12 @@ export default function Home() {
                       hasChanges={hasChanges}
                     />
                   ) : (
-                    <StatementList statements={statements} />
+                    <StatementList
+                      statements={statements}
+                      onLike={handleLike}
+                      isLiking={isLiking}
+                      hasLiked={hasLiked}
+                    />
                   )}
                 </div>
               </div>
