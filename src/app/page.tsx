@@ -37,8 +37,12 @@ export default function Home() {
     setUserUuid(getUserUuid());
   }, []);
 
-  const pollJobStatus = async (jobId: string): Promise<JobStatusResponse> => {
-    const response = await fetch(`/api/extract/status?jobId=${jobId}`);
+  const pollJobStatus = async (jobId: string, inputTextForCache?: string): Promise<JobStatusResponse> => {
+    const params = new URLSearchParams({ jobId });
+    if (inputTextForCache) {
+      params.set('inputText', inputTextForCache);
+    }
+    const response = await fetch(`/api/extract/status?${params.toString()}`);
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Failed to check job status');
@@ -82,7 +86,7 @@ export default function Home() {
         let statusResult: JobStatusResponse;
         do {
           await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
-          statusResult = await pollJobStatus(jobSubmission.jobId);
+          statusResult = await pollJobStatus(jobSubmission.jobId, text);
           console.log(`Job status: ${statusResult.status}`);
         } while (statusResult.status === 'IN_QUEUE' || statusResult.status === 'IN_PROGRESS');
 

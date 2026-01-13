@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { parseStatements } from '@/lib/statement-parser';
 import { CACHED_EXAMPLE } from '@/lib/cached-example';
 import { ExtractionResult } from '@/lib/types';
+import { getCachedStatements } from '@/lib/cache';
 
 // Environment configuration
 const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID;
@@ -29,6 +30,20 @@ export async function POST(request: NextRequest) {
 
     // Wrap text in page tags as expected by the model
     const modelInput = `<page>${text}</page>`;
+
+    // Check cache first (for RunPod requests)
+    if (RUNPOD_ENDPOINT_ID && RUNPOD_API_KEY) {
+      const cachedStatements = await getCachedStatements(text);
+      if (cachedStatements) {
+        console.log('Returning cached result');
+        const result: ExtractionResult = {
+          statements: cachedStatements,
+          cached: true,
+          inputText: text,
+        };
+        return NextResponse.json(result);
+      }
+    }
 
     // Try RunPod first (primary production option) - use async /run endpoint
     if (RUNPOD_ENDPOINT_ID && RUNPOD_API_KEY) {

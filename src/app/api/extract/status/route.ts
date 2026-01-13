@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseStatements } from '@/lib/statement-parser';
+import { setCachedStatements } from '@/lib/cache';
 
 const RUNPOD_ENDPOINT_ID = process.env.RUNPOD_ENDPOINT_ID;
 const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 
 export async function GET(request: NextRequest) {
   const jobId = request.nextUrl.searchParams.get('jobId');
+  const inputText = request.nextUrl.searchParams.get('inputText');
 
   if (!jobId) {
     return NextResponse.json(
@@ -49,6 +51,11 @@ export async function GET(request: NextRequest) {
     if (data.status === 'COMPLETED' && data.output) {
       const outputText = data.output.output || data.output;
       const statements = parseStatements(outputText);
+
+      // Cache the result if we have the input text
+      if (inputText) {
+        await setCachedStatements(inputText, statements);
+      }
 
       return NextResponse.json({
         status: 'COMPLETED',
