@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { Statement } from '@/lib/types';
 
-const SUPABASE_URL = process.env.SUPABASE_URL!;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 /**
  * Convert statements array to XML format for training data.
@@ -29,6 +29,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Missing inputText or statements' },
         { status: 400 }
+      );
+    }
+
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+      console.error('Supabase not configured: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+      return NextResponse.json(
+        { error: 'Feedback storage not configured' },
+        { status: 503 }
       );
     }
 
