@@ -1,0 +1,235 @@
+## Command Line Interface
+
+<span id="cli" />
+
+The `corp-extractor` CLI provides a convenient way to extract statements directly from the terminal without writing code.
+
+### Quick Run with uvx
+
+<span id="uvx" />
+
+Run directly without installing using [uv](https://docs.astral.sh/uv/):
+
+```bash
+# Quick run (downloads temporarily)
+uvx corp-extractor "Apple announced a new iPhone."
+
+# With embeddings support (recommended)
+uvx --with sentence-transformers corp-extractor "Apple announced a new iPhone."
+
+# With options
+uvx --with sentence-transformers corp-extractor -f article.txt --json --beams 8
+```
+
+### Installation
+
+<span id="cli-installation" />
+
+For repeated use, install globally:
+
+```bash
+# Using uv (recommended)
+uv tool install corp-extractor[embeddings]
+
+# Using pipx
+pipx install corp-extractor[embeddings]
+
+# Using pip
+pip install corp-extractor[embeddings]
+```
+
+### Basic Usage
+
+<span id="cli-usage" />
+
+```bash
+# Extract from text argument
+corp-extractor "Apple Inc. announced the iPhone 15 at their September event."
+
+# Extract from file
+corp-extractor -f article.txt
+
+# Pipe from stdin
+cat article.txt | corp-extractor -
+
+# Read from stdin explicitly
+echo "Tim Cook is CEO of Apple." | corp-extractor -
+```
+
+### Output Formats
+
+<span id="cli-output" />
+
+The CLI supports three output formats:
+
+```bash
+# Human-readable table (default)
+corp-extractor "Tim Cook is CEO of Apple."
+
+# JSON with full metadata
+corp-extractor "Tim Cook is CEO of Apple." --json
+
+# Raw XML from model
+corp-extractor "Tim Cook is CEO of Apple." --xml
+```
+
+**Table output example:**
+```
+Extracted 1 statement(s):
+
+--------------------------------------------------------------------------------
+1. Tim Cook (PERSON)
+   --[CEO of]-->
+   Apple (ORG)
+--------------------------------------------------------------------------------
+```
+
+**JSON output example:**
+```json
+{
+  "statements": [
+    {
+      "subject": {"text": "Tim Cook", "type": "PERSON"},
+      "predicate": "CEO of",
+      "object": {"text": "Apple", "type": "ORG"},
+      "confidence_score": 0.95
+    }
+  ],
+  "source_text": "Tim Cook is CEO of Apple."
+}
+```
+
+### Quality Options
+
+<span id="cli-quality" />
+
+```bash
+# Use more beams for better quality (slower)
+corp-extractor -f article.txt --beams 8
+
+# Filter low-confidence results
+corp-extractor -f article.txt --min-confidence 0.7
+
+# Verbose output with confidence scores
+corp-extractor -f article.txt --verbose
+
+# Disable embedding-based deduplication (faster)
+corp-extractor -f article.txt --no-embeddings
+```
+
+### Predicate Taxonomy
+
+<span id="cli-taxonomy" />
+
+Normalize predicates to canonical forms using a taxonomy file:
+
+```bash
+# Create taxonomy file (one predicate per line)
+cat > predicates.txt << EOF
+acquired
+founded
+works_for
+headquartered_in
+CEO of
+invested_in
+EOF
+
+# Use taxonomy
+corp-extractor -f article.txt --taxonomy predicates.txt
+
+# Adjust matching threshold (default: 0.5)
+corp-extractor -f article.txt --taxonomy predicates.txt --taxonomy-threshold 0.6
+```
+
+### Device Selection
+
+<span id="cli-device" />
+
+```bash
+# Auto-detect (default)
+corp-extractor -f article.txt --device auto
+
+# Force GPU
+corp-extractor -f article.txt --device cuda
+
+# Force CPU
+corp-extractor -f article.txt --device cpu
+```
+
+### All Options Reference
+
+<span id="cli-reference" />
+
+```
+Usage: corp-extractor [OPTIONS] [TEXT]
+
+Arguments:
+  TEXT  Input text (or use -f for file, - for stdin)
+
+Options:
+  -f, --file PATH               Read input from file
+  -o, --output [table|json|xml] Output format (default: table)
+  --json                        Output as JSON (shortcut for -o json)
+  --xml                         Output as XML (shortcut for -o xml)
+
+Beam Search:
+  -b, --beams INTEGER           Number of beams (default: 4)
+  --diversity FLOAT             Diversity penalty (default: 1.0)
+  --max-tokens INTEGER          Max tokens to generate (default: 2048)
+
+Deduplication:
+  --no-dedup                    Disable deduplication entirely
+  --no-embeddings               Disable embedding-based dedup (faster)
+  --no-merge                    Disable beam merging
+  --dedup-threshold FLOAT       Similarity threshold (default: 0.65)
+
+Quality:
+  --min-confidence FLOAT        Minimum confidence filter 0-1 (default: 0)
+
+Taxonomy:
+  --taxonomy PATH               Load predicate taxonomy from file
+  --taxonomy-threshold FLOAT    Matching threshold (default: 0.5)
+
+Runtime:
+  --device [auto|cuda|cpu]      Device to use (default: auto)
+
+Output:
+  -v, --verbose                 Show confidence scores and metadata
+  -q, --quiet                   Suppress progress messages
+  --version                     Show version and exit
+  --help                        Show this message and exit
+```
+
+### Shell Integration
+
+<span id="cli-shell" />
+
+**Bash/Zsh completion** (coming soon):
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+eval "$(corp-extractor --show-completion bash)"
+```
+
+**Processing multiple files:**
+
+```bash
+# Process all .txt files
+for f in *.txt; do
+  echo "=== $f ==="
+  corp-extractor -f "$f" --json > "${f%.txt}.json"
+done
+
+# Using find and xargs
+find . -name "*.txt" -exec corp-extractor -f {} --json \; > all_results.json
+```
+
+**Combining with jq:**
+
+```bash
+# Extract just predicates
+corp-extractor "Your text" --json | jq '.statements[].predicate'
+
+# Filter high-confidence statements
+corp-extractor -f article.txt --json | jq '.statements[] | select(.confidence_score > 0.8)'
+```

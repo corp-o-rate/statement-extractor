@@ -17,6 +17,7 @@ Extract structured subject-predicate-object statements from unstructured text us
 - **Contextualized Matching** *(v0.2.2)*: Compares full "Subject Predicate Object" against source text for better accuracy
 - **Entity Type Merging** *(v0.2.3)*: Automatically merges UNKNOWN entity types with specific types during deduplication
 - **Reversal Detection** *(v0.2.3)*: Detects and corrects subject-object reversals using embedding comparison
+- **Command Line Interface** *(v0.2.4)*: Full-featured CLI for terminal usage
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
 
 ## Installation
@@ -49,6 +50,96 @@ for stmt in result:
     print(f"{stmt.subject.text} ({stmt.subject.type})")
     print(f"  --[{stmt.predicate}]--> {stmt.object.text}")
     print(f"  Confidence: {stmt.confidence_score:.2f}")  # NEW in v0.2.0
+```
+
+## Command Line Interface
+
+The library includes a CLI for quick extraction from the terminal.
+
+### Quick Run with uvx (No Installation)
+
+Run directly without installing using [uv](https://docs.astral.sh/uv/):
+
+```bash
+# Run directly (downloads temporarily)
+uvx corp-extractor "Apple announced a new iPhone."
+
+# With embeddings support (recommended)
+uvx --with sentence-transformers corp-extractor "Apple announced a new iPhone."
+
+# Run with options
+uvx --with sentence-transformers corp-extractor -f article.txt --json --beams 8
+```
+
+### Install Globally with uv or pipx
+
+```bash
+# Install with uv (recommended)
+uv tool install corp-extractor[embeddings]
+
+# Or with pipx
+pipx install corp-extractor[embeddings]
+
+# Then use anywhere
+corp-extractor "Your text here"
+```
+
+### Usage Examples
+
+```bash
+# Extract from text argument
+corp-extractor "Apple Inc. announced the iPhone 15 at their September event."
+
+# Extract from file
+corp-extractor -f article.txt
+
+# Pipe from stdin
+cat article.txt | corp-extractor -
+
+# Output as JSON
+corp-extractor "Tim Cook is CEO of Apple." --json
+
+# Output as XML
+corp-extractor -f article.txt --xml
+
+# Verbose output with confidence scores
+corp-extractor -f article.txt --verbose
+
+# Use more beams for better quality
+corp-extractor -f article.txt --beams 8
+
+# Use custom predicate taxonomy
+corp-extractor -f article.txt --taxonomy predicates.txt
+
+# Use GPU explicitly
+corp-extractor -f article.txt --device cuda
+```
+
+### CLI Options
+
+```
+Usage: corp-extractor [OPTIONS] [TEXT]
+
+Options:
+  -f, --file PATH              Read input from file
+  -o, --output [table|json|xml] Output format (default: table)
+  --json                       Output as JSON (shortcut)
+  --xml                        Output as XML (shortcut)
+  -b, --beams INTEGER          Number of beams (default: 4)
+  --diversity FLOAT            Diversity penalty (default: 1.0)
+  --max-tokens INTEGER         Max tokens to generate (default: 2048)
+  --no-dedup                   Disable deduplication
+  --no-embeddings              Disable embedding-based dedup (faster)
+  --no-merge                   Disable beam merging
+  --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
+  --min-confidence FLOAT       Min confidence filter (default: 0)
+  --taxonomy PATH              Load predicate taxonomy from file
+  --taxonomy-threshold FLOAT   Taxonomy matching threshold (default: 0.5)
+  --device [auto|cuda|cpu]     Device to use (default: auto)
+  -v, --verbose                Show confidence scores and metadata
+  -q, --quiet                  Suppress progress messages
+  --version                    Show version
+  --help                       Show this message
 ```
 
 ## New in v0.2.0: Quality Scoring & Beam Merging

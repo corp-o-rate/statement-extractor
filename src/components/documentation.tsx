@@ -4,9 +4,10 @@ import { useState, useEffect } from 'react';
 import { Copy, Check, ExternalLink, Terminal, Code2, Server, Cloud } from 'lucide-react';
 import { toast } from 'sonner';
 
-type TabId = 'python' | 'typescript' | 'runpod' | 'local' | 'output';
+type TabId = 'cli' | 'python' | 'typescript' | 'runpod' | 'local' | 'output';
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
+  { id: 'cli', label: 'CLI', icon: <Terminal className="w-4 h-4" /> },
   { id: 'python', label: 'Python', icon: <Code2 className="w-4 h-4" /> },
   { id: 'typescript', label: 'TypeScript', icon: <Code2 className="w-4 h-4" /> },
   { id: 'runpod', label: 'RunPod', icon: <Cloud className="w-4 h-4" /> },
@@ -18,6 +19,86 @@ const HF_MODEL = 'Corp-o-Rate-Community/statement-extractor';
 const PYPI_PACKAGE = 'corp-extractor';
 
 const CODE_SNIPPETS: Record<TabId, string> = {
+  cli: `# Command Line Interface (v0.2.4+)
+# Run directly without installing using uvx (requires uv)
+
+# Quick run (downloads temporarily)
+uvx ${PYPI_PACKAGE} "Apple announced a new iPhone."
+
+# With embeddings support (recommended for better quality)
+uvx --with sentence-transformers ${PYPI_PACKAGE} "Apple announced a new iPhone."
+
+# ============================================
+# Install globally for repeated use
+# ============================================
+
+# Using uv (recommended)
+uv tool install ${PYPI_PACKAGE}[embeddings]
+
+# Or using pipx
+pipx install ${PYPI_PACKAGE}[embeddings]
+
+# Or using pip
+pip install ${PYPI_PACKAGE}[embeddings]
+
+# ============================================
+# Usage Examples
+# ============================================
+
+# Extract from text argument
+corp-extractor "Apple Inc. announced the iPhone 15 at their September event."
+
+# Extract from file
+corp-extractor -f article.txt
+
+# Pipe from stdin
+cat article.txt | corp-extractor -
+
+# Output as JSON (with full metadata)
+corp-extractor "Tim Cook is CEO of Apple." --json
+
+# Output as XML (raw model output)
+corp-extractor -f article.txt --xml
+
+# Verbose output with confidence scores
+corp-extractor -f article.txt --verbose
+
+# Use more beams for better quality
+corp-extractor -f article.txt --beams 8
+
+# Use custom predicate taxonomy
+corp-extractor -f article.txt --taxonomy predicates.txt
+
+# Use GPU explicitly
+corp-extractor -f article.txt --device cuda
+
+# Filter low-confidence results
+corp-extractor -f article.txt --min-confidence 0.7
+
+# ============================================
+# All CLI Options
+# ============================================
+# corp-extractor --help
+#
+# -f, --file PATH              Read input from file
+# -o, --output [table|json|xml] Output format (default: table)
+# --json                       Output as JSON (shortcut)
+# --xml                        Output as XML (shortcut)
+# -b, --beams INTEGER          Number of beams (default: 4)
+# --diversity FLOAT            Diversity penalty (default: 1.0)
+# --max-tokens INTEGER         Max tokens to generate (default: 2048)
+# --no-dedup                   Disable deduplication
+# --no-embeddings              Disable embedding-based dedup (faster)
+# --no-merge                   Disable beam merging
+# --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
+# --min-confidence FLOAT       Min confidence filter (default: 0)
+# --taxonomy PATH              Load predicate taxonomy from file
+# --taxonomy-threshold FLOAT   Taxonomy matching threshold (default: 0.5)
+# --device [auto|cuda|cpu]     Device to use (default: auto)
+# -v, --verbose                Show confidence scores and metadata
+# -q, --quiet                  Suppress progress messages
+# --version                    Show version`,
+
   python: `# Installation (v0.2.0+)
 pip install ${PYPI_PACKAGE}[embeddings]  # Recommended: includes smart deduplication
 
@@ -300,6 +381,7 @@ function CopyButton({ text }: { text: string }) {
 
 // Map tab IDs to languages for syntax highlighting
 const TAB_LANGUAGES: Record<TabId, string> = {
+  cli: 'bash',
   python: 'python',
   typescript: 'typescript',
   runpod: 'bash',
@@ -341,7 +423,7 @@ function HighlightedCode({ code, language }: { code: string; language: string })
 }
 
 export function QuickStart() {
-  const [activeTab, setActiveTab] = useState<TabId>('python');
+  const [activeTab, setActiveTab] = useState<TabId>('cli');
 
   return (
     <div id="quick-start">
@@ -364,7 +446,7 @@ export function QuickStart() {
       <div className="mt-4">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <div className="flex items-center gap-4 flex-wrap">
-            {activeTab === 'python' && (
+            {(activeTab === 'cli' || activeTab === 'python') && (
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-500">PyPI:</span>
                 <a

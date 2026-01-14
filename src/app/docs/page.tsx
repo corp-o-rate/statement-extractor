@@ -2,11 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Book, Code2, Settings, Boxes, Rocket, Server, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Book, Code2, Settings, Boxes, Rocket, Server, ChevronRight, Terminal } from 'lucide-react';
 import { TableOfContents, TocItem } from '@/components/docs/table-of-contents';
 
 // Import documentation sections
 import GettingStarted from './sections/getting-started.mdx';
+import Cli from './sections/cli.mdx';
 import CoreConcepts from './sections/core-concepts.mdx';
 import ApiReference from './sections/api-reference.mdx';
 import Configuration from './sections/configuration.mdx';
@@ -24,6 +25,20 @@ const tocItems: TocItem[] = [
       { id: 'installation', label: 'Installation', level: 3 },
       { id: 'quick-start', label: 'Quick Start', level: 3 },
       { id: 'requirements', label: 'Requirements', level: 3 },
+    ],
+  },
+  {
+    id: 'cli',
+    label: 'Command Line Interface',
+    level: 2,
+    children: [
+      { id: 'uvx', label: 'Quick Run with uvx', level: 3 },
+      { id: 'cli-installation', label: 'Installation', level: 3 },
+      { id: 'cli-usage', label: 'Basic Usage', level: 3 },
+      { id: 'cli-output', label: 'Output Formats', level: 3 },
+      { id: 'cli-quality', label: 'Quality Options', level: 3 },
+      { id: 'cli-taxonomy', label: 'Predicate Taxonomy', level: 3 },
+      { id: 'cli-reference', label: 'All Options', level: 3 },
     ],
   },
   {
@@ -142,7 +157,7 @@ export default function DocsPage() {
             {/* Hero */}
             <div className="not-prose mb-12">
               <span className="text-red-600 text-xs font-bold tracking-widest uppercase">
-                corp-extractor v0.2.2
+                corp-extractor v0.2.4
               </span>
               <h1 className="text-4xl font-black mt-2 mb-4">
                 Statement Extractor Documentation
@@ -153,7 +168,7 @@ export default function DocsPage() {
               </p>
 
               {/* Quick links */}
-              <div className="grid sm:grid-cols-3 gap-4 mt-8">
+              <div className="grid sm:grid-cols-4 gap-4 mt-8">
                 <a
                   href="#getting-started"
                   className="flex items-center gap-3 p-4 border-2 border-gray-200 hover:border-red-500 transition-colors group"
@@ -162,6 +177,16 @@ export default function DocsPage() {
                   <div>
                     <div className="font-semibold">Getting Started</div>
                     <div className="text-sm text-gray-500">Installation & quick start</div>
+                  </div>
+                </a>
+                <a
+                  href="#cli"
+                  className="flex items-center gap-3 p-4 border-2 border-gray-200 hover:border-red-500 transition-colors group"
+                >
+                  <Terminal className="w-5 h-5 text-gray-400 group-hover:text-red-500" />
+                  <div>
+                    <div className="font-semibold">CLI</div>
+                    <div className="text-sm text-gray-500">Command line usage</div>
                   </div>
                 </a>
                 <a
@@ -189,6 +214,7 @@ export default function DocsPage() {
 
             {/* Documentation sections */}
             <GettingStarted />
+            <Cli />
             <CoreConcepts />
             <ApiReference />
             <Configuration />
