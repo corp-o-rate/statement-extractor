@@ -37,6 +37,15 @@ uv sync
 uv run python upload_model.py
 ```
 
+### Python Library (statement-extractor)
+```bash
+cd statement-extractor-lib
+uv sync                        # Install dependencies
+uv run pytest                  # Run tests
+uv build                       # Build package
+uv publish                     # Publish to PyPI (requires credentials)
+```
+
 ## Architecture
 
 ### Three Deployment Modes
@@ -51,6 +60,7 @@ The frontend can connect to the model via three backends (configured by environm
 - `local-server/` - FastAPI server for local model inference (uv-managed)
 - `runpod/` - Docker + handler for RunPod serverless deployment
 - `scripts/` - HuggingFace upload utilities (uv-managed)
+- `statement-extractor-lib/` - Python library for statement extraction (PyPI package)
 
 ### Model I/O Format
 - **Input**: Text wrapped in `<page>` tags
@@ -58,7 +68,23 @@ The frontend can connect to the model via three backends (configured by environm
 - Entity types: ORG, PERSON, GPE, LOC, PRODUCT, EVENT, WORK_OF_ART, LAW, DATE, MONEY, PERCENT, QUANTITY
 
 ### Key Technical Notes
+- Uses [Diverse Beam Search](https://arxiv.org/abs/1610.02424) (Vijayakumar et al., 2016) for high-quality extraction
 - T5Gemma2 requires `transformers` dev version from GitHub (not PyPI)
 - RunPod requires `--platform linux/amd64` when building Docker on Mac
 - Model uses bfloat16 on GPU, float32 on CPU
 - Generation stops at `</statements>` tag to prevent runaway output
+
+### Python Library API
+```python
+from statement_extractor import extract_statements, extract_statements_as_json
+
+# Returns Pydantic models
+result = extract_statements("Apple announced a new iPhone.")
+for stmt in result:
+    print(f"{stmt.subject.text} -> {stmt.predicate} -> {stmt.object.text}")
+
+# Other formats
+json_str = extract_statements_as_json("...")
+xml_str = extract_statements_as_xml("...")
+dict_data = extract_statements_as_dict("...")
+```

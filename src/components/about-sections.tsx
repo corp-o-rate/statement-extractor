@@ -149,7 +149,16 @@ export function HowItWorks() {
           </h3>
           <PipelineDiagram />
           <p className="text-gray-600 text-center max-w-2xl mx-auto">
-            Text flows through the T5-Gemma 2 model using diverse beam search to generate multiple candidate extractions,
+            Text flows through the T5-Gemma 2 model using{' '}
+            <a
+              href="https://arxiv.org/abs/1610.02424"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-red-600 hover:underline"
+            >
+              Diverse Beam Search
+            </a>{' '}
+            (Vijayakumar et al., 2016) to generate multiple candidate extractions,
             then the handler selects and validates the best result.
           </p>
         </div>
@@ -163,9 +172,19 @@ export function HowItWorks() {
           <RetryDiagram />
           <div className="grid md:grid-cols-2 gap-6 mt-6">
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Diverse Beam Search</h4>
+              <h4 className="font-semibold mb-2">
+                <a
+                  href="https://arxiv.org/abs/1610.02424"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-red-600 transition-colors"
+                >
+                  Diverse Beam Search
+                </a>
+              </h4>
               <p className="text-sm text-gray-600">
-                Generates 4 different candidate outputs using beam groups with diversity penalty,
+                Uses the <a href="https://arxiv.org/abs/1610.02424" target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline">Diverse Beam Search algorithm</a> (Vijayakumar et al., 2016)
+                to generate 4 different candidate outputs using beam groups with diversity penalty,
                 exploring multiple possible interpretations of the text.
               </p>
             </div>

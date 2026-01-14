@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "corp-extractor"
+version = "0.1.0"
+description = "Extract structured statements from text using T5-Gemma 2 and Diverse Beam Search"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Corp-o-Rate", email = "neil@corp-o-rate.com" }
+]
+maintainers = [
+    { name = "Corp-o-Rate", email = "neil@corp-o-rate.com" }
+]
+keywords = [
+    "nlp",
+    "statement-extraction",
+    "information-extraction",
+    "knowledge-graph",
+    "t5",
+    "gemma",
+    "transformers",
+    "diverse-beam-search",
+    "subject-predicate-object",
+    "triples",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+dependencies = [
+    "pydantic>=2.0.0",
+    "torch>=2.0.0",
+    "transformers>=4.35.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/corp-o-rate/statement-extractor"
+Documentation = "https://github.com/corp-o-rate/statement-extractor#readme"
+Repository = "https://github.com/corp-o-rate/statement-extractor"
+Issues = "https://github.com/corp-o-rate/statement-extractor/issues"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/statement_extractor"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
