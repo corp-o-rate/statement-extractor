@@ -6,7 +6,6 @@ Provides:
 - BeamScorer: Score and select/merge beams based on quality metrics
 """
 
-import re
 from typing import Optional
 
 from .models import ScoringConfig, Statement
@@ -137,9 +136,6 @@ class TripleScorer:
 
         if subj_pos < 0 or obj_pos < 0:
             return 0.0
-
-        # Calculate character distance
-        distance = abs(subj_pos - obj_pos)
 
         # Check if in same sentence
         start = min(subj_pos, obj_pos)
@@ -377,10 +373,17 @@ class BeamScorer:
         min_conf = self.config.min_confidence
         filtered = [s for s in all_statements if (s.confidence_score or 0) >= min_conf]
 
+        # Filter out statements where source_text doesn't support the predicate
+        # This catches model hallucinations where predicate doesn't match the evidence
+        consistent = [
+            s for s in filtered
+            if self._source_text_supports_predicate(s)
+        ]
+
         # Deduplicate - keep highest confidence for each (subject, predicate, object)
         # Note: Same subject+predicate with different objects is valid (e.g., "Apple announced X and Y")
         seen: dict[tuple[str, str, str], Statement] = {}
-        for stmt in filtered:
+        for stmt in consistent:
             key = (
                 stmt.subject.text.lower(),
                 stmt.predicate.lower(),
@@ -390,3 +393,27 @@ class BeamScorer:
                 seen[key] = stmt
 
         return list(seen.values())
+
+    def _source_text_supports_predicate(self, stmt: Statement) -> bool:
+        """
+        Check if a statement's source_text contains a lexical trigger for its predicate.
+
+        Returns True if:
+        - source_text is None (no requirement to check)
+        - source_text contains at least one significant word from the predicate
+
+        Returns False if:
+        - source_text is set but contains no words from the predicate
+        """
+        if not stmt.source_text:
+            return True  # No source_text to check
+
+        predicate_words = stmt.predicate.lower().split()
+        source_lower = stmt.source_text.lower()
+
+        # Check if any significant predicate word appears in source_text
+        for word in predicate_words:
+            if len(word) > 2 and word in source_lower:
+                return True
+
+        return False

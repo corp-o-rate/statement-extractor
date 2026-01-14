@@ -21,26 +21,63 @@ function EntityBadge({ name, type }: { name: string; type: string }) {
   );
 }
 
+function ConfidenceBadge({ confidence }: { confidence?: number }) {
+  if (confidence === undefined || confidence === null) {
+    return null;
+  }
+
+  // Color based on confidence level
+  const percent = Math.round(confidence * 100);
+  let colorClass = 'bg-gray-100 text-gray-600';
+  if (confidence >= 0.8) {
+    colorClass = 'bg-green-100 text-green-700';
+  } else if (confidence >= 0.5) {
+    colorClass = 'bg-yellow-100 text-yellow-700';
+  } else {
+    colorClass = 'bg-red-100 text-red-700';
+  }
+
+  return (
+    <span
+      className={`text-xs font-medium px-1.5 py-0.5 rounded ${colorClass}`}
+      title={`Confidence: ${percent}%`}
+    >
+      {percent}%
+    </span>
+  );
+}
+
 function StatementCard({ statement, index }: { statement: Statement; index: number }) {
   return (
     <div className="editorial-card p-4">
-      {/* Statement number */}
-      <div className="flex items-start gap-3 mb-3">
-        <span className="text-xs font-bold text-gray-400 mt-1">#{index + 1}</span>
-        <div className="flex-1">
-          {/* Subject → Predicate → Object */}
-          <div className="flex flex-wrap items-center gap-2">
-            <EntityBadge name={statement.subject.name} type={statement.subject.type} />
-            <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-            <span className="font-semibold text-gray-700">{statement.predicate}</span>
-            {statement.object.name && (
-              <>
-                <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                <EntityBadge name={statement.object.name} type={statement.object.type} />
-              </>
-            )}
+      {/* Header row with statement number and confidence */}
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-start gap-3 flex-1 min-w-0">
+          <span className="text-xs font-bold text-gray-400 mt-1">#{index + 1}</span>
+          <div className="flex-1 min-w-0">
+            {/* Subject → Predicate → Object */}
+            <div className="flex flex-wrap items-center gap-2">
+              <EntityBadge name={statement.subject.name} type={statement.subject.type} />
+              <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+              <span className="font-semibold text-gray-700">
+                {statement.canonicalPredicate || statement.predicate}
+                {statement.canonicalPredicate && statement.canonicalPredicate !== statement.predicate && (
+                  <span className="text-gray-400 font-normal ml-1" title={`Original: "${statement.predicate}"`}>
+                    *
+                  </span>
+                )}
+              </span>
+              {statement.object.name && (
+                <>
+                  <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                  <EntityBadge name={statement.object.name} type={statement.object.type} />
+                </>
+              )}
+            </div>
           </div>
         </div>
+        {/* Confidence badge in top right */}
+        <ConfidenceBadge confidence={statement.confidence} />
       </div>
 
       {/* Full statement text */}

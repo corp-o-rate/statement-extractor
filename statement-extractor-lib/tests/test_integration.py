@@ -251,6 +251,226 @@ requires_model = pytest.mark.skipif(
 )
 
 
+class TestSourceTextConsistency:
+    """Tests to verify source_text consistency after merging."""
+
+    def _make_stmt(
+        self,
+        subj: str,
+        pred: str,
+        obj: str,
+        source_text: str | None = None,
+        subj_type: EntityType = EntityType.ORG,
+        obj_type: EntityType = EntityType.EVENT,
+        confidence: float | None = None,
+    ) -> Statement:
+        stmt = Statement(
+            subject=Entity(text=subj, type=subj_type),
+            predicate=pred,
+            object=Entity(text=obj, type=obj_type),
+            source_text=source_text,
+        )
+        stmt.confidence_score = confidence
+        return stmt
+
+    def test_source_text_should_contain_predicate_trigger(self):
+        """
+        Test that after merging, each statement's source_text contains
+        a lexical trigger for its predicate.
+
+        This test reproduces a bug where merging beams could result in
+        mismatched source_text - e.g., a statement with predicate "is leader of"
+        paired with source_text mentioning "congratulated".
+        """
+        # Simulate two beams producing same triple but different source_text
+        beam1 = [
+            self._make_stmt(
+                "Aria Patel", "is leader of", "Cedar Ridge Cyclones",
+                source_text="NPBA commissioner Aria Patel congratulated the Cedar Ridge Cyclones.",
+                subj_type=EntityType.PERSON,
+                obj_type=EntityType.ORG,
+                confidence=0.9,  # Higher confidence but wrong source_text
+            ),
+        ]
+        beam2 = [
+            self._make_stmt(
+                "Aria Patel", "congratulated", "Cedar Ridge Cyclones",
+                source_text="NPBA commissioner Aria Patel congratulated the Cedar Ridge Cyclones.",
+                subj_type=EntityType.PERSON,
+                obj_type=EntityType.ORG,
+                confidence=0.85,
+            ),
+        ]
+
+        source = """NPBA commissioner Aria Patel congratulated the Cyclones and noted that the
+        1,000th win represents a milestone for teams across the league."""
+
+        config = ScoringConfig(min_confidence=0.0)
+        scorer = BeamScorer(config)
+
+        # After merging, if statements are different triples, both should be kept
+        merged = scorer.merge_beams([beam1, beam2], source)
+
+        # These are different predicates, so both should be present
+        predicates = {s.predicate for s in merged}
+        assert "congratulated" in predicates or "is leader of" in predicates
+
+        # More importantly, verify each statement's source_text supports its predicate
+        for stmt in merged:
+            if stmt.source_text:
+                # Check that at least one word from predicate appears in source_text
+                predicate_words = stmt.predicate.lower().split()
+                source_lower = stmt.source_text.lower()
+                has_trigger = any(word in source_lower for word in predicate_words if len(word) > 2)
+
+                # This assertion documents the expected behavior:
+                # If source_text is set, it should contain evidence for the predicate
+                assert has_trigger, (
+                    f"Statement predicate '{stmt.predicate}' has no lexical trigger in "
+                    f"source_text: '{stmt.source_text}'"
+                )
+
+
+class TestCedarRidgeCyclonesScenario:
+    """
+    Integration test using realistic sports article text.
+
+    This tests extraction quality on multi-paragraph text with many entities
+    and relationships, similar to real-world usage.
+    """
+
+    CEDAR_RIDGE_TEXT = """CEDAR FALLS, Iowa — On March 31, 2026, at Riverbend Arena, the Cedar Ridge Cyclones of the National Pro Basketball Association (NPBA) secured their 1,000th win in franchise history by defeating the Richmond Royals 112-105. The milestone comes in the program's 27th season and was fueled by a late defensive surge and steady scoring from the starting lineup. Star guard Elena Park led the way with 28 points on 9-for-20 shooting, while center Malik Carter added 15 points and 11 rebounds. Head coach Marcus Doyle praised the team's balance, noting that a 12-2 run in the fourth quarter turned a one-possession game into a comfortable finish. Team owner Sophia Lin called the win a testament to long-term planning and community support.
+
+Park's 28-point performance elevated her to 3,184 career points, the most in Cedar Ridge Cyclones history. She also handed out six assists and contributed three steals, supporting a defense that held Richmond to 105 points. The night underscored the team's multi-faceted approach this season, with fellow guard Jalen Soto posting seven assists and forward Mateo Ruiz adding 12 points. The Cyclones have emphasized player development, including the 2024 opening of the Riverbend Training Center downtown and a youth-mentorship program funded by the team's foundation.
+
+NPBA commissioner Aria Patel congratulated the Cyclones and noted that the 1,000th win represents a milestone for teams across the league. Friday's crowd of 15,472 at Riverbend Arena marked the largest regular-season attendance in Cedar Ridge's home history since 2015, and merchants along Route 20 reported a measurable uptick in business. The club announced a charitable partner agreement with the Cedar Falls Community Foundation to award $25,000 in grants to local youth basketball programs, reinforcing its community outreach. The Cyclones will return to action on April 6, when they host the Milwaukee Monarchs in a rematch that will cap a three-game homestand."""
+
+    def _make_stmt(
+        self,
+        subj: str,
+        pred: str,
+        obj: str,
+        source_text: str | None = None,
+        subj_type: EntityType = EntityType.ORG,
+        obj_type: EntityType = EntityType.ORG,
+    ) -> Statement:
+        return Statement(
+            subject=Entity(text=subj, type=subj_type),
+            predicate=pred,
+            object=Entity(text=obj, type=obj_type),
+            source_text=source_text,
+        )
+
+    def test_beam_scoring_with_sports_text(self):
+        """Test beam scoring with realistic sports article."""
+        # Create representative statements that could be extracted
+        beam1 = [
+            self._make_stmt(
+                "Cedar Ridge Cyclones", "defeated", "Richmond Royals",
+                source_text="the Cedar Ridge Cyclones of the National Pro Basketball Association (NPBA) secured their 1,000th win in franchise history by defeating the Richmond Royals 112-105",
+            ),
+            self._make_stmt(
+                "Elena Park", "led", "Cedar Ridge Cyclones",
+                source_text="Star guard Elena Park led the way with 28 points on 9-for-20 shooting",
+                subj_type=EntityType.PERSON,
+            ),
+        ]
+
+        beam2 = [
+            self._make_stmt(
+                "Cedar Ridge Cyclones", "prevails over", "Richmond Royals",
+                source_text="the Cedar Ridge Cyclones of the National Pro Basketball Association (NPBA) secured their 1,000th win in franchise history by defeating the Richmond Royals 112-105",
+            ),
+            self._make_stmt(
+                "Aria Patel", "congratulated", "Cedar Ridge Cyclones",
+                source_text="NPBA commissioner Aria Patel congratulated the Cyclones and noted that the 1,000th win represents a milestone",
+                subj_type=EntityType.PERSON,
+            ),
+        ]
+
+        config = ScoringConfig(min_confidence=0.0)
+        scorer = BeamScorer(config)
+
+        # Merge should combine unique statements from both beams
+        merged = scorer.merge_beams([beam1, beam2], self.CEDAR_RIDGE_TEXT)
+
+        # Should have statements about Elena Park and Aria Patel (unique subjects/predicates)
+        subjects = {s.subject.text for s in merged}
+        assert "Elena Park" in subjects
+        assert "Aria Patel" in subjects
+
+    def test_evidence_spans_found_in_source(self):
+        """Test that evidence spans can be located in the source text."""
+        scorer = TripleScorer()
+
+        stmt = Statement(
+            subject=Entity(text="Elena Park", type=EntityType.PERSON),
+            predicate="led",
+            object=Entity(text="Cedar Ridge Cyclones", type=EntityType.ORG),
+            source_text="Star guard Elena Park led the way with 28 points",
+        )
+
+        span = scorer.find_evidence_span(stmt, self.CEDAR_RIDGE_TEXT)
+        assert span is not None
+
+        # The span should contain the source_text
+        start, end = span
+        extracted = self.CEDAR_RIDGE_TEXT[start:end]
+        assert "Elena Park" in extracted or "28 points" in extracted
+
+    def test_all_key_entities_grounded(self):
+        """Verify that key entities from the text can be grounded."""
+        scorer = TripleScorer()
+
+        key_entities = [
+            "Cedar Ridge Cyclones",
+            "Richmond Royals",
+            "Elena Park",
+            "Malik Carter",
+            "Marcus Doyle",
+            "Sophia Lin",
+            "Aria Patel",
+            "Cedar Falls Community Foundation",
+        ]
+
+        for entity in key_entities:
+            # Each entity should appear in the source text
+            assert entity.lower() in self.CEDAR_RIDGE_TEXT.lower(), (
+                f"Entity '{entity}' not found in source text"
+            )
+
+    def test_source_text_predicate_consistency(self):
+        """
+        Test that statements maintain consistency between predicate and source_text.
+
+        This test documents expected behavior: if a statement has source_text,
+        the predicate should have some lexical grounding in that text.
+        """
+        # Example of a GOOD statement - predicate matches source_text
+        good_stmt = self._make_stmt(
+            "Aria Patel", "congratulated", "Cedar Ridge Cyclones",
+            source_text="NPBA commissioner Aria Patel congratulated the Cyclones",
+            subj_type=EntityType.PERSON,
+        )
+
+        # Example of a BAD statement - predicate doesn't match source_text
+        # (This is what we're trying to prevent)
+        bad_stmt = self._make_stmt(
+            "Aria Patel", "is leader of", "Cedar Ridge Cyclones",
+            source_text="NPBA commissioner Aria Patel congratulated the Cyclones",
+            subj_type=EntityType.PERSON,
+        )
+
+        # Check that good statement has predicate trigger in source_text
+        assert "congratulated" in good_stmt.source_text.lower()
+
+        # Check that bad statement does NOT have predicate trigger in source_text
+        predicate_words = bad_stmt.predicate.lower().split()
+        source_lower = bad_stmt.source_text.lower()
+        has_trigger = any(word in source_lower for word in predicate_words if len(word) > 2)
+        assert not has_trigger, "Expected bad_stmt to have no predicate trigger"
+
+
 @requires_model
 class TestExtractorIntegration:
     """Integration tests that require the actual model.
@@ -267,3 +487,41 @@ class TestExtractorIntegration:
         # This would be a full integration test
         # Skipping actual model loading for unit tests
         pass
+
+    @pytest.mark.slow
+    def test_cedar_ridge_extraction(self):
+        """
+        Test extraction on Cedar Ridge Cyclones sports article.
+
+        This is a slow test that loads the actual model.
+        """
+        from statement_extractor import extract_statements, ExtractionOptions
+
+        text = TestCedarRidgeCyclonesScenario.CEDAR_RIDGE_TEXT
+
+        options = ExtractionOptions(
+            num_beams=4,
+            merge_beams=True,
+            embedding_dedup=True,
+        )
+
+        result = extract_statements(text, options)
+
+        # Should extract multiple statements
+        assert len(result.statements) >= 5
+
+        # Verify source_text consistency for each statement
+        for stmt in result.statements:
+            if stmt.source_text:
+                predicate_words = stmt.predicate.lower().split()
+                source_lower = stmt.source_text.lower()
+                # At least one predicate word should appear in source_text
+                has_trigger = any(
+                    word in source_lower
+                    for word in predicate_words
+                    if len(word) > 2
+                )
+                assert has_trigger, (
+                    f"Statement '{stmt}' has predicate '{stmt.predicate}' "
+                    f"with no trigger in source_text: '{stmt.source_text}'"
+                )

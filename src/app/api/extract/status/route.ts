@@ -49,8 +49,18 @@ export async function GET(request: NextRequest) {
 
     // Handle completed job - parse the output
     if (data.status === 'COMPLETED' && data.output) {
-      const outputText = data.output.output || data.output;
-      const statements = parseStatements(outputText);
+      // Check if response is in new JSON format (v0.2.0+)
+      const outputData = data.output.output || data.output;
+      const isJsonFormat = data.output.format === 'json' || (typeof outputData === 'object' && outputData.statements);
+
+      let statements;
+      if (isJsonFormat) {
+        // New JSON format - already parsed or needs parsing
+        statements = parseStatements(outputData);
+      } else {
+        // Legacy XML format
+        statements = parseStatements(outputData);
+      }
 
       // Cache the result if we have the input text
       if (inputText) {

@@ -59,7 +59,10 @@ export async function POST(request: NextRequest) {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              input: { text: modelInput },
+              input: {
+                text: modelInput,
+                format: 'json', // Request JSON format for v0.2.0+ (includes confidence scores)
+              },
             }),
           }
         );

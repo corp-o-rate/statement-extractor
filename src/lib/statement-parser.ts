@@ -1,7 +1,22 @@
 /**
- * Parse XML statements from T5-Gemma 2 model output
+ * Parse statements from T5-Gemma 2 model output
  *
- * Expected format:
+ * Supports two formats:
+ *
+ * 1. JSON format (v0.2.0+, preferred) - includes confidence scores:
+ * {
+ *   "statements": [{
+ *     "subject": {"text": "Apple Inc.", "type": "ORG"},
+ *     "predicate": "committed to",
+ *     "object": {"text": "carbon neutral by 2030", "type": "EVENT"},
+ *     "source_text": "Apple Inc. committed to becoming carbon neutral by 2030.",
+ *     "confidence_score": 0.85,
+ *     "canonical_predicate": null
+ *   }],
+ *   "source_text": "..."
+ * }
+ *
+ * 2. XML format (legacy):
  * <statements>
  *   <stmt>
  *     <subject type="ORG">Apple Inc.</subject>
@@ -13,6 +28,27 @@
  */
 
 import { Statement, EntityType, Entity } from './types';
+
+// Type for the JSON format from the library
+interface LibraryEntity {
+  text: string;
+  type: string;
+}
+
+interface LibraryStatement {
+  subject: LibraryEntity;
+  predicate: string;
+  object: LibraryEntity;
+  source_text?: string | null;
+  confidence_score?: number | null;
+  canonical_predicate?: string | null;
+  evidence_span?: [number, number] | null;
+}
+
+interface LibraryExtractionResult {
+  statements: LibraryStatement[];
+  source_text?: string | null;
+}
 
 /**
  * Parse entity type from string, with fallback to UNKNOWN
@@ -105,28 +141,77 @@ function deduplicateStatements(statements: Statement[]): Statement[] {
 }
 
 /**
- * Parse XML string containing statements
+ * Parse statements from JSON or XML string
+ * Automatically detects format and parses accordingly
  */
-export function parseStatements(xmlString: string): Statement[] {
-  const statements: Statement[] = [];
-
+export function parseStatements(input: string | LibraryExtractionResult): Statement[] {
   // Handle empty or invalid input
-  if (!xmlString || typeof xmlString !== 'string') {
-    return statements;
+  if (!input) {
+    return [];
   }
 
-  // Trim and check for valid XML structure
-  const trimmed = xmlString.trim();
-  if (!trimmed.includes('<statements>') && !trimmed.includes('<stmt>')) {
+  // If input is already an object (JSON parsed), handle directly
+  if (typeof input === 'object') {
+    return parseJsonStatements(input);
+  }
+
+  const trimmed = input.trim();
+
+  // Try to detect JSON format (starts with { or has "statements" key)
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parseJsonStatements(parsed);
+    } catch {
+      // Not valid JSON, fall through to XML parsing
+      console.warn('Failed to parse as JSON, trying XML');
+    }
+  }
+
+  // Parse as XML (legacy format)
+  return parseXmlStatements(trimmed);
+}
+
+/**
+ * Parse statements from JSON format (v0.2.0+)
+ */
+function parseJsonStatements(data: LibraryExtractionResult | LibraryStatement[]): Statement[] {
+  // Handle array of statements directly
+  const statements = Array.isArray(data) ? data : data.statements || [];
+
+  return statements.map((stmt: LibraryStatement) => ({
+    subject: {
+      name: stmt.subject?.text || '',
+      type: parseEntityType(stmt.subject?.type || null),
+    },
+    object: {
+      name: stmt.object?.text || '',
+      type: parseEntityType(stmt.object?.type || null),
+    },
+    predicate: stmt.predicate || '',
+    text: stmt.source_text || `${stmt.subject?.text || ''} ${stmt.predicate || ''} ${stmt.object?.text || ''}`.trim(),
+    confidence: stmt.confidence_score ?? undefined,
+    canonicalPredicate: stmt.canonical_predicate ?? undefined,
+  })).filter((stmt: Statement) => stmt.subject.name && stmt.predicate);
+}
+
+/**
+ * Parse statements from XML format (legacy)
+ */
+function parseXmlStatements(xmlString: string): Statement[] {
+  const statements: Statement[] = [];
+
+  // Check for valid XML structure
+  if (!xmlString.includes('<statements>') && !xmlString.includes('<stmt>')) {
     console.warn('No <statements> or <stmt> tags found in output');
     return statements;
   }
 
   try {
     // Wrap in root if needed
-    let xmlToParse = trimmed;
-    if (!trimmed.startsWith('<statements>')) {
-      xmlToParse = `<statements>${trimmed}</statements>`;
+    let xmlToParse = xmlString;
+    if (!xmlString.startsWith('<statements>')) {
+      xmlToParse = `<statements>${xmlString}</statements>`;
     }
 
     // Parse using DOMParser (works in browser and Node with jsdom)
@@ -138,7 +223,7 @@ export function parseStatements(xmlString: string): Statement[] {
     if (parseError) {
       console.error('XML parse error:', parseError.textContent);
       // Try fallback regex-based parsing
-      return deduplicateStatements(parseStatementsRegex(trimmed));
+      return deduplicateStatements(parseStatementsRegex(xmlString));
     }
 
     // Extract all statement elements
@@ -153,7 +238,7 @@ export function parseStatements(xmlString: string): Statement[] {
   } catch (error) {
     console.error('Error parsing XML statements:', error);
     // Try fallback regex-based parsing
-    return deduplicateStatements(parseStatementsRegex(trimmed));
+    return deduplicateStatements(parseStatementsRegex(xmlString));
   }
 
   // Deduplicate before returning

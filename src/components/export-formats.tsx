@@ -11,14 +11,16 @@ interface ExportFormatsProps {
 }
 
 function statementsToCSV(statements: Statement[]): string {
-  const headers = ['subject', 'subject_type', 'predicate', 'object', 'object_type', 'text'];
+  const headers = ['subject', 'subject_type', 'predicate', 'canonical_predicate', 'object', 'object_type', 'text', 'confidence'];
   const rows = statements.map(s => [
     `"${s.subject.name.replace(/"/g, '""')}"`,
     s.subject.type,
     `"${s.predicate.replace(/"/g, '""')}"`,
+    s.canonicalPredicate ? `"${s.canonicalPredicate.replace(/"/g, '""')}"` : '',
     `"${s.object.name.replace(/"/g, '""')}"`,
     s.object.type,
     `"${s.text.replace(/"/g, '""')}"`,
+    s.confidence !== undefined ? s.confidence.toFixed(3) : '',
   ].join(','));
   return [headers.join(','), ...rows].join('\n');
 }
@@ -29,9 +31,11 @@ function statementsToJSON(statements: Statement[]): string {
 
 function statementsToXML(statements: Statement[]): string {
   const stmtElements = statements.map(s => {
-    return `  <stmt>
+    const confidenceAttr = s.confidence !== undefined ? ` confidence="${s.confidence.toFixed(3)}"` : '';
+    const canonicalEl = s.canonicalPredicate ? `\n    <canonical_predicate>${escapeXML(s.canonicalPredicate)}</canonical_predicate>` : '';
+    return `  <stmt${confidenceAttr}>
     <subject type="${s.subject.type}">${escapeXML(s.subject.name)}</subject>
-    <predicate>${escapeXML(s.predicate)}</predicate>
+    <predicate>${escapeXML(s.predicate)}</predicate>${canonicalEl}
     <object type="${s.object.type}">${escapeXML(s.object.name)}</object>
     <text>${escapeXML(s.text)}</text>
   </stmt>`;
@@ -82,9 +86,11 @@ function statementsToCypher(statements: Statement[]): string {
     const objectKey = `${s.object.name}:${s.object.type}`;
     const subjectVar = nodeVarMap.get(subjectKey);
     const objectVar = nodeVarMap.get(objectKey);
-    const relType = s.predicate.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+    const relType = (s.canonicalPredicate || s.predicate).toUpperCase().replace(/[^A-Z0-9]/g, '_');
     const escapedPredicate = s.predicate.replace(/'/g, "\\'");
-    return `CREATE (${subjectVar})-[:${relType} {predicate: '${escapedPredicate}'}]->(${objectVar})`;
+    const confidenceProp = s.confidence !== undefined ? `, confidence: ${s.confidence.toFixed(3)}` : '';
+    const canonicalProp = s.canonicalPredicate ? `, canonical_predicate: '${s.canonicalPredicate.replace(/'/g, "\\'")}'` : '';
+    return `CREATE (${subjectVar})-[:${relType} {predicate: '${escapedPredicate}'${canonicalProp}${confidenceProp}}]->(${objectVar})`;
   });
 
   return [...nodeStatements, '', ...relStatements].join('\n');

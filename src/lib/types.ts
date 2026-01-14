@@ -27,6 +27,10 @@ export interface Statement {
   object: Entity;
   predicate: string;
   text: string;
+  /** Groundedness score (0-1) indicating how well the triple is supported by source text */
+  confidence?: number;
+  /** Canonical form of the predicate if taxonomy matching was used */
+  canonicalPredicate?: string;
 }
 
 export interface ExtractionResult {
