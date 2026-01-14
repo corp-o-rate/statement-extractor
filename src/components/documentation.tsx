@@ -15,54 +15,104 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
 ];
 
 const HF_MODEL = 'Corp-o-Rate-Community/statement-extractor';
+const PYPI_PACKAGE = 'corp-extractor';
 
 const CODE_SNIPPETS: Record<TabId, string> = {
   python: `# Installation
-pip install transformers torch
+pip install ${PYPI_PACKAGE}
 
-# Usage
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-import torch
+# For GPU support, install PyTorch with CUDA first:
+# pip install torch --index-url https://download.pytorch.org/whl/cu121
 
-# Load model and tokenizer
-model = AutoModelForSeq2SeqLM.from_pretrained(
-    "${HF_MODEL}",
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-)
-tokenizer = AutoTokenizer.from_pretrained(
-    "${HF_MODEL}",
-    trust_remote_code=True,
-)
+# ============================================
+# Simple Usage - Returns Pydantic Models
+# ============================================
+from statement_extractor import extract_statements
 
-# Move to GPU if available
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = model.to(device)
+text = """
+Apple Inc. announced a commitment to carbon neutrality by 2030.
+Tim Cook presented the sustainability report to investors.
+"""
 
-def extract_statements(text: str) -> str:
-    """Extract statements from text."""
-    # Wrap text in page tags
-    inputs = tokenizer(
-        f"<page>{text}</page>",
-        return_tensors="pt",
-        max_length=4096,
-        truncation=True
-    ).to(device)
-
-    # Generate
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=2048,
-        num_beams=4,
-        do_sample=False,
-    )
-
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-# Example usage
-text = "Apple Inc. announced a commitment to carbon neutrality by 2030."
 result = extract_statements(text)
-print(result)`,
+
+for stmt in result:
+    print(f"{stmt.subject.text} ({stmt.subject.type})")
+    print(f"  --[{stmt.predicate}]-->")
+    print(f"  {stmt.object.text} ({stmt.object.type})")
+    print()
+
+# Output:
+# Apple Inc. (ORG)
+#   --[committed to]-->
+#   carbon neutrality by 2030 (EVENT)
+#
+# Tim Cook (PERSON)
+#   --[presented]-->
+#   sustainability report (WORK_OF_ART)
+
+# ============================================
+# Alternative Output Formats
+# ============================================
+from statement_extractor import (
+    extract_statements_as_json,
+    extract_statements_as_xml,
+    extract_statements_as_dict,
+)
+
+# Get JSON string
+json_output = extract_statements_as_json(text)
+print(json_output)
+
+# Get raw XML (model's native format)
+xml_output = extract_statements_as_xml(text)
+print(xml_output)
+
+# Get Python dictionary
+dict_output = extract_statements_as_dict(text)
+print(dict_output)
+
+# ============================================
+# Advanced: Custom Options
+# ============================================
+from statement_extractor import extract_statements, ExtractionOptions
+
+options = ExtractionOptions(
+    num_beams=8,              # More candidates (default: 4)
+    diversity_penalty=1.5,    # Higher diversity (default: 1.0)
+    max_attempts=5,           # More retries (default: 3)
+)
+
+result = extract_statements(text, options=options)
+
+# ============================================
+# Advanced: Reusable Extractor (faster for batch)
+# ============================================
+from statement_extractor import StatementExtractor
+
+extractor = StatementExtractor(device="cuda")  # or "cpu"
+
+texts = ["Text 1...", "Text 2...", "Text 3..."]
+for text in texts:
+    result = extractor.extract(text)
+    print(f"Found {len(result)} statements")
+
+# ============================================
+# Working with Results
+# ============================================
+# Access Pydantic model properties
+stmt = result.statements[0]
+print(stmt.subject.text)       # "Apple Inc."
+print(stmt.subject.type)       # EntityType.ORG
+print(stmt.predicate)          # "committed to"
+print(stmt.object.text)        # "carbon neutrality by 2030"
+print(stmt.source_text)        # Original sentence
+
+# Convert to simple tuples
+triples = result.to_triples()
+# [("Apple Inc.", "committed to", "carbon neutrality by 2030"), ...]
+
+# Library uses Diverse Beam Search: https://arxiv.org/abs/1610.02424`,
 
   typescript: `// Installation
 // npm install @huggingface/inference
@@ -272,18 +322,34 @@ export function Documentation() {
 
       {/* Tab content */}
       <div className="mt-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500">Model:</span>
-            <a
-              href={`https://huggingface.co/${HF_MODEL}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-red-600 hover:underline flex items-center gap-1"
-            >
-              {HF_MODEL}
-              <ExternalLink className="w-3 h-3" />
-            </a>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <div className="flex items-center gap-4 flex-wrap">
+            {activeTab === 'python' && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">PyPI:</span>
+                <a
+                  href={`https://pypi.org/project/${PYPI_PACKAGE}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm text-red-600 hover:underline flex items-center gap-1"
+                >
+                  {PYPI_PACKAGE}
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">Model:</span>
+              <a
+                href={`https://huggingface.co/${HF_MODEL}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-red-600 hover:underline flex items-center gap-1"
+              >
+                {HF_MODEL}
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
           </div>
           <CopyButton text={CODE_SNIPPETS[activeTab]} />
         </div>

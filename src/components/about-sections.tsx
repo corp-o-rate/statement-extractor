@@ -327,7 +327,16 @@ export function AboutCorpORate() {
 
           <p className="text-gray-400">
             This statement extraction model is one piece of that puzzle &mdash; automatically extracting relationships and meaningful statements
-            from research, news, and corporate documents. This is the first part of our analysis and we'll be releasing other re-usable components
+            from research, news, and corporate documents. Available as the{' '}
+            <a
+              href="https://pypi.org/project/corp-extractor"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-red-400 hover:underline"
+            >
+              corp-extractor
+            </a>{' '}
+            Python library on PyPI. This is the first part of our analysis and we&apos;ll be releasing other re-usable components
             as we progress.
           </p>
         </div>
