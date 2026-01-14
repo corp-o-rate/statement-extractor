@@ -8,6 +8,7 @@ const RUNPOD_API_KEY = process.env.RUNPOD_API_KEY;
 export async function GET(request: NextRequest) {
   const jobId = request.nextUrl.searchParams.get('jobId');
   const inputText = request.nextUrl.searchParams.get('inputText');
+  const useCanonicalPredicates = request.nextUrl.searchParams.get('useCanonicalPredicates') === 'true';
 
   if (!jobId) {
     return NextResponse.json(
@@ -64,7 +65,7 @@ export async function GET(request: NextRequest) {
 
       // Cache the result if we have the input text
       if (inputText) {
-        await setCachedStatements(inputText, statements);
+        await setCachedStatements(inputText, statements, { useCanonicalPredicates });
       }
 
       return NextResponse.json({

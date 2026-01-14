@@ -14,6 +14,7 @@ Extract structured subject-predicate-object statements from unstructured text us
 - **Beam Merging** *(v0.2.0)*: Combines top beams for better coverage instead of picking one
 - **Embedding-based Dedup** *(v0.2.0)*: Uses semantic similarity to detect near-duplicate predicates
 - **Predicate Taxonomies** *(v0.2.0)*: Normalize predicates to canonical forms via embeddings
+- **Contextualized Matching** *(v0.2.2)*: Compares full "Subject Predicate Object" against source text for better accuracy
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
 
 ## Installation
@@ -89,6 +90,15 @@ for stmt in result:
         print(f"{stmt.predicate} -> {stmt.canonical_predicate}")
 ```
 
+## New in v0.2.2: Contextualized Matching
+
+Predicate canonicalization and deduplication now use **contextualized matching**:
+- Compares full "Subject Predicate Object" strings against source text
+- Better accuracy because predicates are evaluated in context
+- When duplicates are found, keeps the statement with the best match to source text
+
+This means "Apple bought Beats" vs "Apple acquired Beats" are compared holistically, not just "bought" vs "acquired".
+
 ## Disable Embeddings (Faster, No Extra Dependencies)
 
 ```python
@@ -162,6 +172,7 @@ This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam 
 3. **Beam Merging** *(v0.2.0)*: Top beams combined for better coverage
 4. **Embedding Dedup** *(v0.2.0)*: Semantic similarity removes near-duplicate predicates
 5. **Predicate Normalization** *(v0.2.0)*: Optional taxonomy matching via embeddings
+6. **Contextualized Matching** *(v0.2.2)*: Full statement context used for canonicalization and dedup
 
 ## Requirements
 

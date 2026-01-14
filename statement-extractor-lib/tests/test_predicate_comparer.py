@@ -97,14 +97,14 @@ class TestPredicateComparer:
         matches = comparer_with_taxonomy.match_batch(predicates)
 
         assert len(matches) == 3
-        # paraphrase-MiniLM-L6-v2 with 0.65 threshold:
+        # paraphrase-MiniLM-L6-v2 with 0.5 threshold:
         # "bought" -> "acquired" (~0.70 similarity)
         assert matches[0].canonical == "acquired"
         # "started" -> "founded" (~0.71 similarity)
         assert matches[1].canonical == "founded"
-        # "employed" -> "works_for" (~0.52 similarity - below threshold, won't match)
-        assert matches[2].original == "employed"
-        assert not matches[2].matched  # Below threshold
+        # "employed" -> "works_for" (~0.52 similarity - above 0.5 threshold)
+        assert matches[2].canonical == "works_for"
+        assert matches[2].matched
 
     def test_deduplicate_statements(self, comparer):
         # paraphrase-MiniLM-L6-v2: "bought"/"acquired" ~0.70, above default 0.65 threshold

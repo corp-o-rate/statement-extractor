@@ -197,8 +197,8 @@ class TestPredicateComparisonConfig:
     def test_default_values(self):
         config = PredicateComparisonConfig()
         assert config.embedding_model == "sentence-transformers/paraphrase-MiniLM-L6-v2"
-        assert config.similarity_threshold == 0.65
-        assert config.dedup_threshold == 0.65
+        assert config.similarity_threshold == 0.5  # Lower for broader taxonomy matching
+        assert config.dedup_threshold == 0.65  # Higher for stricter deduplication
         assert config.normalize_text is True
 
     def test_custom_values(self):

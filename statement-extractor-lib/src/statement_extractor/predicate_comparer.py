@@ -265,12 +265,15 @@ class PredicateComparer:
         - Predicates are similar (embedding-based)
         - Canonicalized objects match
 
+        When duplicates are found, keeps the statement with better contextualized
+        match (comparing "Subject Predicate Object" against source text).
+
         Args:
             statements: List of Statement objects
             entity_canonicalizer: Optional function to canonicalize entity text
 
         Returns:
-            Deduplicated list of statements (keeps first occurrence)
+            Deduplicated list of statements (keeps best contextualized match)
         """
         if len(statements) <= 1:
             return statements
@@ -284,16 +287,29 @@ class PredicateComparer:
         predicates = [s.predicate for s in statements]
         pred_embeddings = self._compute_embeddings(predicates)
 
-        unique_statements = []
-        unique_embeddings = []
-        unique_keys: set[tuple[str, str]] = set()  # (subject, object) pairs
+        # Compute contextualized embeddings: "Subject Predicate Object" for each statement
+        contextualized_texts = [
+            f"{s.subject.text} {s.predicate} {s.object.text}" for s in statements
+        ]
+        contextualized_embeddings = self._compute_embeddings(contextualized_texts)
+
+        # Compute source text embeddings for scoring which duplicate to keep
+        source_embeddings = []
+        for stmt in statements:
+            source_text = stmt.source_text or f"{stmt.subject.text} {stmt.predicate} {stmt.object.text}"
+            source_embeddings.append(self._compute_embeddings([source_text])[0])
+
+        unique_statements: list[Statement] = []
+        unique_pred_embeddings: list[np.ndarray] = []
+        unique_context_embeddings: list[np.ndarray] = []
+        unique_source_embeddings: list[np.ndarray] = []
+        unique_indices: list[int] = []
 
         for i, stmt in enumerate(statements):
             subj_canon = canonicalize(stmt.subject.text)
             obj_canon = canonicalize(stmt.object.text)
-            so_key = (subj_canon, obj_canon)
 
-            is_duplicate = False
+            duplicate_idx = None
 
             for j, unique_stmt in enumerate(unique_statements):
                 unique_subj = canonicalize(unique_stmt.subject.text)
@@ -306,16 +322,38 @@ class PredicateComparer:
                 # Check predicate similarity
                 similarity = self._cosine_similarity(
                     pred_embeddings[i],
-                    unique_embeddings[j]
+                    unique_pred_embeddings[j]
                 )
                 if similarity >= self.config.dedup_threshold:
-                    is_duplicate = True
+                    duplicate_idx = j
                     break
 
-            if not is_duplicate:
+            if duplicate_idx is None:
+                # Not a duplicate - add to unique list
                 unique_statements.append(stmt)
-                unique_embeddings.append(pred_embeddings[i])
-                unique_keys.add(so_key)
+                unique_pred_embeddings.append(pred_embeddings[i])
+                unique_context_embeddings.append(contextualized_embeddings[i])
+                unique_source_embeddings.append(source_embeddings[i])
+                unique_indices.append(i)
+            else:
+                # Duplicate found - keep the one with better contextualized match
+                # Compare "Subject Predicate Object" against source text
+                current_score = self._cosine_similarity(
+                    contextualized_embeddings[i],
+                    source_embeddings[i]
+                )
+                existing_score = self._cosine_similarity(
+                    unique_context_embeddings[duplicate_idx],
+                    unique_source_embeddings[duplicate_idx]
+                )
+
+                if current_score > existing_score:
+                    # Current statement is a better match - replace
+                    unique_statements[duplicate_idx] = stmt
+                    unique_pred_embeddings[duplicate_idx] = pred_embeddings[i]
+                    unique_context_embeddings[duplicate_idx] = contextualized_embeddings[i]
+                    unique_source_embeddings[duplicate_idx] = source_embeddings[i]
+                    unique_indices[duplicate_idx] = i
 
         return unique_statements
 
@@ -325,6 +363,9 @@ class PredicateComparer:
     ) -> list[Statement]:
         """
         Normalize all predicates in statements to canonical forms.
+
+        Uses contextualized matching: compares "Subject CanonicalPredicate Object"
+        against the statement's source text for better semantic matching.
 
         Sets canonical_predicate field on each statement if a match is found.
 
@@ -337,11 +378,62 @@ class PredicateComparer:
         if self.taxonomy is None or len(self.taxonomy.predicates) == 0:
             return statements
 
-        predicates = [s.predicate for s in statements]
-        matches = self.match_batch(predicates)
-
-        for stmt, match in zip(statements, matches):
+        for stmt in statements:
+            match = self._match_predicate_contextualized(stmt)
             if match.matched and match.canonical:
                 stmt.canonical_predicate = match.canonical
 
         return statements
+
+    def _match_predicate_contextualized(self, statement: Statement) -> PredicateMatch:
+        """
+        Match a statement's predicate to canonical form using full context.
+
+        Compares "Subject CanonicalPredicate Object" strings against the
+        statement's source text for better semantic matching.
+
+        Args:
+            statement: The statement to match
+
+        Returns:
+            PredicateMatch with best canonical form
+        """
+        if self.taxonomy is None or len(self.taxonomy.predicates) == 0:
+            return PredicateMatch(original=statement.predicate)
+
+        # Get the reference text to compare against
+        # Use source_text if available, otherwise construct from components
+        reference_text = statement.source_text or f"{statement.subject.text} {statement.predicate} {statement.object.text}"
+
+        # Compute embedding for the reference text
+        reference_embedding = self._compute_embeddings([reference_text])[0]
+
+        # Construct contextualized strings for each canonical predicate
+        # Format: "Subject CanonicalPredicate Object"
+        canonical_statements = [
+            f"{statement.subject.text} {canonical_pred} {statement.object.text}"
+            for canonical_pred in self.taxonomy.predicates
+        ]
+
+        # Compute embeddings for all canonical statement forms
+        canonical_embeddings = self._compute_embeddings(canonical_statements)
+
+        # Find best match
+        similarities = self._cosine_similarity_batch(reference_embedding, canonical_embeddings)
+        best_idx = int(np.argmax(similarities))
+        best_score = float(similarities[best_idx])
+
+        if best_score >= self.config.similarity_threshold:
+            return PredicateMatch(
+                original=statement.predicate,
+                canonical=self.taxonomy.predicates[best_idx],
+                similarity=best_score,
+                matched=True,
+            )
+        else:
+            return PredicateMatch(
+                original=statement.predicate,
+                canonical=None,
+                similarity=best_score,
+                matched=False,
+            )

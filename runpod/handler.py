@@ -14,7 +14,7 @@ import os
 from collections import OrderedDict
 
 import runpod
-from statement_extractor import StatementExtractor, ExtractionOptions, ScoringConfig, PredicateTaxonomy
+from statement_extractor import StatementExtractor, ExtractionOptions, ScoringConfig, PredicateTaxonomy, PredicateComparisonConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -123,21 +123,27 @@ def load_extractor():
     logger.info(f"Extractor loaded on device: {extractor.device}")
 
 
-def extract_statements(text: str, output_format: str = "json", use_canonical_predicates: bool = False) -> str:
+def extract_statements(
+    text: str,
+    output_format: str = "json",
+    use_canonical_predicates: bool = False,
+    similarity_threshold: float = 0.5,
+) -> str:
     """Extract statements from text with caching.
 
     Args:
         text: Input text (with or without <page> tags)
         output_format: "json" (v0.2.0+, includes confidence) or "xml" (legacy)
         use_canonical_predicates: If True, normalize predicates to canonical forms
+        similarity_threshold: Threshold for predicate similarity matching (default 0.5)
 
     Returns:
         JSON string with full extraction result, or XML string for legacy mode
     """
     global extractor, cache_size_bytes
 
-    # Include format and taxonomy option in cache key
-    cache_key = get_cache_key(f"{output_format}:canonical={use_canonical_predicates}:{text}")
+    # Include format, taxonomy option, and threshold in cache key
+    cache_key = get_cache_key(f"{output_format}:canonical={use_canonical_predicates}:thresh={similarity_threshold}:{text}")
     if cache_key in result_cache:
         result_cache.move_to_end(cache_key)
         logger.info(f"Cache hit for key: {cache_key[:16]}...")
@@ -145,6 +151,12 @@ def extract_statements(text: str, output_format: str = "json", use_canonical_pre
 
     # Ensure extractor is loaded
     load_extractor()
+
+    # Configure predicate comparison with custom threshold (only for taxonomy, not dedup)
+    predicate_config = PredicateComparisonConfig(
+        similarity_threshold=similarity_threshold,  # For taxonomy matching
+        # dedup_threshold uses library default (0.65)
+    )
 
     # Configure extraction options with scoring for confidence scores
     options = ExtractionOptions(
@@ -154,12 +166,13 @@ def extract_statements(text: str, output_format: str = "json", use_canonical_pre
         merge_beams=True,
         embedding_dedup=True,
         scoring_config=ScoringConfig(),  # Enable quality scoring
+        predicate_config=predicate_config,
     )
 
     # Add predicate taxonomy if requested
     if use_canonical_predicates:
         options.predicate_taxonomy = PredicateTaxonomy(predicates=CANONICAL_PREDICATES)
-        logger.info(f"Using canonical predicate taxonomy with {len(CANONICAL_PREDICATES)} predicates")
+        logger.info(f"Using canonical predicate taxonomy with {len(CANONICAL_PREDICATES)} predicates, threshold={similarity_threshold}")
 
     # Extract using the library
     if output_format == "xml":
@@ -228,14 +241,19 @@ def handler(job):
     # Get canonical predicates option
     use_canonical_predicates = job_input.get("useCanonicalPredicates", False)
 
+    # Get similarity threshold (default 0.5 for broader matching)
+    similarity_threshold = float(job_input.get("similarityThreshold", 0.5))
+    # Clamp to valid range
+    similarity_threshold = max(0.0, min(1.0, similarity_threshold))
+
     # Wrap in page tags if not already wrapped
     if not text.startswith("<page>"):
         text = f"<page>{text}</page>"
 
-    logger.info(f"Processing text of length: {len(text)}, format: {output_format}, canonical: {use_canonical_predicates}")
+    logger.info(f"Processing text of length: {len(text)}, format: {output_format}, canonical: {use_canonical_predicates}, threshold: {similarity_threshold}")
 
     try:
-        result = extract_statements(text, output_format, use_canonical_predicates)
+        result = extract_statements(text, output_format, use_canonical_predicates, similarity_threshold)
         logger.info(f"Extraction complete, output length: {len(result)}")
 
         # For JSON format, parse the string back to dict for cleaner response

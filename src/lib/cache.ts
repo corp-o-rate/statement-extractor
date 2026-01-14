@@ -14,21 +14,30 @@ function getSupabaseClient(): SupabaseClient | null {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 }
 
-function hashInput(text: string): string {
-  return crypto.createHash('sha256').update(text).digest('hex');
+interface CacheOptions {
+  useCanonicalPredicates?: boolean;
+}
+
+function hashInput(text: string, options?: CacheOptions): string {
+  // Include options in hash so different settings are cached separately
+  const cacheKey = `${text}:canonical=${options?.useCanonicalPredicates || false}`;
+  return crypto.createHash('sha256').update(cacheKey).digest('hex');
 }
 
 /**
  * Get cached statements for input text if exists and not expired.
  * Returns null if not found or expired.
  */
-export async function getCachedStatements(inputText: string): Promise<Statement[] | null> {
+export async function getCachedStatements(
+  inputText: string,
+  options?: CacheOptions
+): Promise<Statement[] | null> {
   const supabase = getSupabaseClient();
   if (!supabase) {
     return null;
   }
 
-  const inputHash = hashInput(inputText);
+  const inputHash = hashInput(inputText, options);
   const cutoffTime = new Date(Date.now() - CACHE_TTL_HOURS * 60 * 60 * 1000).toISOString();
 
   try {
@@ -56,13 +65,17 @@ export async function getCachedStatements(inputText: string): Promise<Statement[
 /**
  * Store statements in cache for input text.
  */
-export async function setCachedStatements(inputText: string, statements: Statement[]): Promise<void> {
+export async function setCachedStatements(
+  inputText: string,
+  statements: Statement[],
+  options?: CacheOptions
+): Promise<void> {
   const supabase = getSupabaseClient();
   if (!supabase) {
     return;
   }
 
-  const inputHash = hashInput(inputText);
+  const inputHash = hashInput(inputText, options);
 
   try {
     const { error } = await supabase

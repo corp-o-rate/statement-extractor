@@ -117,7 +117,7 @@ class PredicateComparisonConfig(BaseModel):
         description="Sentence-transformers model ID for computing embeddings"
     )
     similarity_threshold: float = Field(
-        default=0.65,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description="Minimum cosine similarity to consider a taxonomy match"

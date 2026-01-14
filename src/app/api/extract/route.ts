@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
 
     // Check cache first (for RunPod requests)
     if (RUNPOD_ENDPOINT_ID && RUNPOD_API_KEY) {
-      const cachedStatements = await getCachedStatements(text);
+      const cachedStatements = await getCachedStatements(text, { useCanonicalPredicates });
       if (cachedStatements) {
         console.log('Returning cached result');
         const result: ExtractionResult = {
