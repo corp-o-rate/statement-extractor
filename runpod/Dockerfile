@@ -18,12 +18,16 @@ RUN pip install --no-cache-dir \
     accelerate \
     safetensors \
     sentencepiece \
+    pydantic \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
+# Install corp-extractor library (after transformers to avoid version conflicts)
+RUN pip install --no-cache-dir --no-deps corp-extractor
+
 # Download model at build time for faster cold starts
-RUN python -c "from transformers import AutoModelForSeq2SeqLM, AutoTokenizer; \
-    AutoTokenizer.from_pretrained('Corp-o-Rate-Community/statement-extractor', trust_remote_code=True); \
-    AutoModelForSeq2SeqLM.from_pretrained('Corp-o-Rate-Community/statement-extractor', trust_remote_code=True)"
+RUN python -c "from statement_extractor import StatementExtractor; \
+    extractor = StatementExtractor(); \
+    print(f'Model loaded on {extractor.device}')"
 
 # Copy handler
 COPY handler.py /app/handler.py

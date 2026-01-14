@@ -1,13 +1,8 @@
 """
 Local API server for Statement Extractor model.
 
-This server loads the T5-Gemma 2 model locally and provides an API endpoint
-for statement extraction without rate limits.
-
-Features (matching RunPod handler):
-- Diverse beam search with multiple candidates
-- Retry logic for under-extraction
-- In-memory LRU cache
+This server uses the corp-extractor library to extract structured statements from text.
+Uses Diverse Beam Search (https://arxiv.org/abs/1610.02424) for high-quality extraction.
 
 Usage:
     # Using .env file
@@ -17,7 +12,7 @@ Usage:
     uv run python server.py --model-path ../model --port 8000
 
 Environment variables (.env):
-    MODEL_PATH: Path to the model directory
+    MODEL_PATH: Path to the model directory (or HuggingFace model ID)
     PORT: Port to run the server on (default: 8000)
     HOST: Host to bind to (default: 0.0.0.0)
     NUM_RETURN_SEQUENCES: Number of candidate sequences (default: 4)
@@ -29,18 +24,16 @@ Environment variables (.env):
 import argparse
 import hashlib
 import logging
-import re
 from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
-import torch
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from statement_extractor import StatementExtractor, ExtractionOptions
 
 # Load .env file
 load_dotenv()
@@ -62,9 +55,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    model_path: Path = Field(
-        default=Path.home() / "corp_var" / "models" / "page_splitter",
-        description="Path to the model directory",
+    model_path: str = Field(
+        default="Corp-o-Rate-Community/statement-extractor",
+        description="Path to model directory or HuggingFace model ID",
     )
     port: int = Field(
         default=8000,
@@ -101,7 +94,7 @@ settings = Settings()
 
 app = FastAPI(
     title="Statement Extractor API",
-    description="Local API for T5-Gemma 2 statement extraction model",
+    description="Local API for T5-Gemma 2 statement extraction model (using corp-extractor library)",
     version="1.0.0",
 )
 
@@ -114,10 +107,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global model and tokenizer
-model: Optional[AutoModelForSeq2SeqLM] = None
-tokenizer: Optional[AutoTokenizer] = None
-device: str = "cpu"
+# Global extractor
+extractor: Optional[StatementExtractor] = None
 
 # In-memory LRU cache for results
 result_cache: OrderedDict[str, str] = OrderedDict()
@@ -156,141 +147,29 @@ def evict_if_needed(new_entry_size: int) -> None:
         logger.info(f"Evicted cache entry: {oldest_key[:16]}... (freed {evicted_size} bytes)")
 
 
-def count_sentences(text: str) -> int:
-    """Count approximate number of sentences in text."""
-    # Remove XML tags
-    clean_text = re.sub(r'<[^>]+>', '', text)
-    # Split on sentence-ending punctuation
-    sentences = re.split(r'[.!?]+', clean_text)
-    # Filter out empty strings and very short fragments
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
-    return max(1, len(sentences))
+def load_extractor(model_path: str) -> None:
+    """Load the extractor."""
+    global extractor
 
+    logger.info(f"Loading extractor from {model_path}...")
 
-def count_statements(xml_output: str) -> int:
-    """Count number of <stmt> tags in the output."""
-    return len(re.findall(r'<stmt>', xml_output))
-
-
-def deduplicate_statements(xml_output: str) -> str:
-    """Remove duplicate <stmt> blocks from the output using XML parsing."""
-    import xml.etree.ElementTree as ET
-
-    try:
-        root = ET.fromstring(xml_output)
-    except ET.ParseError:
-        # If parsing fails, return original
-        return xml_output
-
-    if root.tag != 'statements':
-        return xml_output
-
-    # Build unique key for each statement
-    seen = set()
-    unique_stmts = []
-
-    for stmt in root.findall('stmt'):
-        # Create a normalized key from the statement's content
-        subject = stmt.findtext('subject', '').strip()
-        predicate = stmt.findtext('predicate', '').strip()
-        obj = stmt.findtext('object', '').strip()
-        key = (subject, predicate, obj)
-
-        if key not in seen:
-            seen.add(key)
-            unique_stmts.append(stmt)
-
-    # Rebuild XML with unique statements
-    new_root = ET.Element('statements')
-    for stmt in unique_stmts:
-        new_root.append(stmt)
-
-    return ET.tostring(new_root, encoding='unicode')
-
-
-def load_model(model_path: Path) -> None:
-    """Load the model and tokenizer."""
-    global model, tokenizer, device
-
-    logger.info(f"Loading model from {model_path}...")
-
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model path does not exist: {model_path}")
-
-    # Determine device
-    if torch.cuda.is_available():
-        device = "cuda"
-        logger.info("Using CUDA GPU")
-    elif torch.backends.mps.is_available():
-        device = "mps"
-        logger.info("Using Apple MPS")
+    # Check if it's a local path
+    path = Path(model_path)
+    if path.exists():
+        model_id = str(path)
     else:
-        device = "cpu"
-        logger.info("Using CPU (this will be slow)")
+        model_id = model_path  # Assume it's a HuggingFace model ID
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=True)
-
-    # Load model
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        str(model_path),
-        torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
-        trust_remote_code=True,
-    )
-    model = model.to(device)
-    model.eval()
-
-    logger.info("Model loaded successfully!")
+    extractor = StatementExtractor(model_id=model_id)
+    logger.info(f"Extractor loaded on device: {extractor.device}")
 
 
-def run_single_extraction(inputs) -> str:
-    """Run a single extraction attempt and return the best candidate."""
-    global model, tokenizer
-
-    num_seqs = settings.num_return_sequences
-
-    # Generate multiple diverse candidate outputs using diverse beam search
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=2048,
-            num_beams=num_seqs,
-            num_beam_groups=num_seqs,
-            num_return_sequences=num_seqs,
-            diversity_penalty=1.0,
-            do_sample=False,
-            trust_remote_code=True,
-        )
-
-    # Decode all sequences, truncate, deduplicate, and select the longest valid one
-    end_tag = "</statements>"
-    candidates = []
-    for output in outputs:
-        decoded = tokenizer.decode(output, skip_special_tokens=True)
-
-        # Truncate at </statements>
-        if end_tag in decoded:
-            end_pos = decoded.find(end_tag) + len(end_tag)
-            decoded = decoded[:end_pos]
-            # Remove duplicate statements
-            decoded = deduplicate_statements(decoded)
-            candidates.append(decoded)
-
-    # Select longest candidate (after deduplication)
-    if candidates:
-        return max(candidates, key=len)
-    else:
-        # Fallback to first output if none have valid closing tag
-        fallback = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return deduplicate_statements(fallback) if '<stmt>' in fallback else fallback
-
-
-def extract_with_retry(text: str) -> tuple[str, bool]:
+def extract_with_cache(text: str) -> tuple[str, bool]:
     """
-    Extract statements from text with retry logic.
+    Extract statements from text with caching.
     Returns (result, cached) tuple.
     """
-    global model, tokenizer, cache_size_bytes
+    global cache_size_bytes
 
     # Check cache first
     cache_key = get_cache_key(text)
@@ -299,47 +178,24 @@ def extract_with_retry(text: str) -> tuple[str, bool]:
         logger.info(f"Cache hit for key: {cache_key[:16]}...")
         return result_cache[cache_key], True
 
-    # Tokenize input
-    inputs = tokenizer(
-        text,
-        return_tensors="pt",
-        max_length=4096,
-        truncation=True,
-    ).to(device)
+    # Configure extraction options
+    options = ExtractionOptions(
+        num_beams=settings.num_return_sequences,
+        min_statement_ratio=settings.min_statement_ratio,
+        max_attempts=settings.max_extraction_attempts,
+    )
 
-    # Count sentences for quality check
-    num_sentences = count_sentences(text)
-    min_expected_statements = int(num_sentences * settings.min_statement_ratio)
-    logger.info(f"Input has ~{num_sentences} sentences, expecting at least {min_expected_statements} statements")
-
-    # Run extraction with retry logic
-    all_results = []
-    for attempt in range(settings.max_extraction_attempts):
-        result = run_single_extraction(inputs)
-        num_stmts = count_statements(result)
-        all_results.append((result, num_stmts))
-        logger.info(f"Attempt {attempt + 1}/{settings.max_extraction_attempts}: {num_stmts} statements, {len(result)} chars")
-
-        # If we have enough statements, stop retrying
-        if num_stmts >= min_expected_statements:
-            logger.info(f"Got {num_stmts} statements (>= {min_expected_statements}), accepting result")
-            break
-        elif attempt < settings.max_extraction_attempts - 1:
-            logger.info(f"Only {num_stmts} statements (< {min_expected_statements}), retrying...")
-
-    # Select the best result (longest, which typically has most statements)
-    best_result = max(all_results, key=lambda x: len(x[0]))[0]
-    best_stmt_count = count_statements(best_result)
-    logger.info(f"Selected best result: {best_stmt_count} statements, {len(best_result)} chars from {len(all_results)} attempts")
+    # Extract using the library
+    result = extractor.extract_as_xml(text, options)
 
     # Store in cache
-    entry_size = get_entry_size(cache_key, best_result)
+    entry_size = get_entry_size(cache_key, result)
     evict_if_needed(entry_size)
-    result_cache[cache_key] = best_result
+    result_cache[cache_key] = result
     cache_size_bytes += entry_size
     logger.info(f"Cached result for key: {cache_key[:16]}... (entries: {len(result_cache)}, size: {cache_size_bytes / 1024 / 1024:.1f}MB)")
 
-    return best_result, False
+    return result, False
 
 
 @app.get("/")
@@ -347,19 +203,19 @@ async def root():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "model_loaded": model is not None,
-        "device": device,
-        "model_path": str(settings.model_path),
+        "model_loaded": extractor is not None,
+        "device": extractor.device if extractor else None,
+        "model_path": settings.model_path,
         "cache_entries": len(result_cache),
         "cache_size_mb": round(cache_size_bytes / 1024 / 1024, 2),
     }
 
 
 @app.post("/extract", response_model=ExtractResponse)
-async def extract_statements(request: ExtractRequest):
+async def extract_statements_endpoint(request: ExtractRequest):
     """Extract statements from text."""
-    if model is None or tokenizer is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    if extractor is None:
+        raise HTTPException(status_code=503, detail="Extractor not loaded")
 
     try:
         text = request.text.strip()
@@ -372,7 +228,7 @@ async def extract_statements(request: ExtractRequest):
 
         logger.info(f"Processing text of length {len(text)}")
 
-        result, cached = extract_with_retry(text)
+        result, cached = extract_with_cache(text)
 
         logger.info(f"Generated output of length {len(result)} (cached: {cached})")
 
@@ -403,7 +259,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment variables (can also be set in .env file):
-  MODEL_PATH              Path to the model directory
+  MODEL_PATH              Path to the model directory or HuggingFace model ID
   PORT                    Port to run the server on (default: 8000)
   HOST                    Host to bind to (default: 0.0.0.0)
   LOG_LEVEL               Logging level (default: INFO)
@@ -420,9 +276,9 @@ Example .env file:
     )
     parser.add_argument(
         "--model-path",
-        type=Path,
+        type=str,
         default=None,
-        help=f"Path to the model directory (default: {settings.model_path})",
+        help=f"Path to model directory or HuggingFace model ID (default: {settings.model_path})",
     )
     parser.add_argument(
         "--port",
@@ -468,8 +324,8 @@ Example .env file:
     logger.info(f"  Max extraction attempts: {settings.max_extraction_attempts}")
     logger.info(f"  Max cache size: {settings.max_cache_size_bytes / 1024 / 1024:.0f}MB")
 
-    # Load model
-    load_model(model_path)
+    # Load extractor
+    load_extractor(model_path)
 
     # Run server
     uvicorn.run(app, host=host, port=port)
