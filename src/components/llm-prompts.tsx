@@ -4,74 +4,116 @@ import { useState } from 'react';
 import { Copy, Check, Bot, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
-const HF_MODEL = 'Corp-o-Rate-Community/statement-extractor';
+const LLM_PROMPT = `# SKILL: Statement Extraction with corp-extractor
 
-const LLM_PROMPT = `## Using the Statement Extractor Model
+Use the \`corp-extractor\` Python library to extract structured subject-predicate-object statements from text. Returns Pydantic models with confidence scores.
 
-When extracting statements from text, use the corp-o-rate statement extraction model:
+## Installation
 
-**Model:** \`${HF_MODEL}\`
-**Architecture:** T5-Gemma 2 (seq2seq, 540M params)
-
-### Input Format
-Wrap your text in \`<page>\` tags:
-\`\`\`
-<page>Your text here...</page>
+\`\`\`bash
+pip install corp-extractor[embeddings]  # Recommended: includes semantic deduplication
 \`\`\`
 
-### Output Format
-The model outputs XML with extracted statements:
-\`\`\`xml
-<statements>
-  <stmt>
-    <subject type="ENTITY_TYPE">Subject Name</subject>
-    <object type="ENTITY_TYPE">Object Name</object>
-    <predicate>action/relationship</predicate>
-    <text>Full resolved statement text</text>
-  </stmt>
-</statements>
+For GPU support, install PyTorch with CUDA first:
+\`\`\`bash
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install corp-extractor[embeddings]
 \`\`\`
 
-### Python Example
+## Quick Usage
+
 \`\`\`python
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-import torch
+from statement_extractor import extract_statements
 
-model = AutoModelForSeq2SeqLM.from_pretrained(
-    "${HF_MODEL}",
-    torch_dtype=torch.bfloat16,
-    trust_remote_code=True,
-)
-tokenizer = AutoTokenizer.from_pretrained(
-    "${HF_MODEL}",
-    trust_remote_code=True,
-)
+result = extract_statements("""
+    Apple Inc. announced the iPhone 15 at their September event.
+    Tim Cook presented the new features to customers worldwide.
+""")
 
-def extract_statements(text: str) -> str:
-    inputs = tokenizer(f"<page>{text}</page>", return_tensors="pt", max_length=4096, truncation=True)
-    outputs = model.generate(**inputs, max_new_tokens=2048, num_beams=4)
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+for stmt in result:
+    print(f"{stmt.subject.text} ({stmt.subject.type})")
+    print(f"  --[{stmt.predicate}]--> {stmt.object.text}")
+    print(f"  Confidence: {stmt.confidence_score:.2f}")
 \`\`\`
 
-### Entity Types
-- ORG - Organizations (companies, agencies)
-- PERSON - People (names, titles)
-- GPE - Geopolitical entities (countries, cities)
-- LOC - Locations (mountains, rivers)
-- PRODUCT - Products (devices, services)
-- EVENT - Events (announcements, meetings)
-- WORK_OF_ART - Creative works (reports, books)
-- LAW - Legal documents
-- DATE - Dates and time periods
-- MONEY - Monetary values
-- PERCENT - Percentages
-- QUANTITY - Quantities and measurements
+## Output Formats
 
-### Tips for Best Results
-1. Provide clear, well-structured text (news articles, reports work well)
-2. The model handles coreference resolution (replaces pronouns with entity names)
-3. Each statement includes the full resolved text for context
-4. For large documents, consider chunking by paragraph or section`;
+\`\`\`python
+from statement_extractor import (
+    extract_statements,        # Returns ExtractionResult with Statement objects
+    extract_statements_as_json,  # Returns JSON string
+    extract_statements_as_xml,   # Returns XML string
+    extract_statements_as_dict,  # Returns dict
+)
+\`\`\`
+
+## Statement Object Structure
+
+Each \`Statement\` has:
+- \`subject.text\` - Subject entity text
+- \`subject.type\` - Entity type (ORG, PERSON, GPE, etc.)
+- \`predicate\` - The relationship/action
+- \`object.text\` - Object entity text
+- \`object.type\` - Object entity type
+- \`source_text\` - Original sentence
+- \`confidence_score\` - Groundedness score (0-1)
+- \`canonical_predicate\` - Normalized predicate (if taxonomy used)
+
+## Entity Types
+
+ORG, PERSON, GPE (countries/cities), LOC, PRODUCT, EVENT, WORK_OF_ART, LAW, DATE, MONEY, PERCENT, QUANTITY, UNKNOWN
+
+## Precision Mode (Filter Low-Confidence)
+
+\`\`\`python
+from statement_extractor import ExtractionOptions, ScoringConfig
+
+options = ExtractionOptions(
+    scoring_config=ScoringConfig(min_confidence=0.7)
+)
+result = extract_statements(text, options)
+\`\`\`
+
+## Predicate Taxonomy (Normalize Predicates)
+
+\`\`\`python
+from statement_extractor import PredicateTaxonomy, ExtractionOptions
+
+taxonomy = PredicateTaxonomy(predicates=[
+    "acquired", "founded", "works_for", "headquartered_in"
+])
+options = ExtractionOptions(predicate_taxonomy=taxonomy)
+result = extract_statements(text, options)
+
+# "bought" -> "acquired" via semantic similarity
+for stmt in result:
+    if stmt.canonical_predicate:
+        print(f"Normalized: {stmt.predicate} -> {stmt.canonical_predicate}")
+\`\`\`
+
+## Batch Processing
+
+\`\`\`python
+from statement_extractor import StatementExtractor
+
+extractor = StatementExtractor(device="cuda")  # or "cpu"
+for text in texts:
+    result = extractor.extract(text)
+\`\`\`
+
+## Best Practices
+
+1. Use \`[embeddings]\` extra for semantic deduplication
+2. Filter by \`confidence_score >= 0.7\` for high precision
+3. Use predicate taxonomies for consistent knowledge graphs
+4. Process large documents in chunks (by paragraph/section)
+5. GPU recommended for production (~2GB VRAM needed)
+
+## Links
+
+- PyPI: https://pypi.org/project/corp-extractor/
+- Docs: https://statement-extractor.corp-o-rate.com/docs
+- Model: https://huggingface.co/Corp-o-Rate-Community/statement-extractor`;
 
 export function LLMPrompts() {
   const [copied, setCopied] = useState(false);
@@ -89,8 +131,8 @@ export function LLMPrompts() {
         <div className="flex items-center gap-3">
           <Bot className="w-6 h-6 text-red-600" />
           <div>
-            <h3 className="font-bold text-lg">AI Assistant Prompt</h3>
-            <p className="text-sm text-gray-500">Copy this prompt for Claude Code, Cursor, or other AI assistants</p>
+            <h3 className="font-bold text-lg">SKILL.md for AI Assistants</h3>
+            <p className="text-sm text-gray-500">Add to your project&apos;s CLAUDE.md or .cursorrules to enable statement extraction</p>
           </div>
         </div>
         <button
@@ -119,7 +161,7 @@ export function LLMPrompts() {
 
       <div className="mt-4 flex items-center gap-2 text-sm text-gray-500">
         <Sparkles className="w-4 h-4" />
-        <span>Add this to your project&apos;s CLAUDE.md or AI assistant configuration</span>
+        <span>Save as SKILL.md or append to CLAUDE.md in your project root</span>
       </div>
     </div>
   );

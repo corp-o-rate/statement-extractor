@@ -62,6 +62,7 @@ class PredicateComparer:
         self,
         taxonomy: Optional[PredicateTaxonomy] = None,
         config: Optional[PredicateComparisonConfig] = None,
+        device: Optional[str] = None,
     ):
         """
         Initialize the predicate comparer.
@@ -69,6 +70,7 @@ class PredicateComparer:
         Args:
             taxonomy: Optional canonical predicate taxonomy for normalization
             config: Comparison configuration (uses defaults if not provided)
+            device: Device to use ('cuda', 'cpu', or None for auto-detect)
 
         Raises:
             EmbeddingDependencyError: If sentence-transformers is not installed
@@ -77,6 +79,13 @@ class PredicateComparer:
 
         self.taxonomy = taxonomy
         self.config = config or PredicateComparisonConfig()
+
+        # Auto-detect device
+        if device is None:
+            import torch
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = device
 
         # Lazy-loaded resources
         self._model = None
@@ -89,9 +98,9 @@ class PredicateComparer:
 
         from sentence_transformers import SentenceTransformer
 
-        logger.info(f"Loading embedding model: {self.config.embedding_model}")
-        self._model = SentenceTransformer(self.config.embedding_model)
-        logger.info("Embedding model loaded")
+        logger.info(f"Loading embedding model: {self.config.embedding_model} on {self.device}")
+        self._model = SentenceTransformer(self.config.embedding_model, device=self.device)
+        logger.info(f"Embedding model loaded on {self.device}")
 
     def _normalize_text(self, text: str) -> str:
         """Normalize text before embedding."""
@@ -256,21 +265,26 @@ class PredicateComparer:
         self,
         statements: list[Statement],
         entity_canonicalizer: Optional[callable] = None,
+        detect_reversals: bool = True,
     ) -> list[Statement]:
         """
         Remove duplicate statements using embedding-based predicate comparison.
 
         Two statements are considered duplicates if:
-        - Canonicalized subjects match
+        - Canonicalized subjects match AND canonicalized objects match, OR
+        - Canonicalized subjects match objects (reversed) when detect_reversals=True
         - Predicates are similar (embedding-based)
-        - Canonicalized objects match
 
         When duplicates are found, keeps the statement with better contextualized
         match (comparing "Subject Predicate Object" against source text).
 
+        For reversed duplicates, the correct orientation is determined by comparing
+        both "S P O" and "O P S" against source text.
+
         Args:
             statements: List of Statement objects
             entity_canonicalizer: Optional function to canonicalize entity text
+            detect_reversals: Whether to detect reversed duplicates (default True)
 
         Returns:
             Deduplicated list of statements (keeps best contextualized match)
@@ -293,6 +307,12 @@ class PredicateComparer:
         ]
         contextualized_embeddings = self._compute_embeddings(contextualized_texts)
 
+        # Compute reversed contextualized embeddings: "Object Predicate Subject"
+        reversed_texts = [
+            f"{s.object.text} {s.predicate} {s.subject.text}" for s in statements
+        ]
+        reversed_embeddings = self._compute_embeddings(reversed_texts)
+
         # Compute source text embeddings for scoring which duplicate to keep
         source_embeddings = []
         for stmt in statements:
@@ -302,6 +322,7 @@ class PredicateComparer:
         unique_statements: list[Statement] = []
         unique_pred_embeddings: list[np.ndarray] = []
         unique_context_embeddings: list[np.ndarray] = []
+        unique_reversed_embeddings: list[np.ndarray] = []
         unique_source_embeddings: list[np.ndarray] = []
         unique_indices: list[int] = []
 
@@ -310,13 +331,23 @@ class PredicateComparer:
             obj_canon = canonicalize(stmt.object.text)
 
             duplicate_idx = None
+            is_reversed_match = False
 
             for j, unique_stmt in enumerate(unique_statements):
                 unique_subj = canonicalize(unique_stmt.subject.text)
                 unique_obj = canonicalize(unique_stmt.object.text)
 
-                # Check subject and object match
-                if subj_canon != unique_subj or obj_canon != unique_obj:
+                # Check direct match: subject->subject, object->object
+                direct_match = (subj_canon == unique_subj and obj_canon == unique_obj)
+
+                # Check reversed match: subject->object, object->subject
+                reversed_match = (
+                    detect_reversals and
+                    subj_canon == unique_obj and
+                    obj_canon == unique_subj
+                )
+
+                if not direct_match and not reversed_match:
                     continue
 
                 # Check predicate similarity
@@ -326,6 +357,7 @@ class PredicateComparer:
                 )
                 if similarity >= self.config.dedup_threshold:
                     duplicate_idx = j
+                    is_reversed_match = reversed_match and not direct_match
                     break
 
             if duplicate_idx is None:
@@ -333,27 +365,91 @@ class PredicateComparer:
                 unique_statements.append(stmt)
                 unique_pred_embeddings.append(pred_embeddings[i])
                 unique_context_embeddings.append(contextualized_embeddings[i])
+                unique_reversed_embeddings.append(reversed_embeddings[i])
                 unique_source_embeddings.append(source_embeddings[i])
                 unique_indices.append(i)
             else:
-                # Duplicate found - keep the one with better contextualized match
-                # Compare "Subject Predicate Object" against source text
-                current_score = self._cosine_similarity(
-                    contextualized_embeddings[i],
-                    source_embeddings[i]
-                )
-                existing_score = self._cosine_similarity(
-                    unique_context_embeddings[duplicate_idx],
-                    unique_source_embeddings[duplicate_idx]
-                )
+                existing_stmt = unique_statements[duplicate_idx]
 
-                if current_score > existing_score:
-                    # Current statement is a better match - replace
-                    unique_statements[duplicate_idx] = stmt
-                    unique_pred_embeddings[duplicate_idx] = pred_embeddings[i]
-                    unique_context_embeddings[duplicate_idx] = contextualized_embeddings[i]
-                    unique_source_embeddings[duplicate_idx] = source_embeddings[i]
-                    unique_indices[duplicate_idx] = i
+                if is_reversed_match:
+                    # Reversed duplicate - determine correct orientation using source text
+                    # Compare current's normal vs reversed against its source
+                    current_normal_score = self._cosine_similarity(
+                        contextualized_embeddings[i], source_embeddings[i]
+                    )
+                    current_reversed_score = self._cosine_similarity(
+                        reversed_embeddings[i], source_embeddings[i]
+                    )
+                    # Compare existing's normal vs reversed against its source
+                    existing_normal_score = self._cosine_similarity(
+                        unique_context_embeddings[duplicate_idx],
+                        unique_source_embeddings[duplicate_idx]
+                    )
+                    existing_reversed_score = self._cosine_similarity(
+                        unique_reversed_embeddings[duplicate_idx],
+                        unique_source_embeddings[duplicate_idx]
+                    )
+
+                    # Determine best orientation for current
+                    current_best = max(current_normal_score, current_reversed_score)
+                    current_should_reverse = current_reversed_score > current_normal_score
+
+                    # Determine best orientation for existing
+                    existing_best = max(existing_normal_score, existing_reversed_score)
+                    existing_should_reverse = existing_reversed_score > existing_normal_score
+
+                    if current_best > existing_best:
+                        # Current is better - use it (possibly reversed)
+                        if current_should_reverse:
+                            best_stmt = stmt.reversed()
+                        else:
+                            best_stmt = stmt
+                        # Merge entity types from existing (accounting for reversal)
+                        if existing_should_reverse:
+                            best_stmt = best_stmt.merge_entity_types_from(existing_stmt.reversed())
+                        else:
+                            best_stmt = best_stmt.merge_entity_types_from(existing_stmt)
+                        unique_statements[duplicate_idx] = best_stmt
+                        unique_pred_embeddings[duplicate_idx] = pred_embeddings[i]
+                        unique_context_embeddings[duplicate_idx] = contextualized_embeddings[i]
+                        unique_reversed_embeddings[duplicate_idx] = reversed_embeddings[i]
+                        unique_source_embeddings[duplicate_idx] = source_embeddings[i]
+                        unique_indices[duplicate_idx] = i
+                    else:
+                        # Existing is better - possibly fix its orientation
+                        if existing_should_reverse and not existing_stmt.was_reversed:
+                            best_stmt = existing_stmt.reversed()
+                        else:
+                            best_stmt = existing_stmt
+                        # Merge entity types from current (accounting for reversal)
+                        if current_should_reverse:
+                            best_stmt = best_stmt.merge_entity_types_from(stmt.reversed())
+                        else:
+                            best_stmt = best_stmt.merge_entity_types_from(stmt)
+                        unique_statements[duplicate_idx] = best_stmt
+                else:
+                    # Direct duplicate - keep the one with better contextualized match
+                    current_score = self._cosine_similarity(
+                        contextualized_embeddings[i], source_embeddings[i]
+                    )
+                    existing_score = self._cosine_similarity(
+                        unique_context_embeddings[duplicate_idx],
+                        unique_source_embeddings[duplicate_idx]
+                    )
+
+                    if current_score > existing_score:
+                        # Current statement is a better match - replace
+                        merged_stmt = stmt.merge_entity_types_from(existing_stmt)
+                        unique_statements[duplicate_idx] = merged_stmt
+                        unique_pred_embeddings[duplicate_idx] = pred_embeddings[i]
+                        unique_context_embeddings[duplicate_idx] = contextualized_embeddings[i]
+                        unique_reversed_embeddings[duplicate_idx] = reversed_embeddings[i]
+                        unique_source_embeddings[duplicate_idx] = source_embeddings[i]
+                        unique_indices[duplicate_idx] = i
+                    else:
+                        # Existing statement is better - merge entity types from current
+                        merged_stmt = existing_stmt.merge_entity_types_from(stmt)
+                        unique_statements[duplicate_idx] = merged_stmt
 
         return unique_statements
 
@@ -437,3 +533,79 @@ class PredicateComparer:
                 similarity=best_score,
                 matched=False,
             )
+
+    def detect_and_fix_reversals(
+        self,
+        statements: list[Statement],
+        threshold: float = 0.05,
+    ) -> list[Statement]:
+        """
+        Detect and fix subject-object reversals using embedding comparison.
+
+        For each statement, compares:
+        - "Subject Predicate Object" embedding against source_text
+        - "Object Predicate Subject" embedding against source_text
+
+        If the reversed version has significantly higher similarity to the source,
+        the subject and object are swapped and was_reversed is set to True.
+
+        Args:
+            statements: List of Statement objects
+            threshold: Minimum similarity difference to trigger reversal (default 0.05)
+
+        Returns:
+            List of statements with reversals corrected
+        """
+        if not statements:
+            return statements
+
+        result = []
+        for stmt in statements:
+            # Skip if no source_text to compare against
+            if not stmt.source_text:
+                result.append(stmt)
+                continue
+
+            # Build normal and reversed triple strings
+            normal_text = f"{stmt.subject.text} {stmt.predicate} {stmt.object.text}"
+            reversed_text = f"{stmt.object.text} {stmt.predicate} {stmt.subject.text}"
+
+            # Compute embeddings for normal, reversed, and source
+            embeddings = self._compute_embeddings([normal_text, reversed_text, stmt.source_text])
+            normal_emb, reversed_emb, source_emb = embeddings[0], embeddings[1], embeddings[2]
+
+            # Compute similarities to source
+            normal_sim = self._cosine_similarity(normal_emb, source_emb)
+            reversed_sim = self._cosine_similarity(reversed_emb, source_emb)
+
+            # If reversed is significantly better, swap subject and object
+            if reversed_sim > normal_sim + threshold:
+                result.append(stmt.reversed())
+            else:
+                result.append(stmt)
+
+        return result
+
+    def check_reversal(self, statement: Statement) -> tuple[bool, float, float]:
+        """
+        Check if a single statement should be reversed.
+
+        Args:
+            statement: Statement to check
+
+        Returns:
+            Tuple of (should_reverse, normal_similarity, reversed_similarity)
+        """
+        if not statement.source_text:
+            return (False, 0.0, 0.0)
+
+        normal_text = f"{statement.subject.text} {statement.predicate} {statement.object.text}"
+        reversed_text = f"{statement.object.text} {statement.predicate} {statement.subject.text}"
+
+        embeddings = self._compute_embeddings([normal_text, reversed_text, statement.source_text])
+        normal_emb, reversed_emb, source_emb = embeddings[0], embeddings[1], embeddings[2]
+
+        normal_sim = self._cosine_similarity(normal_emb, source_emb)
+        reversed_sim = self._cosine_similarity(reversed_emb, source_emb)
+
+        return (reversed_sim > normal_sim, normal_sim, reversed_sim)

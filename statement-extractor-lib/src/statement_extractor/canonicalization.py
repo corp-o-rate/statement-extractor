@@ -139,32 +139,58 @@ class Canonicalizer:
 
 def deduplicate_statements_exact(
     statements: list[Statement],
-    entity_canonicalizer: Optional[Callable[[str], str]] = None
+    entity_canonicalizer: Optional[Callable[[str], str]] = None,
+    detect_reversals: bool = True,
 ) -> list[Statement]:
     """
     Deduplicate statements using exact text matching.
 
     Use this when embedding-based deduplication is disabled.
+    When duplicates are found, entity types are merged - specific types
+    (ORG, PERSON, etc.) take precedence over UNKNOWN.
+
+    When detect_reversals=True, also detects reversed duplicates where
+    subject and object are swapped. The first occurrence determines the
+    canonical orientation.
 
     Args:
         statements: List of statements to deduplicate
         entity_canonicalizer: Optional custom canonicalization function
+        detect_reversals: Whether to detect reversed duplicates (default True)
 
     Returns:
-        Deduplicated list (keeps first occurrence)
+        Deduplicated list with merged entity types
     """
     if len(statements) <= 1:
         return statements
 
     canonicalizer = Canonicalizer(entity_fn=entity_canonicalizer)
 
-    seen: set[tuple[str, str, str]] = set()
+    # Map from dedup key to index in unique list
+    seen: dict[tuple[str, str, str], int] = {}
     unique: list[Statement] = []
 
     for stmt in statements:
         key = canonicalizer.create_dedup_key(stmt)
-        if key not in seen:
-            seen.add(key)
+        # Also compute reversed key (object, predicate, subject)
+        reversed_key = (key[2], key[1], key[0])
+
+        if key in seen:
+            # Direct duplicate found - merge entity types
+            existing_idx = seen[key]
+            existing_stmt = unique[existing_idx]
+            merged_stmt = existing_stmt.merge_entity_types_from(stmt)
+            unique[existing_idx] = merged_stmt
+        elif detect_reversals and reversed_key in seen:
+            # Reversed duplicate found - merge entity types (accounting for reversal)
+            existing_idx = seen[reversed_key]
+            existing_stmt = unique[existing_idx]
+            # Merge types from the reversed statement
+            merged_stmt = existing_stmt.merge_entity_types_from(stmt.reversed())
+            unique[existing_idx] = merged_stmt
+        else:
+            # New unique statement
+            seen[key] = len(unique)
             unique.append(stmt)
 
     return unique

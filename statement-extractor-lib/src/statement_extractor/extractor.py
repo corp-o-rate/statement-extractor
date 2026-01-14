@@ -143,7 +143,7 @@ class StatementExtractor:
 
         taxonomy = options.predicate_taxonomy or self._predicate_taxonomy
         config = options.predicate_config or self._predicate_config or PredicateComparisonConfig()
-        return PredicateComparer(taxonomy=taxonomy, config=config)
+        return PredicateComparer(taxonomy=taxonomy, config=config, device=self.device)
 
     @property
     def model(self) -> AutoModelForSeq2SeqLM:
@@ -362,18 +362,25 @@ class StatementExtractor:
         end_tag = "</statements>"
         candidates: list[str] = []
 
-        for output in outputs:
+        for i, output in enumerate(outputs):
             decoded = self.tokenizer.decode(output, skip_special_tokens=True)
+            output_len = len(output)
 
             # Truncate at </statements>
             if end_tag in decoded:
                 end_pos = decoded.find(end_tag) + len(end_tag)
                 decoded = decoded[:end_pos]
                 candidates.append(decoded)
+                logger.debug(f"Beam {i}: {output_len} tokens, found end tag, {len(decoded)} chars")
+            else:
+                # Log the issue - likely truncated
+                logger.warning(f"Beam {i}: {output_len} tokens, NO end tag found (truncated?)")
+                logger.warning(f"Beam {i} full output ({len(decoded)} chars):\n{decoded}")
 
         # Include fallback if no valid candidates
         if not candidates and len(outputs) > 0:
             fallback = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            logger.warning(f"Using fallback beam (no valid candidates found), {len(fallback)} chars")
             candidates.append(fallback)
 
         return candidates
@@ -467,8 +474,10 @@ class StatementExtractor:
 
         try:
             root = ET.fromstring(xml_output)
-        except ET.ParseError:
-            logger.warning("Failed to parse XML output")
+        except ET.ParseError as e:
+            # Log full output for debugging
+            logger.warning(f"Failed to parse XML output: {e}")
+            logger.warning(f"Full XML output ({len(xml_output)} chars):\n{xml_output}")
             return statements
 
         if root.tag != 'statements':

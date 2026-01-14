@@ -19,15 +19,21 @@ RUN pip install --no-cache-dir \
     safetensors \
     sentencepiece \
     pydantic \
+    sentence-transformers \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
-# Install corp-extractor library (after transformers to avoid version conflicts)
-RUN pip install --no-cache-dir --no-deps corp-extractor==0.2.2
+# Install corp-extractor library with embeddings support (after transformers to avoid version conflicts)
+RUN pip install --no-cache-dir --no-deps corp-extractor==0.2.3
 
-# Download model at build time for faster cold starts
+# Download models at build time for faster cold starts
 RUN python -c "from statement_extractor import StatementExtractor; \
     extractor = StatementExtractor(); \
-    print(f'Model loaded on {extractor.device}')"
+    print(f'T5-Gemma model loaded on {extractor.device}')"
+
+# Pre-download embedding model (downloads on CPU during build, will use GPU at runtime)
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+    model = SentenceTransformer('sentence-transformers/paraphrase-MiniLM-L6-v2'); \
+    print('Embedding model downloaded')"
 
 # Copy handler
 COPY handler.py /app/handler.py

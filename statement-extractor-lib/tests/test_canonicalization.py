@@ -160,3 +160,96 @@ class TestDeduplicateStatementsExact:
         result = deduplicate_statements_exact(stmts, entity_canonicalizer=custom)
         # Both should match as "apple" -> "announced" -> "iphone"
         assert len(result) == 1
+
+    def test_merges_entity_types_unknown_to_specific(self):
+        """Deduplication should merge entity types - specific wins over UNKNOWN."""
+        from statement_extractor.models import EntityType
+
+        stmt1 = Statement(
+            subject=Entity(text="AtlasBio Labs Inc.", type=EntityType.UNKNOWN),
+            predicate="sued by",
+            object=Entity(text="CuraPharm", type=EntityType.ORG),
+        )
+        stmt2 = Statement(
+            subject=Entity(text="AtlasBio Labs Inc.", type=EntityType.ORG),
+            predicate="sued by",
+            object=Entity(text="CuraPharm", type=EntityType.ORG),
+        )
+
+        result = deduplicate_statements_exact([stmt1, stmt2])
+        assert len(result) == 1
+        # First occurrence kept but with merged entity type
+        assert result[0].subject.text == "AtlasBio Labs Inc."
+        assert result[0].subject.type == EntityType.ORG  # Got specific type from stmt2
+
+    def test_merges_entity_types_from_later_duplicate(self):
+        """Entity type from later duplicate should be merged if more specific."""
+        from statement_extractor.models import EntityType
+
+        stmt1 = Statement(
+            subject=Entity(text="Daniel Hart", type=EntityType.UNKNOWN),
+            predicate="announced",
+            object=Entity(text="alternate formulations", type=EntityType.UNKNOWN),
+        )
+        stmt2 = Statement(
+            subject=Entity(text="Daniel Hart", type=EntityType.PERSON),
+            predicate="announced",
+            object=Entity(text="alternate formulations", type=EntityType.PRODUCT),
+        )
+
+        result = deduplicate_statements_exact([stmt1, stmt2])
+        assert len(result) == 1
+        assert result[0].subject.type == EntityType.PERSON  # Merged from stmt2
+        assert result[0].object.type == EntityType.PRODUCT  # Merged from stmt2
+
+    def test_detects_reversed_duplicates(self):
+        """Reversed statements should be detected as duplicates."""
+        from statement_extractor.models import EntityType
+
+        stmt1 = Statement(
+            subject=Entity(text="Google", type=EntityType.ORG),
+            predicate="acquired",
+            object=Entity(text="YouTube", type=EntityType.ORG),
+        )
+        # Reversed version
+        stmt2 = Statement(
+            subject=Entity(text="YouTube", type=EntityType.ORG),
+            predicate="acquired",
+            object=Entity(text="Google", type=EntityType.ORG),
+        )
+
+        result = deduplicate_statements_exact([stmt1, stmt2], detect_reversals=True)
+        assert len(result) == 1
+        # First occurrence (stmt1) should be kept
+        assert result[0].subject.text == "Google"
+        assert result[0].object.text == "YouTube"
+
+    def test_reversed_duplicates_merge_entity_types(self):
+        """Reversed duplicates should merge entity types correctly."""
+        from statement_extractor.models import EntityType
+
+        stmt1 = Statement(
+            subject=Entity(text="Google", type=EntityType.UNKNOWN),
+            predicate="acquired",
+            object=Entity(text="YouTube", type=EntityType.ORG),
+        )
+        # Reversed version with specific type for Google
+        stmt2 = Statement(
+            subject=Entity(text="YouTube", type=EntityType.ORG),
+            predicate="acquired",
+            object=Entity(text="Google", type=EntityType.ORG),
+        )
+
+        result = deduplicate_statements_exact([stmt1, stmt2], detect_reversals=True)
+        assert len(result) == 1
+        # Google should get ORG type from stmt2 (reversed merge)
+        assert result[0].subject.text == "Google"
+        assert result[0].subject.type == EntityType.ORG
+
+    def test_disable_reversal_detection(self):
+        """With detect_reversals=False, reversed statements are not duplicates."""
+        stmt1 = self._make_stmt("Google", "acquired", "YouTube")
+        stmt2 = self._make_stmt("YouTube", "acquired", "Google")
+
+        result = deduplicate_statements_exact([stmt1, stmt2], detect_reversals=False)
+        assert len(result) == 2  # Both kept as distinct

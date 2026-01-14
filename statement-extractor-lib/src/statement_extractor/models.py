@@ -32,6 +32,18 @@ class Entity(BaseModel):
     def __str__(self) -> str:
         return f"{self.text} ({self.type.value})"
 
+    def merge_type_from(self, other: "Entity") -> "Entity":
+        """
+        Return a new Entity with the more specific type.
+
+        If this entity has UNKNOWN type and other has a specific type,
+        returns a new entity with this text but other's type.
+        Otherwise returns self unchanged.
+        """
+        if self.type == EntityType.UNKNOWN and other.type != EntityType.UNKNOWN:
+            return Entity(text=self.text, type=other.type)
+        return self
+
 
 class Statement(BaseModel):
     """A single extracted statement (subject-predicate-object triple)."""
@@ -55,6 +67,10 @@ class Statement(BaseModel):
         None,
         description="Canonical form of the predicate if taxonomy matching was used"
     )
+    was_reversed: bool = Field(
+        default=False,
+        description="True if subject/object were swapped during reversal detection"
+    )
 
     def __str__(self) -> str:
         return f"{self.subject.text} -- {self.predicate} --> {self.object.text}"
@@ -62,6 +78,49 @@ class Statement(BaseModel):
     def as_triple(self) -> tuple[str, str, str]:
         """Return as a simple (subject, predicate, object) tuple."""
         return (self.subject.text, self.predicate, self.object.text)
+
+    def merge_entity_types_from(self, other: "Statement") -> "Statement":
+        """
+        Return a new Statement with more specific entity types merged from other.
+
+        If this statement has UNKNOWN entity types and other has specific types,
+        the returned statement will use the specific types from other.
+        All other fields come from self.
+        """
+        merged_subject = self.subject.merge_type_from(other.subject)
+        merged_object = self.object.merge_type_from(other.object)
+
+        # Only create new statement if something changed
+        if merged_subject is self.subject and merged_object is self.object:
+            return self
+
+        return Statement(
+            subject=merged_subject,
+            object=merged_object,
+            predicate=self.predicate,
+            source_text=self.source_text,
+            confidence_score=self.confidence_score,
+            evidence_span=self.evidence_span,
+            canonical_predicate=self.canonical_predicate,
+            was_reversed=self.was_reversed,
+        )
+
+    def reversed(self) -> "Statement":
+        """
+        Return a new Statement with subject and object swapped.
+
+        Sets was_reversed=True to indicate the swap occurred.
+        """
+        return Statement(
+            subject=self.object,
+            object=self.subject,
+            predicate=self.predicate,
+            source_text=self.source_text,
+            confidence_score=self.confidence_score,
+            evidence_span=self.evidence_span,
+            canonical_predicate=self.canonical_predicate,
+            was_reversed=True,
+        )
 
 
 class ExtractionResult(BaseModel):

@@ -15,6 +15,8 @@ Extract structured subject-predicate-object statements from unstructured text us
 - **Embedding-based Dedup** *(v0.2.0)*: Uses semantic similarity to detect near-duplicate predicates
 - **Predicate Taxonomies** *(v0.2.0)*: Normalize predicates to canonical forms via embeddings
 - **Contextualized Matching** *(v0.2.2)*: Compares full "Subject Predicate Object" against source text for better accuracy
+- **Entity Type Merging** *(v0.2.3)*: Automatically merges UNKNOWN entity types with specific types during deduplication
+- **Reversal Detection** *(v0.2.3)*: Detects and corrects subject-object reversals using embedding comparison
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
 
 ## Installation
@@ -99,6 +101,47 @@ Predicate canonicalization and deduplication now use **contextualized matching**
 
 This means "Apple bought Beats" vs "Apple acquired Beats" are compared holistically, not just "bought" vs "acquired".
 
+## New in v0.2.3: Entity Type Merging & Reversal Detection
+
+### Entity Type Merging
+
+When deduplicating statements, entity types are now automatically merged. If one statement has `UNKNOWN` type and a duplicate has a specific type (like `ORG` or `PERSON`), the specific type is preserved:
+
+```python
+# Before deduplication:
+# Statement 1: AtlasBio Labs (UNKNOWN) --sued by--> CuraPharm (ORG)
+# Statement 2: AtlasBio Labs (ORG) --sued by--> CuraPharm (ORG)
+
+# After deduplication:
+# Single statement: AtlasBio Labs (ORG) --sued by--> CuraPharm (ORG)
+```
+
+### Subject-Object Reversal Detection
+
+The library now detects when subject and object may have been extracted in the wrong order by comparing embeddings against source text:
+
+```python
+from statement_extractor import PredicateComparer
+
+comparer = PredicateComparer()
+
+# Automatically detect and fix reversals
+fixed_statements = comparer.detect_and_fix_reversals(statements)
+
+for stmt in fixed_statements:
+    if stmt.was_reversed:
+        print(f"Fixed reversal: {stmt}")
+```
+
+**How it works:**
+1. For each statement with source text, compares:
+   - "Subject Predicate Object" embedding vs source text
+   - "Object Predicate Subject" embedding vs source text
+2. If the reversed form has higher similarity, swaps subject and object
+3. Sets `was_reversed=True` to indicate the correction
+
+During deduplication, reversed duplicates (e.g., "A -> P -> B" and "B -> P -> A") are now detected and merged, with the correct orientation determined by source text similarity.
+
 ## Disable Embeddings (Faster, No Extra Dependencies)
 
 ```python
@@ -173,6 +216,8 @@ This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam 
 4. **Embedding Dedup** *(v0.2.0)*: Semantic similarity removes near-duplicate predicates
 5. **Predicate Normalization** *(v0.2.0)*: Optional taxonomy matching via embeddings
 6. **Contextualized Matching** *(v0.2.2)*: Full statement context used for canonicalization and dedup
+7. **Entity Type Merging** *(v0.2.3)*: UNKNOWN types merged with specific types during dedup
+8. **Reversal Detection** *(v0.2.3)*: Subject-object reversals detected and corrected via embedding comparison
 
 ## Requirements
 

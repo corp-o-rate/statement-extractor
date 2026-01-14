@@ -41,6 +41,30 @@ class TestEntity:
         entity = Entity(text="Apple Inc.", type=EntityType.ORG)
         assert str(entity) == "Apple Inc. (ORG)"
 
+    def test_merge_type_from_unknown_to_specific(self):
+        """UNKNOWN type should be replaced by specific type."""
+        unknown = Entity(text="Apple", type=EntityType.UNKNOWN)
+        specific = Entity(text="Apple Inc.", type=EntityType.ORG)
+        merged = unknown.merge_type_from(specific)
+        assert merged.text == "Apple"  # Keeps own text
+        assert merged.type == EntityType.ORG  # Gets specific type
+
+    def test_merge_type_from_specific_keeps_own(self):
+        """Specific type should not be replaced."""
+        specific = Entity(text="Apple", type=EntityType.ORG)
+        other = Entity(text="Apple Inc.", type=EntityType.PERSON)
+        merged = specific.merge_type_from(other)
+        assert merged is specific  # Same object, no change
+        assert merged.type == EntityType.ORG
+
+    def test_merge_type_from_unknown_to_unknown(self):
+        """UNKNOWN to UNKNOWN stays UNKNOWN."""
+        e1 = Entity(text="test", type=EntityType.UNKNOWN)
+        e2 = Entity(text="test2", type=EntityType.UNKNOWN)
+        merged = e1.merge_type_from(e2)
+        assert merged is e1  # Same object
+        assert merged.type == EntityType.UNKNOWN
+
 
 class TestStatement:
     """Tests for Statement model."""
@@ -99,6 +123,89 @@ class TestStatement:
                 object=Entity(text="iPhone"),
                 confidence_score=1.5,  # Invalid
             )
+
+    def test_merge_entity_types_from_unknown_subject(self):
+        """Statement with UNKNOWN subject should get specific type from other."""
+        stmt1 = Statement(
+            subject=Entity(text="AtlasBio Labs Inc.", type=EntityType.UNKNOWN),
+            predicate="sued by",
+            object=Entity(text="CuraPharm", type=EntityType.ORG),
+        )
+        stmt2 = Statement(
+            subject=Entity(text="AtlasBio Labs, Inc.", type=EntityType.ORG),
+            predicate="sued by",
+            object=Entity(text="CuraPharm, Ltd.", type=EntityType.ORG),
+        )
+        merged = stmt1.merge_entity_types_from(stmt2)
+        assert merged.subject.type == EntityType.ORG  # Got specific type
+        assert merged.subject.text == "AtlasBio Labs Inc."  # Kept original text
+        assert merged.object.type == EntityType.ORG  # Already specific, unchanged
+
+    def test_merge_entity_types_from_unknown_object(self):
+        """Statement with UNKNOWN object should get specific type from other."""
+        stmt1 = Statement(
+            subject=Entity(text="Daniel Hart", type=EntityType.PERSON),
+            predicate="announced",
+            object=Entity(text="alternate formulations", type=EntityType.UNKNOWN),
+        )
+        stmt2 = Statement(
+            subject=Entity(text="Daniel Hart", type=EntityType.PERSON),
+            predicate="announced",
+            object=Entity(text="alternate formulations", type=EntityType.PRODUCT),
+        )
+        merged = stmt1.merge_entity_types_from(stmt2)
+        assert merged.object.type == EntityType.PRODUCT  # Got specific type
+        assert merged.subject.type == EntityType.PERSON  # Unchanged
+
+    def test_merge_entity_types_no_change(self):
+        """Statement returns self when no type changes needed."""
+        stmt1 = Statement(
+            subject=Entity(text="Apple", type=EntityType.ORG),
+            predicate="announced",
+            object=Entity(text="iPhone", type=EntityType.PRODUCT),
+        )
+        stmt2 = Statement(
+            subject=Entity(text="Apple Inc.", type=EntityType.ORG),
+            predicate="announced",
+            object=Entity(text="iPhone 15", type=EntityType.PRODUCT),
+        )
+        merged = stmt1.merge_entity_types_from(stmt2)
+        assert merged is stmt1  # Same object, no changes needed
+
+    def test_was_reversed_default_false(self):
+        """was_reversed field should default to False."""
+        stmt = Statement(
+            subject=Entity(text="Apple"),
+            predicate="announced",
+            object=Entity(text="iPhone"),
+        )
+        assert stmt.was_reversed is False
+
+    def test_reversed_swaps_subject_object(self):
+        """reversed() should swap subject and object."""
+        stmt = Statement(
+            subject=Entity(text="Google", type=EntityType.ORG),
+            predicate="acquired",
+            object=Entity(text="YouTube", type=EntityType.ORG),
+            source_text="Google acquired YouTube.",
+        )
+        reversed_stmt = stmt.reversed()
+        assert reversed_stmt.subject.text == "YouTube"
+        assert reversed_stmt.object.text == "Google"
+        assert reversed_stmt.predicate == "acquired"
+        assert reversed_stmt.was_reversed is True
+        assert reversed_stmt.source_text == "Google acquired YouTube."
+
+    def test_reversed_preserves_entity_types(self):
+        """reversed() should preserve entity types when swapping."""
+        stmt = Statement(
+            subject=Entity(text="Apple", type=EntityType.ORG),
+            predicate="announced",
+            object=Entity(text="iPhone", type=EntityType.PRODUCT),
+        )
+        reversed_stmt = stmt.reversed()
+        assert reversed_stmt.subject.type == EntityType.PRODUCT  # Was object
+        assert reversed_stmt.object.type == EntityType.ORG  # Was subject
 
 
 class TestExtractionResult:
