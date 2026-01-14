@@ -39,10 +39,17 @@ export default function Home() {
     setUserUuid(getUserUuid());
   }, []);
 
-  const pollJobStatus = async (jobId: string, inputTextForCache?: string): Promise<JobStatusResponse> => {
+  const pollJobStatus = async (
+    jobId: string,
+    inputTextForCache?: string,
+    useCanonicalPredicates?: boolean
+  ): Promise<JobStatusResponse> => {
     const params = new URLSearchParams({ jobId });
     if (inputTextForCache) {
       params.set('inputText', inputTextForCache);
+    }
+    if (useCanonicalPredicates) {
+      params.set('useCanonicalPredicates', 'true');
     }
     const response = await fetch(`/api/extract/status?${params.toString()}`);
     if (!response.ok) {
@@ -91,7 +98,7 @@ export default function Home() {
         let statusResult: JobStatusResponse;
         do {
           await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
-          statusResult = await pollJobStatus(jobSubmission.jobId, text);
+          statusResult = await pollJobStatus(jobSubmission.jobId, text, options?.useCanonicalPredicates);
           console.log(`Job status: ${statusResult.status}`);
         } while (statusResult.status === 'IN_QUEUE' || statusResult.status === 'IN_PROGRESS');
 
