@@ -18,8 +18,8 @@ const HF_MODEL = 'Corp-o-Rate-Community/statement-extractor';
 const PYPI_PACKAGE = 'corp-extractor';
 
 const CODE_SNIPPETS: Record<TabId, string> = {
-  python: `# Installation
-pip install ${PYPI_PACKAGE}
+  python: `# Installation (v0.2.0+)
+pip install ${PYPI_PACKAGE}[embeddings]  # Recommended: includes smart deduplication
 
 # For GPU support, install PyTorch with CUDA first:
 # pip install torch --index-url https://download.pytorch.org/whl/cu121
@@ -38,18 +38,52 @@ result = extract_statements(text)
 
 for stmt in result:
     print(f"{stmt.subject.text} ({stmt.subject.type})")
-    print(f"  --[{stmt.predicate}]-->")
-    print(f"  {stmt.object.text} ({stmt.object.type})")
+    print(f"  --[{stmt.predicate}]--> {stmt.object.text}")
+    print(f"  Confidence: {stmt.confidence_score:.2f}")  # NEW in v0.2.0
     print()
 
-# Output:
-# Apple Inc. (ORG)
-#   --[committed to]-->
-#   carbon neutrality by 2030 (EVENT)
-#
-# Tim Cook (PERSON)
-#   --[presented]-->
-#   sustainability report (WORK_OF_ART)
+# ============================================
+# NEW in v0.2.0: Quality Scoring & Beam Merging
+# ============================================
+# By default, the library now:
+# - Scores each triple for groundedness (0-1)
+# - Merges top beams for better coverage
+# - Uses embedding-based deduplication
+
+from statement_extractor import ExtractionOptions, ScoringConfig
+
+# Precision mode - filter low-confidence triples
+scoring = ScoringConfig(min_confidence=0.7)
+options = ExtractionOptions(scoring_config=scoring)
+result = extract_statements(text, options)
+
+# ============================================
+# NEW in v0.2.0: Predicate Taxonomy
+# ============================================
+from statement_extractor import PredicateTaxonomy
+
+# Normalize predicates to canonical forms using embeddings
+taxonomy = PredicateTaxonomy(predicates=[
+    "acquired", "founded", "works_for", "announced",
+    "invested_in", "partnered_with", "committed_to"
+])
+
+options = ExtractionOptions(predicate_taxonomy=taxonomy)
+result = extract_statements(text, options)
+
+# "committed to" matches "committed_to" via embedding similarity
+for stmt in result:
+    if stmt.canonical_predicate:
+        print(f"Normalized: {stmt.predicate} -> {stmt.canonical_predicate}")
+
+# ============================================
+# Disable embeddings (faster, no extra deps)
+# ============================================
+options = ExtractionOptions(
+    embedding_dedup=False,  # Use exact text matching
+    merge_beams=False,      # Select single best beam
+)
+result = extract_statements(text, options)
 
 # ============================================
 # Alternative Output Formats
@@ -60,33 +94,12 @@ from statement_extractor import (
     extract_statements_as_dict,
 )
 
-# Get JSON string
 json_output = extract_statements_as_json(text)
-print(json_output)
-
-# Get raw XML (model's native format)
 xml_output = extract_statements_as_xml(text)
-print(xml_output)
-
-# Get Python dictionary
 dict_output = extract_statements_as_dict(text)
-print(dict_output)
 
 # ============================================
-# Advanced: Custom Options
-# ============================================
-from statement_extractor import extract_statements, ExtractionOptions
-
-options = ExtractionOptions(
-    num_beams=8,              # More candidates (default: 4)
-    diversity_penalty=1.5,    # Higher diversity (default: 1.0)
-    max_attempts=5,           # More retries (default: 3)
-)
-
-result = extract_statements(text, options=options)
-
-# ============================================
-# Advanced: Reusable Extractor (faster for batch)
+# Batch Processing
 # ============================================
 from statement_extractor import StatementExtractor
 
@@ -96,21 +109,6 @@ texts = ["Text 1...", "Text 2...", "Text 3..."]
 for text in texts:
     result = extractor.extract(text)
     print(f"Found {len(result)} statements")
-
-# ============================================
-# Working with Results
-# ============================================
-# Access Pydantic model properties
-stmt = result.statements[0]
-print(stmt.subject.text)       # "Apple Inc."
-print(stmt.subject.type)       # EntityType.ORG
-print(stmt.predicate)          # "committed to"
-print(stmt.object.text)        # "carbon neutrality by 2030"
-print(stmt.source_text)        # Original sentence
-
-# Convert to simple tuples
-triples = result.to_triples()
-# [("Apple Inc.", "committed to", "carbon neutrality by 2030"), ...]
 
 # Library uses Diverse Beam Search: https://arxiv.org/abs/1610.02424`,
 

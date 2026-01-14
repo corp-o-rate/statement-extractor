@@ -10,20 +10,26 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
-- **High-Quality Output**: Uses [Diverse Beam Search](https://arxiv.org/abs/1610.02424) to generate multiple candidates
-- **Smart Retry Logic**: Automatically retries extraction if output quality is below threshold
+- **Quality Scoring** *(v0.2.0)*: Each triple scored for groundedness (0-1) based on source text
+- **Beam Merging** *(v0.2.0)*: Combines top beams for better coverage instead of picking one
+- **Embedding-based Dedup** *(v0.2.0)*: Uses semantic similarity to detect near-duplicate predicates
+- **Predicate Taxonomies** *(v0.2.0)*: Normalize predicates to canonical forms via embeddings
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
 
 ## Installation
 
 ```bash
+# Recommended: include embedding support for smart deduplication
+pip install corp-extractor[embeddings]
+
+# Minimal installation (no embedding features)
 pip install corp-extractor
 ```
 
-**Note**: Requires PyTorch. For GPU support, install PyTorch with CUDA first:
+**Note**: For GPU support, install PyTorch with CUDA first:
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu121
-pip install corp-extractor
+pip install corp-extractor[embeddings]
 ```
 
 ## Quick Start
@@ -31,23 +37,66 @@ pip install corp-extractor
 ```python
 from statement_extractor import extract_statements
 
-# Extract statements from text
 result = extract_statements("""
     Apple Inc. announced the iPhone 15 at their September event.
     Tim Cook presented the new features to customers worldwide.
 """)
 
-# Iterate over extracted statements
 for stmt in result:
-    print(f"{stmt.subject.text} ({stmt.subject.type}) "
-          f"--[{stmt.predicate}]--> "
-          f"{stmt.object.text} ({stmt.object.type})")
+    print(f"{stmt.subject.text} ({stmt.subject.type})")
+    print(f"  --[{stmt.predicate}]--> {stmt.object.text}")
+    print(f"  Confidence: {stmt.confidence_score:.2f}")  # NEW in v0.2.0
 ```
 
-Output:
+## New in v0.2.0: Quality Scoring & Beam Merging
+
+By default, the library now:
+- **Scores each triple** for groundedness based on whether entities appear in source text
+- **Merges top beams** instead of selecting one, improving coverage
+- **Uses embeddings** to detect semantically similar predicates ("bought" ≈ "acquired")
+
+```python
+from statement_extractor import ExtractionOptions, ScoringConfig
+
+# Precision mode - filter low-confidence triples
+scoring = ScoringConfig(min_confidence=0.7)
+options = ExtractionOptions(scoring_config=scoring)
+result = extract_statements(text, options)
+
+# Access confidence scores
+for stmt in result:
+    print(f"{stmt} (confidence: {stmt.confidence_score:.2f})")
 ```
-Apple Inc. (ORG) --[announced]--> iPhone 15 (PRODUCT)
-Tim Cook (PERSON) --[presented]--> new features (UNKNOWN)
+
+## New in v0.2.0: Predicate Taxonomies
+
+Normalize predicates to canonical forms using embedding similarity:
+
+```python
+from statement_extractor import PredicateTaxonomy, ExtractionOptions
+
+taxonomy = PredicateTaxonomy(predicates=[
+    "acquired", "founded", "works_for", "announced",
+    "invested_in", "partnered_with"
+])
+
+options = ExtractionOptions(predicate_taxonomy=taxonomy)
+result = extract_statements(text, options)
+
+# "bought" -> "acquired" via embedding similarity
+for stmt in result:
+    if stmt.canonical_predicate:
+        print(f"{stmt.predicate} -> {stmt.canonical_predicate}")
+```
+
+## Disable Embeddings (Faster, No Extra Dependencies)
+
+```python
+options = ExtractionOptions(
+    embedding_dedup=False,  # Use exact text matching
+    merge_beams=False,      # Select single best beam
+)
+result = extract_statements(text, options)
 ```
 
 ## Output Formats
@@ -60,86 +109,33 @@ from statement_extractor import (
     extract_statements_as_dict,
 )
 
-text = "Microsoft acquired GitHub in 2018."
-
 # Pydantic models (default)
 result = extract_statements(text)
-for stmt in result.statements:
-    print(stmt.subject, stmt.predicate, stmt.object)
 
 # JSON string
 json_output = extract_statements_as_json(text)
-print(json_output)
 
 # Raw XML (model's native format)
 xml_output = extract_statements_as_xml(text)
-print(xml_output)
 
 # Python dictionary
 dict_output = extract_statements_as_dict(text)
-print(dict_output)
 ```
 
-## Advanced Usage
-
-### Custom Extraction Options
-
-```python
-from statement_extractor import extract_statements, ExtractionOptions
-
-options = ExtractionOptions(
-    num_beams=8,              # More beams = more diverse candidates
-    diversity_penalty=1.5,    # Higher = more diversity between beams
-    max_new_tokens=4096,      # Max tokens to generate
-    min_statement_ratio=0.5,  # Min statements per sentence
-    max_attempts=5,           # Retry attempts for under-extraction
-    deduplicate=True,         # Remove duplicate statements
-)
-
-result = extract_statements("Your text here...", options=options)
-```
-
-### Using the Extractor Class
-
-For better performance when processing multiple texts:
+## Batch Processing
 
 ```python
 from statement_extractor import StatementExtractor
 
-# Create extractor once
-extractor = StatementExtractor(
-    model_id="Corp-o-Rate-Community/statement-extractor",
-    device="cuda",  # or "cpu"
-)
+extractor = StatementExtractor(device="cuda")  # or "cpu"
 
-# Process multiple texts
 texts = ["Text 1...", "Text 2...", "Text 3..."]
 for text in texts:
     result = extractor.extract(text)
     print(f"Found {len(result)} statements")
 ```
 
-## Pydantic Models
-
-The library provides fully-typed Pydantic models:
-
-```python
-from statement_extractor import Statement, Entity, EntityType, ExtractionResult
-
-# Access statement properties
-stmt: Statement = result.statements[0]
-print(stmt.subject.text)      # "Apple Inc."
-print(stmt.subject.type)      # EntityType.ORG
-print(stmt.predicate)         # "announced"
-print(stmt.object.text)       # "iPhone 15"
-print(stmt.source_text)       # Original sentence (if available)
-
-# Convert to simple tuples
-triples = result.to_triples()
-# [("Apple Inc.", "announced", "iPhone 15"), ...]
-```
-
-### Entity Types
+## Entity Types
 
 | Type | Description | Example |
 |------|-------------|---------|
@@ -159,12 +155,13 @@ triples = result.to_triples()
 
 ## How It Works
 
-This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam Search** ([Vijayakumar et al., 2016](https://arxiv.org/abs/1610.02424)) to generate high-quality extractions:
+This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam Search** ([Vijayakumar et al., 2016](https://arxiv.org/abs/1610.02424)):
 
 1. **Diverse Beam Search**: Generates 4+ candidate outputs using beam groups with diversity penalty
-2. **Quality-Based Retry**: If extraction count is below threshold, automatically retries
-3. **Deduplication**: Removes duplicate statements based on subject-predicate-object triples
-4. **Best Selection**: Selects the longest valid output (typically most complete)
+2. **Quality Scoring** *(v0.2.0)*: Each triple scored for groundedness in source text
+3. **Beam Merging** *(v0.2.0)*: Top beams combined for better coverage
+4. **Embedding Dedup** *(v0.2.0)*: Semantic similarity removes near-duplicate predicates
+5. **Predicate Normalization** *(v0.2.0)*: Optional taxonomy matching via embeddings
 
 ## Requirements
 
@@ -172,6 +169,7 @@ This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam 
 - PyTorch 2.0+
 - Transformers 4.35+
 - Pydantic 2.0+
+- sentence-transformers 2.2+ *(optional, for embedding features)*
 - ~2GB VRAM (GPU) or ~4GB RAM (CPU)
 
 ## Links

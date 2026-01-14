@@ -189,24 +189,24 @@ export function HowItWorks() {
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Quality-Based Retry</h4>
+              <h4 className="font-semibold mb-2">Quality Scoring <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.2</span></h4>
               <p className="text-sm text-gray-600">
-                If the number of extracted statements is below the expected ratio (1 statement per sentence),
-                the model retries up to 3 times to maximize extraction coverage.
+                Each triple is scored for groundedness (0-1) based on whether subject/object appear in source text,
+                predicate has a lexical trigger, and entities are in proximity.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Deduplication</h4>
+              <h4 className="font-semibold mb-2">Beam Merging <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.2</span></h4>
               <p className="text-sm text-gray-600">
-                XML parsing removes duplicate statements based on subject-predicate-object triples,
-                keeping only unique relationships.
+                Instead of picking one beam, merges top-N beams to maximize coverage.
+                Resolves duplicates by keeping highest-confidence triples.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Best Selection</h4>
+              <h4 className="font-semibold mb-2">Embedding Dedup <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.2</span></h4>
               <p className="text-sm text-gray-600">
-                From all valid candidates across attempts, selects the longest output (typically containing
-                the most complete extraction).
+                Uses sentence embeddings to detect semantically similar predicates (&quot;bought&quot; ≈ &quot;acquired&quot;),
+                removing redundant triples more intelligently than exact text matching.
               </p>
             </div>
           </div>

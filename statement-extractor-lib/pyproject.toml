@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corp-extractor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Extract structured statements from text using T5-Gemma 2 and Diverse Beam Search"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,7 @@ keywords = [
     "diverse-beam-search",
     "subject-predicate-object",
     "triples",
+    "embeddings",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -46,14 +47,23 @@ dependencies = [
     "pydantic>=2.0.0",
     "torch>=2.0.0",
     "transformers>=4.35.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
+# Embedding-based predicate comparison (enabled by default in ExtractionOptions)
+embeddings = [
+    "sentence-transformers>=2.2.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+]
+# Full installation with all optional features
+all = [
+    "sentence-transformers>=2.2.0",
 ]
 
 [project.urls]
