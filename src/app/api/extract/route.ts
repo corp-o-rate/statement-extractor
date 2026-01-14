@@ -12,7 +12,7 @@ const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL;
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { text } = body;
+    const { text, useCanonicalPredicates } = body;
 
     if (!text || typeof text !== 'string') {
       return NextResponse.json(
@@ -62,6 +62,7 @@ export async function POST(request: NextRequest) {
               input: {
                 text: modelInput,
                 format: 'json', // Request JSON format for v0.2.0+ (includes confidence scores)
+                useCanonicalPredicates: useCanonicalPredicates || false,
               },
             }),
           }

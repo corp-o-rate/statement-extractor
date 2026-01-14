@@ -14,7 +14,7 @@ import os
 from collections import OrderedDict
 
 import runpod
-from statement_extractor import StatementExtractor, ExtractionOptions, ScoringConfig
+from statement_extractor import StatementExtractor, ExtractionOptions, ScoringConfig, PredicateTaxonomy
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +32,54 @@ MAX_EXTRACTION_ATTEMPTS = int(os.environ.get("MAX_EXTRACTION_ATTEMPTS", 3))
 
 # Output format: "json" (default, v0.2.0+) or "xml" (legacy)
 OUTPUT_FORMAT = os.environ.get("OUTPUT_FORMAT", "json")
+
+# Canonical predicates for corporate/ESG domain
+# These are normalized forms that extracted predicates can be mapped to
+CANONICAL_PREDICATES = [
+    # Ownership & Corporate Structure
+    "owned by", "parent organization", "ultimate parent", "has subsidiary",
+    "acquired", "merged with", "spun off from", "controlling shareholder",
+    "minority shareholder", "beneficial owner", "person of significant control",
+    "nominee for", "succeeded by", "preceded by",
+    # Investment & Finance
+    "investor", "funded by", "creditor", "debtor", "vc backed by", "pe backed by",
+    "ipo underwriter", "bond holder",
+    # Leadership & Employment
+    "chief executive officer", "chief financial officer", "chief operating officer",
+    "founder", "board member", "chairperson", "company secretary", "employee",
+    "former employee", "former director", "advisor", "consultant",
+    # Organizational Structure
+    "division of", "department of",
+    # Supply Chain
+    "supplier", "customer", "manufacturer", "distributor", "contractor",
+    "outsources to", "subcontractor", "raw material source",
+    # Geography & Jurisdiction
+    "headquarters", "located in", "operates in", "facility in", "registered in",
+    "tax residence", "offshore entity in", "branch in", "citizenship", "formed in", "residence",
+    # Legal & Regulatory
+    "sued", "sued by", "fined by", "regulated by", "licensed by", "sanctioned by",
+    "investigated by", "settled with", "consent decree with", "debarred by",
+    # Political
+    "lobbies", "donated to", "endorsed by", "member of", "sponsored by",
+    "lobbied by", "pac contribution", "revolving door",
+    # Environmental & Social
+    "polluted", "affected community", "displaced", "deforested", "benefited",
+    "restored", "employed in", "invested in community", "violated rights",
+    "emitted ghg", "water usage", "waste disposal",
+    # Products & IP
+    "brand of", "product of", "trademark of", "licensed from", "white label for",
+    "recalls", "developer", "publisher",
+    # Business Relationships
+    "partner", "joint venture with", "franchisee of", "distributor for",
+    "licensed to", "exclusive dealer", "operator",
+    # Personal Relationships
+    "spouse", "relative", "associate", "co-founder", "classmate", "club member",
+    # Classification
+    "industry", "competitor", "similar to", "same sector", "peer of", "instance of",
+    # Events & Mentions
+    "mentioned with", "accused of", "praised for", "criticized for",
+    "announced", "rumored", "participant",
+]
 
 # Global extractor instance (loaded once, reused across requests)
 extractor: StatementExtractor | None = None
@@ -75,20 +123,21 @@ def load_extractor():
     logger.info(f"Extractor loaded on device: {extractor.device}")
 
 
-def extract_statements(text: str, output_format: str = "json") -> str:
+def extract_statements(text: str, output_format: str = "json", use_canonical_predicates: bool = False) -> str:
     """Extract statements from text with caching.
 
     Args:
         text: Input text (with or without <page> tags)
         output_format: "json" (v0.2.0+, includes confidence) or "xml" (legacy)
+        use_canonical_predicates: If True, normalize predicates to canonical forms
 
     Returns:
         JSON string with full extraction result, or XML string for legacy mode
     """
     global extractor, cache_size_bytes
 
-    # Include format in cache key so json/xml cached separately
-    cache_key = get_cache_key(f"{output_format}:{text}")
+    # Include format and taxonomy option in cache key
+    cache_key = get_cache_key(f"{output_format}:canonical={use_canonical_predicates}:{text}")
     if cache_key in result_cache:
         result_cache.move_to_end(cache_key)
         logger.info(f"Cache hit for key: {cache_key[:16]}...")
@@ -106,6 +155,11 @@ def extract_statements(text: str, output_format: str = "json") -> str:
         embedding_dedup=True,
         scoring_config=ScoringConfig(),  # Enable quality scoring
     )
+
+    # Add predicate taxonomy if requested
+    if use_canonical_predicates:
+        options.predicate_taxonomy = PredicateTaxonomy(predicates=CANONICAL_PREDICATES)
+        logger.info(f"Using canonical predicate taxonomy with {len(CANONICAL_PREDICATES)} predicates")
 
     # Extract using the library
     if output_format == "xml":
@@ -171,14 +225,17 @@ def handler(job):
     if output_format not in ("json", "xml"):
         output_format = "json"
 
+    # Get canonical predicates option
+    use_canonical_predicates = job_input.get("useCanonicalPredicates", False)
+
     # Wrap in page tags if not already wrapped
     if not text.startswith("<page>"):
         text = f"<page>{text}</page>"
 
-    logger.info(f"Processing text of length: {len(text)}, format: {output_format}")
+    logger.info(f"Processing text of length: {len(text)}, format: {output_format}, canonical: {use_canonical_predicates}")
 
     try:
-        result = extract_statements(text, output_format)
+        result = extract_statements(text, output_format, use_canonical_predicates)
         logger.info(f"Extraction complete, output length: {len(result)}")
 
         # For JSON format, parse the string back to dict for cleaner response

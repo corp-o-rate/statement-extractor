@@ -2,8 +2,8 @@
 
 Extract structured subject-predicate-object statements from unstructured text using the T5-Gemma 2 model.
 
-[![PyPI version](https://badge.fury.io/py/corp-extractor.svg)](https://badge.fury.io/py/corp-extractor)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/corp-extractor.svg)](https://pypi.org/project/corp-extractor/)
+[![Python 3.10+](https://img.shields.io/pypi/pyversions/corp-extractor.svg)](https://pypi.org/project/corp-extractor/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features

@@ -6,7 +6,7 @@ import { CACHED_INPUT } from '@/lib/cached-example';
 import { toast } from 'sonner';
 
 interface StatementInputProps {
-  onExtract: (text: string) => void;
+  onExtract: (text: string, options?: { useCanonicalPredicates?: boolean }) => void;
   isLoading: boolean;
   elapsedSeconds?: number;
 }
@@ -29,11 +29,12 @@ const EXAMPLE_TEXTS = [
 export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: StatementInputProps) {
   const [text, setText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [useCanonicalPredicates, setUseCanonicalPredicates] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (text.trim() && !isLoading) {
-      onExtract(text.trim());
+      onExtract(text.trim(), { useCanonicalPredicates });
     }
   };
 
@@ -119,6 +120,29 @@ export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: Sta
           <div className="absolute bottom-2 right-2 text-xs text-gray-400">
             {charCount.toLocaleString()} / {maxChars.toLocaleString()}
           </div>
+        </div>
+
+        {/* Options */}
+        <div className="mt-4 flex items-center gap-3">
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={useCanonicalPredicates}
+              onChange={(e) => setUseCanonicalPredicates(e.target.checked)}
+              disabled={isLoading}
+              className="w-4 h-4 accent-red-600 cursor-pointer"
+            />
+            <span className="text-sm text-gray-700">
+              Use canonical predicates
+            </span>
+            <a
+              href="#canonical-predicates"
+              className="text-xs text-gray-400 hover:text-red-600 transition-colors"
+              title="View list of canonical predicates"
+            >
+              (view list)
+            </a>
+          </label>
         </div>
 
         {/* Actions */}

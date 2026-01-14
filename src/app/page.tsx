@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { ExportFormats } from '@/components/export-formats';
 import { Network, FileText, BookOpen, Bot, Edit3, Eye, Code } from 'lucide-react';
 import { HowItWorks, AboutCorpORate } from '@/components/about-sections';
+import { CanonicalPredicates } from '@/components/canonical-predicates';
 
 // Polling interval in milliseconds
 const POLL_INTERVAL = 5000;
@@ -51,7 +52,7 @@ export default function Home() {
     return response.json();
   };
 
-  const handleExtract = async (text: string) => {
+  const handleExtract = async (text: string, options?: { useCanonicalPredicates?: boolean }) => {
     setIsLoading(true);
     setElapsedSeconds(0);
     setRateLimitMessage(undefined);
@@ -68,7 +69,10 @@ export default function Home() {
       const response = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({
+          text,
+          useCanonicalPredicates: options?.useCanonicalPredicates,
+        }),
       });
 
       if (!response.ok) {
@@ -336,6 +340,11 @@ export default function Home() {
                 <h2 className="font-bold text-xl">Export</h2>
               </div>
               <ExportFormats statements={isEditMode ? editedStatements : statements} />
+            </div>
+
+            {/* Canonical Predicates Reference */}
+            <div className="mt-8">
+              <CanonicalPredicates />
             </div>
           </div>
         </section>
