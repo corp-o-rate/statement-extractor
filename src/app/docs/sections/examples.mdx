@@ -1,0 +1,408 @@
+## Examples
+
+<span id="examples" />
+
+This section provides practical examples demonstrating common use cases for the corp-extractor library.
+
+---
+
+### Basic Extraction
+
+<span id="basic-extraction" />
+
+Extract statements from text and format the output:
+
+```python
+from statement_extractor import extract_statements
+
+text = """
+Microsoft announced a partnership with OpenAI in 2019.
+The deal was valued at $1 billion and aimed to develop
+artificial general intelligence.
+"""
+
+result = extract_statements(text)
+
+# Iterate over statements
+for stmt in result:
+    subject = f"{stmt.subject.text} ({stmt.subject.type})"
+    object_ = f"{stmt.object.text} ({stmt.object.type})"
+    print(f"{subject} -- {stmt.predicate} --> {object_}")
+
+# Check confidence scores
+for stmt in result:
+    score = stmt.confidence_score or 0.0
+    print(f"[{score:.2f}] {stmt}")
+```
+
+Output:
+
+```
+Microsoft (ORG) -- partnered with --> OpenAI
+Microsoft (ORG) -- announced --> partnership
+OpenAI (ORG) -- partnership valued at --> $1 billion
+Microsoft (ORG) -- aims to develop --> artificial general intelligence
+```
+
+---
+
+### Batch Processing
+
+<span id="batch-processing" />
+
+Use the `StatementExtractor` class for processing multiple texts efficiently. The model loads once and is reused for all extractions:
+
+```python
+from statement_extractor import StatementExtractor
+
+# Initialize extractor with GPU
+extractor = StatementExtractor(device="cuda")
+
+texts = [
+    "Apple acquired Beats Electronics for $3 billion.",
+    "Google was founded by Larry Page and Sergey Brin in 1998.",
+    "Amazon announced a new fulfillment center in Texas."
+]
+
+# Process multiple texts
+for text in texts:
+    result = extractor.extract(text)
+    print(f"Found {len(result)} statements in: {text[:40]}...")
+    for stmt in result:
+        print(f"  - {stmt}")
+    print()
+```
+
+For CPU-only environments:
+
+```python
+# Force CPU usage
+extractor = StatementExtractor(device="cpu")
+```
+
+---
+
+### Confidence Filtering
+
+<span id="confidence-filtering" />
+
+<span className="text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-0.5 rounded">v0.2.0</span>
+
+Filter statements by confidence score to control precision vs recall:
+
+```python
+from statement_extractor import extract_statements, ScoringConfig, ExtractionOptions
+
+text = "Elon Musk founded SpaceX in 2002 to reduce space transportation costs."
+
+# High precision mode - only high-confidence statements
+scoring = ScoringConfig(min_confidence=0.7)
+options = ExtractionOptions(scoring_config=scoring)
+result = extract_statements(text, options)
+
+print("High-confidence statements:")
+for stmt in result:
+    print(f"  [{stmt.confidence_score:.2f}] {stmt}")
+```
+
+You can also filter after extraction for more control:
+
+```python
+# Extract all statements first
+result = extract_statements(text)
+
+# Apply custom thresholds
+high_confidence = [s for s in result if (s.confidence_score or 0) >= 0.8]
+medium_confidence = [s for s in result if 0.5 <= (s.confidence_score or 0) < 0.8]
+low_confidence = [s for s in result if (s.confidence_score or 0) < 0.5]
+
+print(f"High: {len(high_confidence)}, Medium: {len(medium_confidence)}, Low: {len(low_confidence)}")
+```
+
+---
+
+### Predicate Taxonomy
+
+<span id="predicate-taxonomy" />
+
+Map extracted predicates to a controlled vocabulary of canonical forms:
+
+```python
+from statement_extractor import PredicateTaxonomy, ExtractionOptions, extract_statements
+
+# Define your canonical predicates
+taxonomy = PredicateTaxonomy(predicates=[
+    "acquired", "founded", "works_for", "announced",
+    "invested_in", "partnered_with", "committed_to"
+])
+
+options = ExtractionOptions(predicate_taxonomy=taxonomy)
+
+text = "Google bought YouTube in 2006. Sequoia Capital backed the video platform."
+result = extract_statements(text, options)
+
+# View predicate normalization
+for stmt in result:
+    original = stmt.predicate
+    canonical = stmt.canonical_predicate
+    if canonical and canonical != original:
+        print(f"'{original}' -> '{canonical}'")
+    print(f"  {stmt.subject.text} -- {canonical or original} --> {stmt.object.text}")
+```
+
+Output:
+
+```
+'bought' -> 'acquired'
+  Google -- acquired --> YouTube
+'backed' -> 'invested_in'
+  Sequoia Capital -- invested_in --> YouTube
+```
+
+Load taxonomy from a file:
+
+```python
+# predicates.txt contains one predicate per line
+taxonomy = PredicateTaxonomy.from_file("predicates.txt")
+```
+
+---
+
+### Export Formats
+
+<span id="export-formats" />
+
+Export extraction results in multiple formats for integration with other systems:
+
+```python
+from statement_extractor import (
+    extract_statements,
+    extract_statements_as_json,
+    extract_statements_as_xml,
+    extract_statements_as_dict
+)
+
+text = "Netflix acquired Spry Fox, a game development studio, in 2022."
+
+# JSON output (default 2-space indent)
+json_str = extract_statements_as_json(text)
+print(json_str)
+
+# Compact JSON
+json_compact = extract_statements_as_json(text, indent=None)
+
+# XML output (raw model format)
+xml_str = extract_statements_as_xml(text)
+print(xml_str)
+
+# Dictionary output (for programmatic use)
+data = extract_statements_as_dict(text)
+for stmt in data["statements"]:
+    print(f"{stmt['subject']['text']} -> {stmt['predicate']} -> {stmt['object']['text']}")
+```
+
+JSON output format:
+
+```json
+{
+  "statements": [
+    {
+      "subject": {"text": "Netflix", "type": "ORG"},
+      "predicate": "acquired",
+      "object": {"text": "Spry Fox", "type": "ORG"},
+      "source_text": "Netflix acquired Spry Fox",
+      "confidence_score": 0.94
+    }
+  ],
+  "source_text": "Netflix acquired Spry Fox, a game development studio, in 2022."
+}
+```
+
+---
+
+### Disabling Embeddings
+
+<span id="disabling-embeddings" />
+
+Skip embedding-based features for faster processing when you don't need predicate normalization or semantic deduplication:
+
+```python
+from statement_extractor import ExtractionOptions, extract_statements
+
+# Disable embedding-based deduplication
+options = ExtractionOptions(
+    embedding_dedup=False,      # Use exact string matching for dedup
+    predicate_taxonomy=None     # No predicate normalization
+)
+
+result = extract_statements(text, options)
+```
+
+When to disable embeddings:
+
+<table>
+  <thead>
+    <tr>
+      <th>Scenario</th>
+      <th>Recommendation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Speed critical</td>
+      <td>Disable embeddings</td>
+    </tr>
+    <tr>
+      <td>No GPU available</td>
+      <td>Consider disabling for faster CPU processing</td>
+    </tr>
+    <tr>
+      <td>Need semantic dedup</td>
+      <td>Keep embeddings enabled</td>
+    </tr>
+    <tr>
+      <td>Using predicate taxonomy</td>
+      <td>Keep embeddings enabled</td>
+    </tr>
+    <tr>
+      <td>Simple text, few duplicates</td>
+      <td>Disable embeddings</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+### Custom Entity Canonicalization
+
+<span id="entity-canonicalization" />
+
+Provide a custom function to normalize entity names:
+
+```python
+from statement_extractor import ExtractionOptions, extract_statements
+
+# Define a canonicalization function
+def canonicalize_entity(text: str) -> str:
+    """Normalize entity names to canonical forms."""
+    mappings = {
+        "apple": "Apple Inc.",
+        "apple inc": "Apple Inc.",
+        "apple inc.": "Apple Inc.",
+        "google": "Alphabet Inc.",
+        "google llc": "Alphabet Inc.",
+        "alphabet": "Alphabet Inc.",
+        "msft": "Microsoft Corporation",
+        "microsoft": "Microsoft Corporation",
+    }
+    return mappings.get(text.lower().strip(), text)
+
+options = ExtractionOptions(entity_canonicalizer=canonicalize_entity)
+
+text = "Apple and Google announced a partnership. Microsoft joined later."
+result = extract_statements(text, options)
+
+for stmt in result:
+    # Entities are now canonicalized
+    print(f"{stmt.subject.text} -- {stmt.predicate} --> {stmt.object.text}")
+```
+
+Output:
+
+```
+Apple Inc. -- partnered with --> Alphabet Inc.
+Microsoft Corporation -- joined --> partnership
+```
+
+---
+
+### Full Pipeline Example
+
+<span id="full-pipeline" />
+
+Combining multiple features for production use:
+
+```python
+from statement_extractor import (
+    StatementExtractor,
+    ExtractionOptions,
+    ScoringConfig,
+    PredicateTaxonomy,
+    PredicateComparisonConfig
+)
+
+# Configure scoring for high precision
+scoring = ScoringConfig(
+    min_confidence=0.6,
+    quality_weight=1.0,
+    redundancy_penalty=0.5
+)
+
+# Define canonical predicates
+taxonomy = PredicateTaxonomy.from_list([
+    "acquired", "founded", "invested_in", "partnered_with",
+    "announced", "launched", "hired", "appointed"
+])
+
+# Configure predicate matching
+predicate_config = PredicateComparisonConfig(
+    similarity_threshold=0.7,
+    dedup_threshold=0.8
+)
+
+# Initialize extractor
+extractor = StatementExtractor(
+    device="cuda",
+    predicate_taxonomy=taxonomy,
+    predicate_config=predicate_config,
+    scoring_config=scoring
+)
+
+# Configure extraction options
+options = ExtractionOptions(
+    num_beams=6,
+    diversity_penalty=1.2,
+    deduplicate=True,
+    merge_beams=True
+)
+
+# Process text
+text = """
+Amazon Web Services announced a strategic partnership with Anthropic,
+investing up to $4 billion in the AI safety startup. The deal, announced
+in September 2023, makes AWS Anthropic's primary cloud provider.
+"""
+
+result = extractor.extract(text, options)
+
+print(f"Extracted {len(result)} high-confidence statements:\n")
+for stmt in result:
+    canonical = stmt.canonical_predicate or stmt.predicate
+    score = stmt.confidence_score or 0.0
+    print(f"[{score:.2f}] {stmt.subject.text} ({stmt.subject.type})")
+    print(f"       -- {canonical} -->")
+    print(f"       {stmt.object.text} ({stmt.object.type})")
+    print()
+```
+
+Output:
+
+```
+Extracted 4 high-confidence statements:
+
+[0.92] Amazon Web Services (ORG)
+       -- partnered_with -->
+       Anthropic (ORG)
+
+[0.88] Amazon Web Services (ORG)
+       -- invested_in -->
+       Anthropic (ORG)
+
+[0.85] Amazon Web Services (ORG)
+       -- invested_in -->
+       $4 billion (MONEY)
+
+[0.78] AWS (ORG)
+       -- is primary cloud provider for -->
+       Anthropic (ORG)
+```

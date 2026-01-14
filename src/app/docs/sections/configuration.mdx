@@ -1,0 +1,293 @@
+## Configuration
+
+<span id="configuration" />
+
+The statement-extractor library provides fine-grained control over extraction behavior through configuration classes. This section covers all configuration options for tuning precision, recall, and performance.
+
+---
+
+### ExtractionOptions
+
+<span id="extraction-options" />
+
+The primary configuration class for controlling extraction behavior.
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Type</th>
+      <th>Default</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>num_beams</code></td>
+      <td>int</td>
+      <td>4</td>
+      <td>Number of beam search candidates</td>
+    </tr>
+    <tr>
+      <td><code>diversity_penalty</code></td>
+      <td>float</td>
+      <td>1.0</td>
+      <td>Penalty for beam diversity in diverse beam search</td>
+    </tr>
+    <tr>
+      <td><code>max_new_tokens</code></td>
+      <td>int</td>
+      <td>2048</td>
+      <td>Maximum generation length in tokens</td>
+    </tr>
+    <tr>
+      <td><code>deduplicate</code></td>
+      <td>bool</td>
+      <td>True</td>
+      <td>Remove duplicate statements from output</td>
+    </tr>
+    <tr>
+      <td><code>merge_beams</code></td>
+      <td>bool</td>
+      <td>True</td>
+      <td>Merge top beams into single result set (v0.2.0)</td>
+    </tr>
+    <tr>
+      <td><code>embedding_dedup</code></td>
+      <td>bool</td>
+      <td>True</td>
+      <td>Use embedding similarity for deduplication (v0.2.0)</td>
+    </tr>
+    <tr>
+      <td><code>predicate_taxonomy</code></td>
+      <td>PredicateTaxonomy</td>
+      <td>None</td>
+      <td>Taxonomy of canonical predicates</td>
+    </tr>
+    <tr>
+      <td><code>scoring_config</code></td>
+      <td>ScoringConfig</td>
+      <td>None</td>
+      <td>Quality scoring configuration</td>
+    </tr>
+    <tr>
+      <td><code>entity_canonicalizer</code></td>
+      <td>Callable</td>
+      <td>None</td>
+      <td>Custom function for entity canonicalization</td>
+    </tr>
+  </tbody>
+</table>
+
+**Basic usage:**
+
+```python
+from statement_extractor import ExtractionOptions, extract_statements
+
+options = ExtractionOptions(
+    num_beams=6,
+    diversity_penalty=1.2,
+    deduplicate=True
+)
+
+result = extract_statements("Apple acquired Beats for $3 billion.", options)
+```
+
+---
+
+### ScoringConfig
+
+<span id="scoring-config" />
+
+*Added in v0.2.0*
+
+Configuration for quality scoring, filtering, and beam selection. Use this to tune the precision-recall tradeoff.
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Type</th>
+      <th>Default</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>min_confidence</code></td>
+      <td>float</td>
+      <td>0.0</td>
+      <td>Filter threshold (0=recall, 0.7+=precision)</td>
+    </tr>
+    <tr>
+      <td><code>quality_weight</code></td>
+      <td>float</td>
+      <td>1.0</td>
+      <td>Weight for groundedness scores</td>
+    </tr>
+    <tr>
+      <td><code>coverage_weight</code></td>
+      <td>float</td>
+      <td>0.5</td>
+      <td>Weight for source text coverage</td>
+    </tr>
+    <tr>
+      <td><code>redundancy_penalty</code></td>
+      <td>float</td>
+      <td>0.3</td>
+      <td>Penalty for duplicate triples</td>
+    </tr>
+    <tr>
+      <td><code>length_penalty</code></td>
+      <td>float</td>
+      <td>0.1</td>
+      <td>Penalty for verbose predicates/entities</td>
+    </tr>
+    <tr>
+      <td><code>merge_top_n</code></td>
+      <td>int</td>
+      <td>3</td>
+      <td>Number of beams to merge</td>
+    </tr>
+  </tbody>
+</table>
+
+**Common configurations:**
+
+```python
+from statement_extractor import ScoringConfig, ExtractionOptions, extract_statements
+
+# High precision mode - only keep confident extractions
+precision_config = ScoringConfig(
+    min_confidence=0.7,
+    quality_weight=1.5,
+    redundancy_penalty=0.5
+)
+
+# High recall mode - keep everything
+recall_config = ScoringConfig(
+    min_confidence=0.0,
+    quality_weight=0.5,
+    redundancy_penalty=0.1
+)
+
+# Use in extraction
+options = ExtractionOptions(scoring_config=precision_config)
+result = extract_statements(text, options)
+```
+
+**Precision vs recall tuning:**
+
+<table>
+  <thead>
+    <tr>
+      <th>Use Case</th>
+      <th>min_confidence</th>
+      <th>quality_weight</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Maximum recall</td>
+      <td>0.0</td>
+      <td>0.5</td>
+      <td>Keep all extractions</td>
+    </tr>
+    <tr>
+      <td>Balanced</td>
+      <td>0.4</td>
+      <td>1.0</td>
+      <td>Good default</td>
+    </tr>
+    <tr>
+      <td>High precision</td>
+      <td>0.7</td>
+      <td>1.5</td>
+      <td>Fewer false positives</td>
+    </tr>
+    <tr>
+      <td>Knowledge base</td>
+      <td>0.8</td>
+      <td>2.0</td>
+      <td>Very strict</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+### PredicateComparisonConfig
+
+<span id="predicate-config" />
+
+*Added in v0.2.0*
+
+Configuration for embedding-based predicate comparison and taxonomy matching. Requires the `[embeddings]` extra.
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Type</th>
+      <th>Default</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>embedding_model</code></td>
+      <td>str</td>
+      <td>paraphrase-MiniLM-L6-v2</td>
+      <td>Model for computing similarity</td>
+    </tr>
+    <tr>
+      <td><code>similarity_threshold</code></td>
+      <td>float</td>
+      <td>0.65</td>
+      <td>Minimum similarity for taxonomy matching</td>
+    </tr>
+    <tr>
+      <td><code>dedup_threshold</code></td>
+      <td>float</td>
+      <td>0.65</td>
+      <td>Minimum similarity to consider duplicates</td>
+    </tr>
+    <tr>
+      <td><code>normalize_text</code></td>
+      <td>bool</td>
+      <td>True</td>
+      <td>Lowercase/strip predicates before embedding</td>
+    </tr>
+  </tbody>
+</table>
+
+**Custom thresholds:**
+
+```python
+from statement_extractor import (
+    PredicateComparisonConfig,
+    PredicateTaxonomy,
+    ExtractionOptions,
+    extract_statements
+)
+
+# Stricter matching for precision
+config = PredicateComparisonConfig(
+    similarity_threshold=0.75,
+    dedup_threshold=0.80,
+    normalize_text=True
+)
+
+taxonomy = PredicateTaxonomy.from_list([
+    "acquired", "founded", "works_for", "located_in",
+    "partnered_with", "invested_in", "announced"
+])
+
+options = ExtractionOptions(
+    predicate_taxonomy=taxonomy,
+    predicate_config=config
+)
+
+result = extract_statements("Google bought YouTube in 2006.", options)
+```

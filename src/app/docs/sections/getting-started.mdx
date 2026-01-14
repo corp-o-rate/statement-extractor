@@ -1,0 +1,134 @@
+## Getting Started
+
+<span id="getting-started" />
+
+### Installation
+
+<span id="installation" />
+
+Basic installation:
+
+```bash
+pip install corp-extractor
+```
+
+With embeddings support for semantic similarity and clustering:
+
+```bash
+pip install corp-extractor[embeddings]
+```
+
+**GPU support**: Install PyTorch with CUDA before installing corp-extractor. The library auto-detects GPU availability at runtime.
+
+```bash
+# Example for CUDA 12.1
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install corp-extractor
+```
+
+### Quick Start
+
+<span id="quick-start" />
+
+Extract structured statements from text in 5 lines:
+
+```python
+from statement_extractor import extract_statements
+
+text = "Apple Inc. acquired Beats Electronics for $3 billion in May 2014."
+statements = extract_statements(text)
+
+for stmt in statements:
+    print(f"{stmt.subject.text} ({stmt.subject.entity_type}) -> {stmt.predicate} -> {stmt.object.text}")
+```
+
+Output:
+
+```
+Apple Inc. (ORG) -> acquired -> Beats Electronics
+Apple Inc. (ORG) -> paid -> $3 billion
+Beats Electronics (ORG) -> acquisition price -> $3 billion
+```
+
+Each statement includes confidence scores (v0.2.0+):
+
+```python
+for stmt in statements:
+    print(f"{stmt.subject.text} -> {stmt.predicate} -> {stmt.object.text}")
+    print(f"  confidence: {stmt.confidence:.2f}")
+```
+
+v0.2.0 features: confidence scoring, batch processing, embedding support, and improved entity type detection.
+
+### Using Predicate Taxonomies
+
+Normalize extracted predicates to canonical forms using embedding similarity:
+
+```python
+from statement_extractor import extract_statements, PredicateTaxonomy, ExtractionOptions
+
+# Define your domain's canonical predicates
+taxonomy = PredicateTaxonomy(predicates=[
+    "acquired", "founded", "works_for", "headquartered_in",
+    "invested_in", "partnered_with", "announced"
+])
+
+options = ExtractionOptions(predicate_taxonomy=taxonomy)
+
+text = "Google bought YouTube for $1.65 billion in 2006."
+result = extract_statements(text, options)
+
+for stmt in result:
+    print(f"{stmt.predicate} -> {stmt.canonical_predicate}")
+    # Output: bought -> acquired
+```
+
+This maps synonyms like "bought", "purchased", "acquired" to a single canonical form, making downstream analysis easier.
+
+### Requirements
+
+<span id="requirements" />
+
+<table>
+  <thead>
+    <tr>
+      <th>Dependency</th>
+      <th>Version</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Python</td>
+      <td>3.10+</td>
+      <td>Required</td>
+    </tr>
+    <tr>
+      <td>PyTorch</td>
+      <td>2.6.0+</td>
+      <td>Required</td>
+    </tr>
+    <tr>
+      <td>transformers</td>
+      <td>git (dev)</td>
+      <td>Required, from <a href="https://github.com/huggingface/transformers">GitHub</a></td>
+    </tr>
+    <tr>
+      <td>Pydantic</td>
+      <td>2.0+</td>
+      <td>Required</td>
+    </tr>
+    <tr>
+      <td>sentence-transformers</td>
+      <td>2.2+</td>
+      <td>Optional, for <code>[embeddings]</code></td>
+    </tr>
+  </tbody>
+</table>
+
+**Hardware requirements**:
+
+- **GPU**: ~2GB VRAM minimum. CUDA-enabled NVIDIA GPU recommended for production.
+- **CPU**: ~4GB RAM. Functional but significantly slower. Use for development or low-volume processing.
+
+The model uses bfloat16 precision on GPU (faster, less memory) and float32 on CPU.

@@ -113,17 +113,17 @@ class PredicateTaxonomy(BaseModel):
 class PredicateComparisonConfig(BaseModel):
     """Configuration for embedding-based predicate comparison."""
     embedding_model: str = Field(
-        default="sentence-transformers/all-MiniLM-L6-v2",
+        default="sentence-transformers/paraphrase-MiniLM-L6-v2",
         description="Sentence-transformers model ID for computing embeddings"
     )
     similarity_threshold: float = Field(
-        default=0.75,
+        default=0.65,
         ge=0.0,
         le=1.0,
         description="Minimum cosine similarity to consider a taxonomy match"
     )
     dedup_threshold: float = Field(
-        default=0.85,
+        default=0.65,
         ge=0.0,
         le=1.0,
         description="Minimum similarity to consider predicates duplicates"

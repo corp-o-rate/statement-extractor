@@ -60,60 +60,59 @@ function PipelineDiagram() {
   );
 }
 
-// SVG Diagram: Retry Logic
-function RetryDiagram() {
+// SVG Diagram: v0.2.0 Processing Flow
+function ProcessingFlowDiagram() {
   return (
-    <svg viewBox="0 0 600 180" className="w-full max-w-2xl mx-auto my-6">
+    <svg viewBox="0 0 700 140" className="w-full max-w-3xl mx-auto my-6">
       {/* Generate */}
       <g>
-        <circle cx="80" cy="90" r="45" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
-        <text x="80" y="85" textAnchor="middle" className="fill-red-700 text-xs font-bold">Generate</text>
-        <text x="80" y="100" textAnchor="middle" className="fill-gray-500 text-xs">4 beams</text>
+        <rect x="20" y="40" width="100" height="60" rx="8" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
+        <text x="70" y="65" textAnchor="middle" className="fill-red-700 text-xs font-bold">Generate</text>
+        <text x="70" y="80" textAnchor="middle" className="fill-gray-500 text-xs">4 diverse beams</text>
       </g>
 
-      {/* Arrow to Check */}
-      <path d="M130 90 L180 90" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+      {/* Arrow 1 */}
+      <path d="M125 70 L165 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
 
-      {/* Check */}
+      {/* Score */}
       <g>
-        <polygon points="250,50 320,90 250,130 180,90" fill="#fefce8" stroke="#ca8a04" strokeWidth="2" />
-        <text x="250" y="85" textAnchor="middle" className="fill-yellow-700 text-xs font-bold">Enough</text>
-        <text x="250" y="100" textAnchor="middle" className="fill-yellow-700 text-xs font-bold">stmts?</text>
+        <rect x="170" y="40" width="100" height="60" rx="8" fill="#fefce8" stroke="#ca8a04" strokeWidth="2" />
+        <text x="220" y="65" textAnchor="middle" className="fill-yellow-700 text-xs font-bold">Score</text>
+        <text x="220" y="80" textAnchor="middle" className="fill-gray-500 text-xs">groundedness 0-1</text>
       </g>
 
-      {/* No - loop back */}
-      <path d="M250 130 L250 160 L80 160 L80 140" stroke="#ef4444" strokeWidth="2" fill="none" markerEnd="url(#arrowhead-red)" />
-      <text x="165" y="175" textAnchor="middle" className="fill-red-500 text-xs">No (retry up to 3x)</text>
+      {/* Arrow 2 */}
+      <path d="M275 70 L315 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
 
-      {/* Yes - continue */}
-      <path d="M320 90 L370 90" stroke="#22c55e" strokeWidth="2" markerEnd="url(#arrowhead-green)" />
-      <text x="345" y="80" textAnchor="middle" className="fill-green-600 text-xs">Yes</text>
-
-      {/* Select Best */}
+      {/* Merge Beams */}
       <g>
-        <rect x="375" y="60" width="90" height="60" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
-        <text x="420" y="85" textAnchor="middle" className="fill-green-700 text-xs font-bold">Select</text>
-        <text x="420" y="100" textAnchor="middle" className="fill-green-700 text-xs font-bold">Longest</text>
+        <rect x="320" y="40" width="100" height="60" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
+        <text x="370" y="65" textAnchor="middle" className="fill-green-700 text-xs font-bold">Merge</text>
+        <text x="370" y="80" textAnchor="middle" className="fill-gray-500 text-xs">top-N beams</text>
       </g>
 
-      {/* Arrow to Output */}
-      <path d="M470 90 L520 90" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+      {/* Arrow 3 */}
+      <path d="M425 70 L465 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+
+      {/* Deduplicate */}
+      <g>
+        <rect x="470" y="40" width="100" height="60" rx="8" fill="#f5f3ff" stroke="#7c3aed" strokeWidth="2" />
+        <text x="520" y="65" textAnchor="middle" className="fill-purple-700 text-xs font-bold">Deduplicate</text>
+        <text x="520" y="80" textAnchor="middle" className="fill-gray-500 text-xs">embeddings</text>
+      </g>
+
+      {/* Arrow 4 */}
+      <path d="M575 70 L615 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
 
       {/* Output */}
       <g>
-        <circle cx="555" cy="90" r="35" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
-        <text x="555" y="95" textAnchor="middle" className="fill-blue-700 text-xs font-bold">Output</text>
+        <circle cx="650" cy="70" r="35" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
+        <text x="650" y="75" textAnchor="middle" className="fill-blue-700 text-xs font-bold">Output</text>
       </g>
 
       <defs>
         <marker id="arrowhead2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
           <polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af" />
-        </marker>
-        <marker id="arrowhead-red" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444" />
-        </marker>
-        <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#22c55e" />
         </marker>
       </defs>
     </svg>
@@ -163,13 +162,17 @@ export function HowItWorks() {
           </p>
         </div>
 
-        {/* How the Handler Works */}
+        {/* v0.2.0 Processing Flow */}
         <div className="mb-12">
           <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
             <RefreshCw className="w-5 h-5 text-red-600" />
-            Smart Extraction Strategy
+            Quality-First Extraction <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-2">v0.2.0</span>
           </h3>
-          <RetryDiagram />
+          <ProcessingFlowDiagram />
+          <p className="text-gray-600 text-center max-w-2xl mx-auto mb-6">
+            Multiple beam outputs are scored for quality, merged for coverage, and deduplicated using
+            semantic similarity (paraphrase-MiniLM-L6-v2, 0.65 threshold).
+          </p>
           <div className="grid md:grid-cols-2 gap-6 mt-6">
             <div className="bg-gray-50 p-4 rounded-lg border">
               <h4 className="font-semibold mb-2">
@@ -250,6 +253,20 @@ export function HowItWorks() {
             <Target className="w-5 h-5 text-red-600" />
             Roadmap &amp; Areas for Improvement
           </h3>
+
+          {/* Completed in v0.2.0 */}
+          <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+            <h4 className="font-semibold text-green-800 mb-2 flex items-center gap-2">
+              <span className="text-green-600">✓</span> Completed in v0.2.0
+            </h4>
+            <ul className="text-sm text-green-700 space-y-1">
+              <li><strong>Confidence Scores</strong> — Each triple scored 0-1 for groundedness</li>
+              <li><strong>Beam Merging</strong> — Combines top beams for better coverage</li>
+              <li><strong>Embedding Dedup</strong> — Semantic similarity for predicate matching</li>
+            </ul>
+          </div>
+
+          {/* Planned */}
           <div className="grid md:grid-cols-2 gap-4">
             <div className="border-l-4 border-red-600 pl-4 py-2">
               <h4 className="font-semibold">Larger Training Dataset</h4>
@@ -260,12 +277,12 @@ export function HowItWorks() {
               <p className="text-sm text-gray-600">Better handling of statements that span multiple sentences</p>
             </div>
             <div className="border-l-4 border-red-600 pl-4 py-2">
-              <h4 className="font-semibold">Confidence Scores</h4>
-              <p className="text-sm text-gray-600">Adding extraction confidence to help filter uncertain results</p>
-            </div>
-            <div className="border-l-4 border-red-600 pl-4 py-2">
               <h4 className="font-semibold">Negation Handling</h4>
               <p className="text-sm text-gray-600">Better detection of negative statements and contradictions</p>
+            </div>
+            <div className="border-l-4 border-red-600 pl-4 py-2">
+              <h4 className="font-semibold">Relationship Type Classification</h4>
+              <p className="text-sm text-gray-600">Categorize extracted relationships (acquisition, partnership, etc.)</p>
             </div>
           </div>
         </div>

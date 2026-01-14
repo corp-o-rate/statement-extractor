@@ -1,0 +1,460 @@
+## API Reference
+
+<span id="api-reference" />
+
+### Functions
+
+<span id="functions" />
+
+The library provides convenience functions for quick extraction without managing extractor instances.
+
+<table>
+  <thead>
+    <tr>
+      <th>Function</th>
+      <th>Returns</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>extract_statements(text, options?)</code></td>
+      <td><code>ExtractionResult</code></td>
+      <td>Main extraction function. Returns structured statements with confidence scores.</td>
+    </tr>
+    <tr>
+      <td><code>extract_statements_as_json(text, options?, indent?)</code></td>
+      <td><code>str</code></td>
+      <td>Returns extraction result as a JSON string.</td>
+    </tr>
+    <tr>
+      <td><code>extract_statements_as_xml(text, options?)</code></td>
+      <td><code>str</code></td>
+      <td>Returns raw XML output from the model.</td>
+    </tr>
+    <tr>
+      <td><code>extract_statements_as_dict(text, options?)</code></td>
+      <td><code>dict</code></td>
+      <td>Returns extraction result as a Python dictionary.</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Function Signatures
+
+```python
+def extract_statements(
+    text: str,
+    options: Optional[ExtractionOptions] = None,
+    **kwargs
+) -> ExtractionResult:
+    """
+    Extract structured statements from text.
+
+    Args:
+        text: Input text to extract statements from
+        options: Extraction options (or pass individual options as kwargs)
+        **kwargs: Individual option overrides (num_beams, diversity_penalty, etc.)
+
+    Returns:
+        ExtractionResult containing Statement objects
+    """
+```
+
+```python
+def extract_statements_as_json(
+    text: str,
+    options: Optional[ExtractionOptions] = None,
+    indent: Optional[int] = 2,
+    **kwargs
+) -> str:
+    """Returns JSON string representation of the extraction result."""
+```
+
+```python
+def extract_statements_as_xml(
+    text: str,
+    options: Optional[ExtractionOptions] = None,
+    **kwargs
+) -> str:
+    """Returns XML string with <statements> containing <stmt> elements."""
+```
+
+```python
+def extract_statements_as_dict(
+    text: str,
+    options: Optional[ExtractionOptions] = None,
+    **kwargs
+) -> dict:
+    """Returns dictionary representation of the extraction result."""
+```
+
+#### Usage Examples
+
+```python
+from statement_extractor import extract_statements, extract_statements_as_json
+
+# Basic extraction
+result = extract_statements("Apple acquired Beats for $3 billion.")
+for stmt in result:
+    print(f"{stmt.subject.text} -> {stmt.predicate} -> {stmt.object.text}")
+
+# With options via kwargs
+result = extract_statements(
+    "Tesla announced new factories.",
+    num_beams=6,
+    diversity_penalty=1.5
+)
+
+# JSON output
+json_str = extract_statements_as_json("OpenAI released GPT-4.", indent=2)
+print(json_str)
+```
+
+---
+
+### Classes
+
+<span id="classes" />
+
+#### StatementExtractor
+
+The main extractor class with full control over device, model loading, and extraction options.
+
+```python
+class StatementExtractor:
+    def __init__(
+        self,
+        model_id: str = "Corp-o-Rate-Community/statement-extractor",
+        device: Optional[str] = None,
+        torch_dtype: Optional[torch.dtype] = None,
+        predicate_taxonomy: Optional[PredicateTaxonomy] = None,
+        predicate_config: Optional[PredicateComparisonConfig] = None,
+        scoring_config: Optional[ScoringConfig] = None,
+    ):
+        """
+        Initialize the statement extractor.
+
+        Args:
+            model_id: HuggingFace model ID or local path
+            device: Device to use ('cuda', 'cpu', or None for auto-detect)
+            torch_dtype: Torch dtype (default: bfloat16 on GPU, float32 on CPU)
+            predicate_taxonomy: Optional taxonomy for predicate normalization
+            predicate_config: Configuration for predicate comparison
+            scoring_config: Configuration for quality scoring
+        """
+
+    def extract(
+        self,
+        text: str,
+        options: Optional[ExtractionOptions] = None,
+    ) -> ExtractionResult:
+        """Extract statements from text."""
+
+    def extract_as_xml(
+        self,
+        text: str,
+        options: Optional[ExtractionOptions] = None,
+    ) -> str:
+        """Extract statements and return raw XML output."""
+
+    def extract_as_json(
+        self,
+        text: str,
+        options: Optional[ExtractionOptions] = None,
+        indent: Optional[int] = 2,
+    ) -> str:
+        """Extract statements and return JSON string."""
+
+    def extract_as_dict(
+        self,
+        text: str,
+        options: Optional[ExtractionOptions] = None,
+    ) -> dict:
+        """Extract statements and return as dictionary."""
+```
+
+**Example: Custom extractor with GPU control**
+
+```python
+from statement_extractor import StatementExtractor, ExtractionOptions
+
+# Force CPU usage
+extractor = StatementExtractor(device="cpu")
+
+# Extract with custom options
+options = ExtractionOptions(num_beams=6, diversity_penalty=1.2)
+result = extractor.extract("Microsoft partnered with OpenAI.", options)
+```
+
+---
+
+#### ExtractionOptions
+
+Configuration for the extraction process.
+
+```python
+class ExtractionOptions(BaseModel):
+    # Beam search parameters
+    num_beams: int = 4                    # 1-16, beams for diverse beam search
+    diversity_penalty: float = 1.0        # >= 0.0, penalty for beam diversity
+    max_new_tokens: int = 2048            # 128-8192, max tokens to generate
+    min_statement_ratio: float = 1.0      # >= 0.0, min statements per sentence
+    max_attempts: int = 3                 # 1-10, extraction retry attempts
+    deduplicate: bool = True              # Remove duplicate statements
+
+    # Predicate taxonomy & comparison
+    predicate_taxonomy: Optional[PredicateTaxonomy] = None
+    predicate_config: Optional[PredicateComparisonConfig] = None
+
+    # Scoring configuration (v0.2.0)
+    scoring_config: Optional[ScoringConfig] = None
+
+    # Pluggable canonicalization
+    entity_canonicalizer: Optional[Callable[[str], str]] = None
+
+    # Mode flags
+    merge_beams: bool = True              # Merge top-N beams vs select best
+    embedding_dedup: bool = True          # Use embedding similarity for dedup
+```
+
+---
+
+#### ScoringConfig
+
+Quality scoring parameters for beam selection and triple assessment. Added in v0.2.0.
+
+```python
+class ScoringConfig(BaseModel):
+    quality_weight: float = 1.0           # >= 0.0, weight for groundedness scores
+    coverage_weight: float = 0.5          # >= 0.0, bonus for source text coverage
+    redundancy_penalty: float = 0.3       # >= 0.0, penalty for duplicate triples
+    length_penalty: float = 0.1           # >= 0.0, penalty for verbosity
+    min_confidence: float = 0.0           # 0.0-1.0, minimum confidence threshold
+    merge_top_n: int = 3                  # 1-10, beams to merge when merge_beams=True
+```
+
+**Tuning for precision vs recall:**
+
+<table>
+  <thead>
+    <tr>
+      <th>Use Case</th>
+      <th>min_confidence</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>High recall</td>
+      <td>0.0</td>
+      <td>Keep all extractions</td>
+    </tr>
+    <tr>
+      <td>Balanced</td>
+      <td>0.5</td>
+      <td>Filter low-confidence triples</td>
+    </tr>
+    <tr>
+      <td>High precision</td>
+      <td>0.8</td>
+      <td>Only keep high-confidence triples</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+#### PredicateTaxonomy
+
+A taxonomy of canonical predicates for normalization.
+
+```python
+class PredicateTaxonomy(BaseModel):
+    predicates: list[str]                 # List of canonical predicate forms
+    name: Optional[str] = None            # Optional taxonomy name
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> "PredicateTaxonomy":
+        """Load taxonomy from a file (one predicate per line)."""
+
+    @classmethod
+    def from_list(cls, predicates: list[str], name: Optional[str] = None) -> "PredicateTaxonomy":
+        """Create taxonomy from a list of predicates."""
+```
+
+**Example:**
+
+```python
+from statement_extractor import PredicateTaxonomy, ExtractionOptions, extract_statements
+
+# Define canonical predicates
+taxonomy = PredicateTaxonomy.from_list([
+    "acquired", "founded", "works_for", "located_in", "partnered_with"
+])
+
+# Use in extraction
+options = ExtractionOptions(predicate_taxonomy=taxonomy)
+result = extract_statements("Google bought YouTube.", options)
+# predicate "bought" maps to canonical "acquired"
+```
+
+---
+
+#### PredicateComparisonConfig
+
+Configuration for embedding-based predicate comparison.
+
+```python
+class PredicateComparisonConfig(BaseModel):
+    embedding_model: str = "sentence-transformers/paraphrase-MiniLM-L6-v2"
+    similarity_threshold: float = 0.65    # 0.0-1.0, min similarity for taxonomy match
+    dedup_threshold: float = 0.65         # 0.0-1.0, min similarity for duplicates
+    normalize_text: bool = True           # Lowercase and strip before embedding
+```
+
+---
+
+### Data Models
+
+<span id="data-models" />
+
+All data models use Pydantic for validation and serialization.
+
+#### Statement
+
+A single extracted subject-predicate-object triple.
+
+```python
+class Statement(BaseModel):
+    subject: Entity                              # The subject entity
+    predicate: str                               # The relationship/predicate
+    object: Entity                               # The object entity
+    source_text: Optional[str] = None            # Original text span
+
+    # Quality scoring fields (v0.2.0)
+    confidence_score: Optional[float] = None     # 0.0-1.0, groundedness score
+    evidence_span: Optional[tuple[int, int]] = None  # Character offsets in source
+    canonical_predicate: Optional[str] = None    # Canonical form if taxonomy used
+
+    def as_triple(self) -> tuple[str, str, str]:
+        """Return as (subject, predicate, object) tuple."""
+
+    def __str__(self) -> str:
+        """Format: 'subject -- predicate --> object'"""
+```
+
+**Example:**
+
+```python
+stmt = result.statements[0]
+print(stmt.subject.text)           # "Apple Inc."
+print(stmt.predicate)              # "acquired"
+print(stmt.object.text)            # "Beats Electronics"
+print(stmt.confidence_score)       # 0.92
+print(stmt.as_triple())            # ("Apple Inc.", "acquired", "Beats Electronics")
+```
+
+---
+
+#### Entity
+
+An entity representing a subject or object.
+
+```python
+class Entity(BaseModel):
+    text: str                        # The entity text
+    type: EntityType = UNKNOWN       # The entity type
+
+    def __str__(self) -> str:
+        """Format: 'text (TYPE)'"""
+```
+
+---
+
+#### EntityType
+
+Enumeration of supported entity types.
+
+```python
+class EntityType(str, Enum):
+    ORG = "ORG"                 # Organization
+    PERSON = "PERSON"           # Person
+    GPE = "GPE"                 # Geopolitical entity (country, city, state)
+    LOC = "LOC"                 # Non-GPE location
+    PRODUCT = "PRODUCT"         # Product
+    EVENT = "EVENT"             # Event
+    WORK_OF_ART = "WORK_OF_ART" # Creative work
+    LAW = "LAW"                 # Legal document
+    DATE = "DATE"               # Date or time
+    MONEY = "MONEY"             # Monetary value
+    PERCENT = "PERCENT"         # Percentage
+    QUANTITY = "QUANTITY"       # Quantity or measurement
+    UNKNOWN = "UNKNOWN"         # Unknown type
+```
+
+---
+
+#### ExtractionResult
+
+Container for extraction results. Supports iteration and length.
+
+```python
+class ExtractionResult(BaseModel):
+    statements: list[Statement] = []     # List of extracted statements
+    source_text: Optional[str] = None    # Original input text
+
+    def __len__(self) -> int:
+        """Number of statements."""
+
+    def __iter__(self):
+        """Iterate over statements."""
+
+    def to_triples(self) -> list[tuple[str, str, str]]:
+        """Return all statements as (subject, predicate, object) tuples."""
+```
+
+**Example:**
+
+```python
+result = extract_statements(text)
+
+# Iterate directly
+for stmt in result:
+    print(stmt)
+
+# Check count
+print(f"Found {len(result)} statements")
+
+# Get as simple tuples
+triples = result.to_triples()
+```
+
+---
+
+#### PredicateMatch
+
+Result of matching a predicate to a canonical form.
+
+```python
+class PredicateMatch(BaseModel):
+    original: str                        # The original extracted predicate
+    canonical: Optional[str] = None      # Matched canonical predicate, if any
+    similarity: float = 0.0              # 0.0-1.0, cosine similarity score
+    matched: bool = False                # Whether a match was found above threshold
+```
+
+**Example:**
+
+```python
+from statement_extractor import PredicateComparer, PredicateTaxonomy
+
+taxonomy = PredicateTaxonomy.from_list(["acquired", "founded", "works_for"])
+comparer = PredicateComparer(taxonomy=taxonomy)
+
+match = comparer.match_to_canonical("bought")
+print(match.original)     # "bought"
+print(match.canonical)    # "acquired"
+print(match.similarity)   # ~0.82
+print(match.matched)      # True
+```

@@ -1,0 +1,127 @@
+## Deployment
+
+<span id="deployment" />
+
+### Local Inference
+
+<span id="local-inference" />
+
+**Hardware Requirements:**
+
+<table>
+  <thead>
+    <tr>
+      <th>Resource</th>
+      <th>Minimum</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>CPU-only</td>
+      <td>~4GB RAM</td>
+      <td>~30s per extraction</td>
+    </tr>
+    <tr>
+      <td>GPU</td>
+      <td>~2GB VRAM</td>
+      <td>~2s per extraction</td>
+    </tr>
+    <tr>
+      <td>Disk</td>
+      <td>~1.5GB</td>
+      <td>Model download size</td>
+    </tr>
+  </tbody>
+</table>
+
+**Setup steps:**
+
+```bash
+# Install the library
+pip install corp-extractor[embeddings]
+
+# For GPU support, install PyTorch with CUDA first
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+**Running locally:**
+
+```python
+from statement_extractor import StatementExtractor
+
+# Auto-detect GPU or fall back to CPU
+extractor = StatementExtractor()
+
+# Or explicitly set device
+extractor = StatementExtractor(device="cuda")  # GPU
+extractor = StatementExtractor(device="cpu")   # CPU
+```
+
+The model uses bfloat16 precision on GPU for faster inference and lower memory usage, and float32 on CPU.
+
+### RunPod Serverless
+
+<span id="runpod-serverless" />
+
+**Why RunPod:**
+
+- **Pay-per-use**: ~$0.0002/sec on average
+- **Scales to zero**: No cost when idle
+- **No infrastructure**: Managed GPU containers
+
+**Setup steps:**
+
+1. Clone the repository and build the Docker image:
+
+```bash
+cd runpod
+docker build --platform linux/amd64 -t your-username/statement-extractor .
+```
+
+2. Push to Docker Hub:
+
+```bash
+docker push your-username/statement-extractor
+```
+
+3. Create a RunPod serverless endpoint:
+   - Go to [RunPod Console](https://www.runpod.io/console/serverless?ref=sjoylkgj)
+   - Create new endpoint with your Docker image
+   - Configure GPU type (RTX 3090 recommended)
+   - Set Active Workers: 0, Max Workers: 1-3
+
+4. Call the API:
+
+```bash
+curl -X POST https://api.runpod.ai/v2/YOUR_ENDPOINT/runsync \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input": {"text": "<page>Your text here</page>"}}'
+```
+
+**Pricing:**
+
+<table>
+  <thead>
+    <tr>
+      <th>GPU Type</th>
+      <th>Cost</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>RTX 3090</td>
+      <td>~$0.00031/sec</td>
+      <td>Recommended</td>
+    </tr>
+    <tr>
+      <td>Idle</td>
+      <td>$0</td>
+      <td>Scales to zero</td>
+    </tr>
+  </tbody>
+</table>
+
+Typical extraction costs less than $0.001 per request at ~2s processing time.

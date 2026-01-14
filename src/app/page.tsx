@@ -8,7 +8,7 @@ import { StatementList } from '@/components/statement-list';
 import { StatementEditor } from '@/components/statement-editor';
 import { RelationshipGraph } from '@/components/relationship-graph';
 import { RateLimitBanner } from '@/components/rate-limit-banner';
-import { Documentation } from '@/components/documentation';
+import { QuickStart } from '@/components/documentation';
 import { LLMPrompts } from '@/components/llm-prompts';
 import { ExtractionResult, Statement, JobSubmissionResponse, JobStatusResponse } from '@/lib/types';
 import { getUserUuid } from '@/lib/user-uuid';
@@ -340,14 +340,14 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Documentation Section */}
+        {/* Quick Start Section */}
         <section className="py-12 px-4 sm:px-6 lg:px-8 bg-gray-50/50">
           <div className="max-w-6xl mx-auto">
             <div className="flex items-center gap-2 mb-6">
               <BookOpen className="w-5 h-5 text-red-600" />
-              <h2 className="font-bold text-xl">Documentation</h2>
+              <h2 className="font-bold text-xl">Quick Start</h2>
             </div>
-            <Documentation />
+            <QuickStart />
           </div>
         </section>
 

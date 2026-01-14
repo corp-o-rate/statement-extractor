@@ -30,12 +30,12 @@ export function Header() {
 
           {/* Navigation */}
           <nav className="flex items-center gap-4">
-            <a
-              href="#documentation"
-              className="hidden sm:inline text-sm text-gray-600 hover:text-black transition-colors"
+            <Link
+              href="/docs"
+              className="hidden sm:inline text-sm text-gray-600 hover:text-black transition-colors font-medium"
             >
-              Documentation
-            </a>
+              Docs
+            </Link>
             <a
               href="#llm-prompts"
               className="hidden sm:inline text-sm text-gray-600 hover:text-black transition-colors"

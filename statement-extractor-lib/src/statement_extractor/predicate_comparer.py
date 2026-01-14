@@ -216,22 +216,27 @@ class PredicateComparer:
 
         return results
 
-    def are_similar(self, pred1: str, pred2: str) -> bool:
+    def are_similar(
+        self,
+        pred1: str,
+        pred2: str,
+        threshold: Optional[float] = None
+    ) -> bool:
         """
         Check if two predicates are semantically similar.
-
-        Uses dedup_threshold from config.
 
         Args:
             pred1: First predicate
             pred2: Second predicate
+            threshold: Similarity threshold (uses config.dedup_threshold if not provided)
 
         Returns:
             True if predicates are similar above threshold
         """
         embeddings = self._compute_embeddings([pred1, pred2])
         similarity = self._cosine_similarity(embeddings[0], embeddings[1])
-        return similarity >= self.config.dedup_threshold
+        threshold = threshold if threshold is not None else self.config.dedup_threshold
+        return similarity >= threshold
 
     def compute_similarity(self, pred1: str, pred2: str) -> float:
         """

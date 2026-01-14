@@ -265,9 +265,9 @@ class BeamScorer:
         """
         Compute redundancy penalty for near-duplicate triples.
 
-        Checks for:
-        - Same subject + predicate with similar objects
-        - Same subject + object with similar predicates
+        Only counts exact duplicates (same subject, predicate, and object).
+        Note: Same subject+predicate with different objects is NOT redundant,
+        as it represents distinct relationships (e.g., "Apple announced iPhone and iPad").
         """
         if len(statements) < 2:
             return 0.0
@@ -279,14 +279,9 @@ class BeamScorer:
             for stmt2 in statements[i + 1:]:
                 total_pairs += 1
 
-                # Check if same subject and predicate
+                # Only count exact duplicates (same subject, predicate, AND object)
                 if (stmt1.subject.text.lower() == stmt2.subject.text.lower() and
-                    stmt1.predicate.lower() == stmt2.predicate.lower()):
-                    redundant_pairs += 1
-                    continue
-
-                # Check if same subject and object (different predicate)
-                if (stmt1.subject.text.lower() == stmt2.subject.text.lower() and
+                    stmt1.predicate.lower() == stmt2.predicate.lower() and
                     stmt1.object.text.lower() == stmt2.object.text.lower()):
                     redundant_pairs += 1
 

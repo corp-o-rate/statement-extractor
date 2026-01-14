@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Copy, Check, ExternalLink, Terminal, Code2, Server, Cloud } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -298,11 +298,53 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function Documentation() {
+// Map tab IDs to languages for syntax highlighting
+const TAB_LANGUAGES: Record<TabId, string> = {
+  python: 'python',
+  typescript: 'typescript',
+  runpod: 'bash',
+  local: 'bash',
+  output: 'xml',
+};
+
+function HighlightedCode({ code, language }: { code: string; language: string }) {
+  const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
+
+  useEffect(() => {
+    const highlight = async () => {
+      try {
+        const { highlightCode } = await import('@/lib/shiki');
+        const html = await highlightCode(code, language as any);
+        setHighlightedHtml(html);
+      } catch (error) {
+        console.error('Failed to highlight code:', error);
+        setHighlightedHtml(null);
+      }
+    };
+    highlight();
+  }, [code, language]);
+
+  if (highlightedHtml) {
+    return (
+      <div
+        className="shiki-wrapper [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:!m-0 [&_code]:!bg-transparent"
+        dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+      />
+    );
+  }
+
+  return (
+    <pre>
+      <code>{code}</code>
+    </pre>
+  );
+}
+
+export function QuickStart() {
   const [activeTab, setActiveTab] = useState<TabId>('python');
 
   return (
-    <div id="documentation">
+    <div id="quick-start">
       {/* Tab list */}
       <div className="tab-list overflow-x-auto">
         {TABS.map((tab) => (
@@ -353,11 +395,24 @@ export function Documentation() {
         </div>
 
         <div className="code-block overflow-x-auto max-h-[500px] overflow-y-auto">
-          <pre>
-            <code>{CODE_SNIPPETS[activeTab]}</code>
-          </pre>
+          <HighlightedCode
+            code={CODE_SNIPPETS[activeTab]}
+            language={TAB_LANGUAGES[activeTab]}
+          />
+        </div>
+
+        <div className="mt-6 text-center">
+          <a
+            href="/docs"
+            className="text-red-600 hover:underline font-medium"
+          >
+            View full documentation &rarr;
+          </a>
         </div>
       </div>
     </div>
   );
 }
+
+// Keep old export for backwards compatibility
+export const Documentation = QuickStart;

@@ -302,3 +302,120 @@ body::before {
   padding: 0.125rem 0.25rem;
   border-left: 2px solid var(--cta);
 }
+
+/* ============================================
+   Documentation Page Styles
+   ============================================ */
+
+/* Prose overrides for docs */
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+}
+
+.prose thead {
+  background: #f9fafb;
+}
+
+.prose th {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4b5563;
+  border-bottom: 2px solid var(--border);
+}
+
+.prose td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.875rem;
+  vertical-align: top;
+}
+
+.prose tr:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+/* Inline code in tables */
+.prose td code {
+  background: #f3f4f6;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--cta);
+}
+
+/* Code block wrapper for docs */
+.code-block-wrapper {
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid #2d2d2d;
+}
+
+.code-block-wrapper .code-block {
+  border-radius: 0;
+}
+
+/* Shiki styling overrides */
+.shiki-wrapper pre {
+  margin: 0 !important;
+  padding: 1rem !important;
+}
+
+.shiki-wrapper code {
+  display: block;
+  line-height: 1.7;
+}
+
+/* Mermaid diagram container */
+.mermaid-diagram {
+  background: #1f2937;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Docs table of contents */
+.docs-toc-item {
+  display: block;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  color: #6b7280;
+  border-left: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.docs-toc-item:hover {
+  color: #111827;
+  border-left-color: #d1d5db;
+}
+
+.docs-toc-item[data-active="true"] {
+  color: var(--cta);
+  font-weight: 600;
+  border-left-color: var(--cta);
+  background: rgba(220, 38, 38, 0.05);
+}
+
+/* Version badge */
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(220, 38, 38, 0.1);
+  color: var(--cta);
+  border-radius: 0.25rem;
+  margin-left: 0.5rem;
+}

@@ -1,0 +1,213 @@
+## Entity Types
+
+<a id="entity-types"></a>
+
+Corp-extractor classifies extracted subjects and objects into **13 entity types** based on common Named Entity Recognition (NER) standards. Understanding these types helps you filter and process extracted statements effectively.
+
+### Complete Entity Type Reference
+
+<a id="entity-type-table"></a>
+
+<table>
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th>Description</th>
+      <th>Examples</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ORG</code></td>
+      <td>Organizations, companies, agencies</td>
+      <td>Apple Inc., United Nations, FBI</td>
+    </tr>
+    <tr>
+      <td><code>PERSON</code></td>
+      <td>Individual people</td>
+      <td>Tim Cook, Elon Musk, Jane Doe</td>
+    </tr>
+    <tr>
+      <td><code>GPE</code></td>
+      <td>Geopolitical entities (countries, cities, states)</td>
+      <td>United States, California, Paris</td>
+    </tr>
+    <tr>
+      <td><code>LOC</code></td>
+      <td>Non-GPE locations</td>
+      <td>Pacific Ocean, Mount Everest, Central Park</td>
+    </tr>
+    <tr>
+      <td><code>PRODUCT</code></td>
+      <td>Products and services</td>
+      <td>iPhone 15, Model S, Gmail</td>
+    </tr>
+    <tr>
+      <td><code>EVENT</code></td>
+      <td>Events and occurrences</td>
+      <td>CES 2024, Annual Meeting, World Cup</td>
+    </tr>
+    <tr>
+      <td><code>WORK_OF_ART</code></td>
+      <td>Creative works, documents, reports</td>
+      <td>Sustainability Report, Mona Lisa</td>
+    </tr>
+    <tr>
+      <td><code>LAW</code></td>
+      <td>Legal documents and regulations</td>
+      <td>GDPR, Clean Air Act, Section 230</td>
+    </tr>
+    <tr>
+      <td><code>DATE</code></td>
+      <td>Dates and time periods</td>
+      <td>Q3 2024, January 15, 2030</td>
+    </tr>
+    <tr>
+      <td><code>MONEY</code></td>
+      <td>Monetary values</td>
+      <td>$4.7 billion, 100 million euros</td>
+    </tr>
+    <tr>
+      <td><code>PERCENT</code></td>
+      <td>Percentages</td>
+      <td>30%, 0.5%, 100%</td>
+    </tr>
+    <tr>
+      <td><code>QUANTITY</code></td>
+      <td>Quantities and measurements</td>
+      <td>1,000 employees, 50 megawatts</td>
+    </tr>
+    <tr>
+      <td><code>UNKNOWN</code></td>
+      <td>Unclassified entities (fallback)</td>
+      <td>(varies)</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+### Accessing Entity Types in Code
+
+<a id="accessing-entity-types"></a>
+
+Each extracted statement contains subject and object entities with a `type` attribute:
+
+```python
+from statement_extractor import extract_statements
+
+result = extract_statements("Apple CEO Tim Cook announced the iPhone 15.")
+
+for stmt in result:
+    print(f"Subject: {stmt.subject.text} ({stmt.subject.type})")
+    print(f"Object: {stmt.object.text} ({stmt.object.type})")
+```
+
+Output:
+
+```
+Subject: Apple (ORG)
+Object: Tim Cook (PERSON)
+Subject: Tim Cook (PERSON)
+Object: iPhone 15 (PRODUCT)
+```
+
+You can also import the `EntityType` enum for type checking and comparisons:
+
+```python
+from statement_extractor import extract_statements, EntityType
+
+result = extract_statements("Microsoft acquired Activision for $69 billion.")
+
+for stmt in result:
+    if stmt.subject.type == EntityType.ORG:
+        print(f"Organization found: {stmt.subject.text}")
+    if stmt.object.type == EntityType.MONEY:
+        print(f"Monetary value: {stmt.object.text}")
+```
+
+---
+
+### Filtering by Entity Type
+
+<a id="filtering-by-entity-type"></a>
+
+A common use case is extracting only statements involving specific entity types. Here is how to filter statements by subject or object type:
+
+```python
+from statement_extractor import extract_statements, EntityType
+
+text = """
+Apple announced revenue of $94.8 billion for Q3 2024.
+CEO Tim Cook presented at the company's Cupertino headquarters.
+The new iPhone 16 features improved battery life of 22 hours.
+"""
+
+result = extract_statements(text)
+
+# Filter for statements where subject is an organization
+org_statements = [
+    stmt for stmt in result
+    if stmt.subject.type == EntityType.ORG
+]
+
+# Filter for statements involving monetary values
+money_statements = [
+    stmt for stmt in result
+    if stmt.subject.type == EntityType.MONEY or stmt.object.type == EntityType.MONEY
+]
+
+# Filter for statements about people
+person_statements = [
+    stmt for stmt in result
+    if stmt.subject.type == EntityType.PERSON or stmt.object.type == EntityType.PERSON
+]
+
+print(f"Found {len(org_statements)} statements from organizations")
+print(f"Found {len(money_statements)} statements with monetary values")
+print(f"Found {len(person_statements)} statements about people")
+```
+
+---
+
+### The UNKNOWN Type
+
+<a id="unknown-type"></a>
+
+The `UNKNOWN` entity type is used as a fallback when the model cannot confidently classify an entity into one of the 12 standard categories. This typically occurs with:
+
+- **Specialized domain terms**: Technical jargon, industry-specific terminology
+- **Ambiguous entities**: Terms that could fit multiple categories depending on context
+- **Novel entities**: New terms or concepts not well-represented in training data
+- **Abstract concepts**: Ideas or qualities that do not fit standard NER categories
+
+```python
+from statement_extractor import extract_statements, EntityType
+
+result = extract_statements("The synergy initiative improved operational efficiency.")
+
+for stmt in result:
+    if stmt.subject.type == EntityType.UNKNOWN:
+        print(f"Unclassified entity: {stmt.subject.text}")
+        # Consider manual review or domain-specific handling
+```
+
+When you encounter `UNKNOWN` entities, consider:
+
+1. **Manual review**: Inspect the entity text to determine appropriate handling
+2. **Domain mapping**: Create application-specific mappings for recurring unknown entities
+3. **Context analysis**: Use surrounding statements to infer the entity's likely type
+
+---
+
+### Entity Type Standards
+
+<a id="entity-type-standards"></a>
+
+Corp-extractor's entity types are based on widely-adopted NER standards, including:
+
+- **OntoNotes 5.0**: The primary source for entity type definitions
+- **ACE (Automatic Content Extraction)**: Influences the GPE vs LOC distinction
+- **CoNLL-2003**: Foundational NER task categories
+
+This alignment with established standards ensures compatibility with other NLP tools and facilitates integration into existing data pipelines.
