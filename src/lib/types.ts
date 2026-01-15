@@ -17,6 +17,8 @@ export type EntityType =
   | 'QUANTITY'
   | 'UNKNOWN';
 
+export type ExtractionMethod = 'hybrid' | 'spacy' | 'split' | 'model';
+
 export interface Entity {
   name: string;
   type: EntityType;
@@ -27,10 +29,12 @@ export interface Statement {
   object: Entity;
   predicate: string;
   text: string;
-  /** Groundedness score (0-1) indicating how well the triple is supported by source text */
+  /** Semantic similarity score (0-1) between source text and reassembled triple */
   confidence?: number;
   /** Canonical form of the predicate if taxonomy matching was used */
   canonicalPredicate?: string;
+  /** Method used to extract this triple (hybrid, spacy, split, or model) */
+  extractionMethod?: ExtractionMethod;
 }
 
 export interface ExtractionResult {

@@ -14,11 +14,12 @@ import xml.etree.ElementTree as ET
 from typing import Optional
 
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 
 from .models import (
     Entity,
     EntityType,
+    ExtractionMethod,
     ExtractionOptions,
     ExtractionResult,
     PredicateComparisonConfig,
@@ -28,6 +29,114 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class StopOnSequence(StoppingCriteria):
+    """
+    Stop generation when a specific multi-token sequence is generated.
+
+    Decodes the generated tokens and checks if the stop sequence appears.
+    Works with sequences that span multiple tokens (e.g., "</statements>").
+    """
+
+    def __init__(self, tokenizer, stop_sequence: str, input_length: int):
+        self.tokenizer = tokenizer
+        self.stop_sequence = stop_sequence
+        self.input_length = input_length
+        # Track which beams have stopped (for batch generation)
+        self.stopped = set()
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        # Check each sequence in the batch
+        for idx, seq in enumerate(input_ids):
+            if idx in self.stopped:
+                continue
+            # Only decode the generated portion (after input)
+            generated = seq[self.input_length:]
+            decoded = self.tokenizer.decode(generated, skip_special_tokens=True)
+            if self.stop_sequence in decoded:
+                self.stopped.add(idx)
+
+        # Stop when ALL sequences have the stop sequence
+        return len(self.stopped) >= len(input_ids)
+
+
+def repair_xml(xml_string: str) -> tuple[str, list[str]]:
+    """
+    Attempt to repair common XML syntax errors.
+
+    Returns:
+        Tuple of (repaired_xml, list_of_repairs_made)
+    """
+    repairs = []
+    original = xml_string
+
+    # 1. Fix unescaped ampersands (but not already escaped entities)
+    # Match & not followed by amp; lt; gt; quot; apos; or #
+    ampersand_pattern = r'&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)'
+    if re.search(ampersand_pattern, xml_string):
+        xml_string = re.sub(ampersand_pattern, '&amp;', xml_string)
+        repairs.append("escaped unescaped ampersands")
+
+    # 2. Fix unescaped < and > inside text content (not tags)
+    # This is tricky - we need to be careful not to break actual tags
+    # For now, just handle the most common case: < followed by space or lowercase
+    less_than_pattern = r'<(?=\s|[a-z]{2,}[^a-z/>])'
+    if re.search(less_than_pattern, xml_string):
+        xml_string = re.sub(less_than_pattern, '&lt;', xml_string)
+        repairs.append("escaped unescaped less-than signs")
+
+    # 3. Fix truncated closing tags (e.g., "</statemen" -> try to complete)
+    truncated_patterns = [
+        (r'</statement[^s>]*$', '</statements>'),
+        (r'</stm[^t>]*$', '</stmt>'),
+        (r'</subjec[^t>]*$', '</subject>'),
+        (r'</objec[^t>]*$', '</object>'),
+        (r'</predica[^t>]*$', '</predicate>'),
+        (r'</tex[^t>]*$', '</text>'),
+    ]
+    for pattern, replacement in truncated_patterns:
+        if re.search(pattern, xml_string):
+            xml_string = re.sub(pattern, replacement, xml_string)
+            repairs.append(f"completed truncated tag: {replacement}")
+
+    # 4. Add missing </statements> if we have <statements> but no closing
+    if '<statements>' in xml_string and '</statements>' not in xml_string:
+        # Try to find a good place to add it
+        # Look for the last complete </stmt> and add after it
+        last_stmt = xml_string.rfind('</stmt>')
+        if last_stmt != -1:
+            insert_pos = last_stmt + len('</stmt>')
+            xml_string = xml_string[:insert_pos] + '</statements>'
+            repairs.append("added missing </statements> after last </stmt>")
+        else:
+            xml_string = xml_string + '</statements>'
+            repairs.append("added missing </statements> at end")
+
+    # 5. Fix unclosed <stmt> tags - find <stmt> without matching </stmt>
+    # Count opens and closes
+    open_stmts = len(re.findall(r'<stmt>', xml_string))
+    close_stmts = len(re.findall(r'</stmt>', xml_string))
+    if open_stmts > close_stmts:
+        # Find incomplete statement blocks and try to close them
+        # Look for patterns like <stmt>...<subject>...</subject> without </stmt>
+        # This is complex, so just add closing tags before </statements>
+        missing = open_stmts - close_stmts
+        if '</statements>' in xml_string:
+            xml_string = xml_string.replace('</statements>', '</stmt>' * missing + '</statements>')
+            repairs.append(f"added {missing} missing </stmt> tag(s)")
+
+    # 6. Remove any content after </statements>
+    end_pos = xml_string.find('</statements>')
+    if end_pos != -1:
+        end_pos += len('</statements>')
+        if end_pos < len(xml_string):
+            xml_string = xml_string[:end_pos]
+            repairs.append("removed content after </statements>")
+
+    if xml_string != original:
+        return xml_string, repairs
+    return xml_string, []
 
 # Default model
 DEFAULT_MODEL_ID = "Corp-o-Rate-Community/statement-extractor"
@@ -327,12 +436,13 @@ class StatementExtractor:
             # Parse each candidate to statements
             parsed_candidates = []
             for i, xml_output in enumerate(candidates):
-                statements = self._parse_xml_to_statements(xml_output)
+                statements = self._parse_xml_to_statements(xml_output, options)
                 if statements:
                     parsed_candidates.append(statements)
                     logger.debug(f"  Beam {i}: {len(statements)} statements parsed")
                 else:
-                    logger.debug(f"  Beam {i}: 0 statements (parse failed)")
+                    logger.warning(f"  Beam {i}: 0 statements (parse failed)")
+                    logger.warning(f"  Beam {i} XML output:\n{xml_output}")
 
             all_candidates.extend(parsed_candidates)
 
@@ -395,6 +505,15 @@ class StatementExtractor:
         else:
             logger.debug("Deduplication disabled")
 
+        # Select best triple per source text (unless all_triples enabled)
+        if not options.all_triples:
+            logger.debug("-" * 40)
+            logger.debug("PHASE 5: Best Triple Selection")
+            logger.debug("-" * 40)
+            pre_select_count = len(statements)
+            statements = self._select_best_per_source(statements)
+            logger.debug(f"  Selected best per source: {len(statements)} statements (from {pre_select_count})")
+
         # Log final statements
         logger.debug("-" * 40)
         logger.debug("FINAL STATEMENTS:")
@@ -414,6 +533,14 @@ class StatementExtractor:
         """Generate multiple candidate beams using diverse beam search."""
         num_seqs = options.num_beams
 
+        # Create stopping criteria to stop when </statements> is generated
+        input_length = inputs["input_ids"].shape[1]
+        stop_criteria = StopOnSequence(
+            tokenizer=self.tokenizer,
+            stop_sequence="</statements>",
+            input_length=input_length,
+        )
+
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -428,6 +555,7 @@ class StatementExtractor:
                 top_k=None,  # Override model config to suppress warning
                 trust_remote_code=True,
                 custom_generate="transformers-community/group-beam-search",
+                stopping_criteria=StoppingCriteriaList([stop_criteria]),
             )
 
         # Decode and process candidates
@@ -511,6 +639,50 @@ class StatementExtractor:
             entity_canonicalizer=options.entity_canonicalizer
         )
 
+    def _select_best_per_source(
+        self,
+        statements: list[Statement],
+    ) -> list[Statement]:
+        """
+        Select the highest-scoring triple for each unique source text.
+
+        Groups statements by source_text and keeps only the one with
+        the highest confidence_score from each group.
+
+        Statements without source_text are kept as-is.
+        """
+        if not statements:
+            return statements
+
+        # Group by source_text
+        from collections import defaultdict
+        groups: dict[str | None, list[Statement]] = defaultdict(list)
+
+        for stmt in statements:
+            groups[stmt.source_text].append(stmt)
+
+        # Select best from each group
+        result: list[Statement] = []
+
+        for source_text, group in groups.items():
+            if source_text is None or len(group) == 1:
+                # No source text or only one statement - keep as-is
+                result.extend(group)
+            else:
+                # Multiple candidates for same source - select best
+                best = max(
+                    group,
+                    key=lambda s: s.confidence_score if s.confidence_score is not None else 0.0
+                )
+                logger.debug(
+                    f"  Selected best for source '{source_text[:40]}...': "
+                    f"'{best.subject.text}' --[{best.predicate}]--> '{best.object.text}' "
+                    f"(score={best.confidence_score:.2f}, method={best.extraction_method.value})"
+                )
+                result.append(best)
+
+        return result
+
     def _deduplicate_xml(self, xml_output: str) -> str:
         """Remove duplicate <stmt> blocks from XML output (legacy method)."""
         try:
@@ -540,48 +712,159 @@ class StatementExtractor:
 
         return ET.tostring(new_root, encoding='unicode')
 
-    def _parse_xml_to_statements(self, xml_output: str) -> list[Statement]:
-        """Parse XML output into Statement objects."""
+    def _parse_xml_to_statements(
+        self,
+        xml_output: str,
+        options: Optional[ExtractionOptions] = None,
+    ) -> list[Statement]:
+        """
+        Parse XML output into Statement objects.
+
+        Uses model for subject, object, entity types, and source_text.
+        Always uses spaCy for predicate extraction (model predicates are unreliable).
+
+        Produces two candidates for each statement:
+        1. Hybrid: model subject/object + spaCy predicate
+        2. spaCy-only: all components from spaCy
+
+        Both go into the candidate pool; scoring/dedup picks the best.
+        """
         statements: list[Statement] = []
+        use_spacy_extraction = options.use_spacy_extraction if options else True
 
         try:
             root = ET.fromstring(xml_output)
         except ET.ParseError as e:
             # Log full output for debugging
-            logger.warning(f"Failed to parse XML output: {e}")
-            logger.warning(f"Full XML output ({len(xml_output)} chars):\n{xml_output}")
-            return statements
+            logger.debug(f"Initial XML parse failed: {e}")
+            logger.debug(f"Raw XML output ({len(xml_output)} chars):\n{xml_output}")
+
+            # Try to repair the XML
+            repaired_xml, repairs = repair_xml(xml_output)
+            if repairs:
+                logger.debug(f"Attempted XML repairs: {', '.join(repairs)}")
+                try:
+                    root = ET.fromstring(repaired_xml)
+                    logger.info(f"XML repair successful, parsing repaired output")
+                except ET.ParseError as e2:
+                    logger.warning(f"XML repair failed, still cannot parse: {e2}")
+                    logger.warning(f"Repaired XML ({len(repaired_xml)} chars):\n{repaired_xml}")
+                    return statements
+            else:
+                logger.warning(f"No repairs possible for XML output")
+                logger.warning(f"Full XML output ({len(xml_output)} chars):\n{xml_output}")
+                return statements
 
         if root.tag != 'statements':
+            logger.warning(f"Root tag is '{root.tag}', expected 'statements'")
             return statements
 
         for stmt_elem in root.findall('stmt'):
             try:
-                # Parse subject
+                # Parse subject from model
                 subject_elem = stmt_elem.find('subject')
                 subject_text = subject_elem.text.strip() if subject_elem is not None and subject_elem.text else ""
                 subject_type = self._parse_entity_type(subject_elem.get('type') if subject_elem is not None else None)
 
-                # Parse object
+                # Parse object from model
                 object_elem = stmt_elem.find('object')
                 object_text = object_elem.text.strip() if object_elem is not None and object_elem.text else ""
                 object_type = self._parse_entity_type(object_elem.get('type') if object_elem is not None else None)
 
-                # Parse predicate
-                predicate_elem = stmt_elem.find('predicate')
-                predicate = predicate_elem.text.strip() if predicate_elem is not None and predicate_elem.text else ""
-
-                # Parse source text
+                # Parse source text from model
                 text_elem = stmt_elem.find('text')
                 source_text = text_elem.text.strip() if text_elem is not None and text_elem.text else None
 
-                if subject_text and predicate and object_text:
-                    statements.append(Statement(
-                        subject=Entity(text=subject_text, type=subject_type),
-                        predicate=predicate,
-                        object=Entity(text=object_text, type=object_type),
-                        source_text=source_text,
-                    ))
+                # Skip if missing required components from model
+                if not subject_text or not object_text:
+                    logger.debug(f"Skipping statement: missing subject or object from model")
+                    continue
+
+                if use_spacy_extraction and source_text:
+                    try:
+                        from .spacy_extraction import extract_triple_from_text, extract_triple_by_predicate_split
+                        spacy_result = extract_triple_from_text(
+                            source_text=source_text,
+                            model_subject=subject_text,
+                            model_object=object_text,
+                            model_predicate="",  # Don't pass model predicate
+                        )
+                        if spacy_result:
+                            spacy_subj, spacy_pred, spacy_obj = spacy_result
+
+                            if spacy_pred:
+                                # Candidate 1: Hybrid (model subject/object + spaCy predicate)
+                                logger.debug(
+                                    f"Adding hybrid candidate: '{subject_text}' --[{spacy_pred}]--> '{object_text}'"
+                                )
+                                statements.append(Statement(
+                                    subject=Entity(text=subject_text, type=subject_type),
+                                    predicate=spacy_pred,
+                                    object=Entity(text=object_text, type=object_type),
+                                    source_text=source_text,
+                                    extraction_method=ExtractionMethod.HYBRID,
+                                ))
+
+                                # Candidate 2: spaCy-only (if different from hybrid)
+                                if spacy_subj and spacy_obj:
+                                    is_different = (spacy_subj != subject_text or spacy_obj != object_text)
+                                    if is_different:
+                                        logger.debug(
+                                            f"Adding spaCy-only candidate: '{spacy_subj}' --[{spacy_pred}]--> '{spacy_obj}'"
+                                        )
+                                        statements.append(Statement(
+                                            subject=Entity(text=spacy_subj, type=subject_type),
+                                            predicate=spacy_pred,
+                                            object=Entity(text=spacy_obj, type=object_type),
+                                            source_text=source_text,
+                                            extraction_method=ExtractionMethod.SPACY,
+                                        ))
+
+                                # Candidate 3: Predicate-split (split source text around predicate)
+                                split_result = extract_triple_by_predicate_split(
+                                    source_text=source_text,
+                                    predicate=spacy_pred,
+                                )
+                                if split_result:
+                                    split_subj, split_pred, split_obj = split_result
+                                    # Only add if different from previous candidates
+                                    is_different_from_hybrid = (split_subj != subject_text or split_obj != object_text)
+                                    is_different_from_spacy = (split_subj != spacy_subj or split_obj != spacy_obj)
+                                    if is_different_from_hybrid and is_different_from_spacy:
+                                        logger.debug(
+                                            f"Adding predicate-split candidate: '{split_subj}' --[{split_pred}]--> '{split_obj}'"
+                                        )
+                                        statements.append(Statement(
+                                            subject=Entity(text=split_subj, type=subject_type),
+                                            predicate=split_pred,
+                                            object=Entity(text=split_obj, type=object_type),
+                                            source_text=source_text,
+                                            extraction_method=ExtractionMethod.SPLIT,
+                                        ))
+                            else:
+                                logger.debug(
+                                    f"spaCy found no predicate for: '{subject_text}' --> '{object_text}'"
+                                )
+                    except Exception as e:
+                        logger.debug(f"spaCy extraction failed: {e}")
+                else:
+                    # spaCy disabled - fall back to model predicate
+                    predicate_elem = stmt_elem.find('predicate')
+                    model_predicate = predicate_elem.text.strip() if predicate_elem is not None and predicate_elem.text else ""
+
+                    if model_predicate:
+                        statements.append(Statement(
+                            subject=Entity(text=subject_text, type=subject_type),
+                            predicate=model_predicate,
+                            object=Entity(text=object_text, type=object_type),
+                            source_text=source_text,
+                            extraction_method=ExtractionMethod.MODEL,
+                        ))
+                    else:
+                        logger.debug(
+                            f"Skipping statement (no predicate, spaCy disabled): "
+                            f"'{subject_text}' --> '{object_text}'"
+                        )
             except Exception as e:
                 logger.warning(f"Failed to parse statement: {e}")
                 continue

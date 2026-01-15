@@ -254,15 +254,16 @@ export function HowItWorks() {
             Roadmap &amp; Areas for Improvement
           </h3>
 
-          {/* Completed in v0.2.0 */}
+          {/* Completed */}
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
             <h4 className="font-semibold text-green-800 mb-2 flex items-center gap-2">
-              <span className="text-green-600">✓</span> Completed in v0.2.0
+              <span className="text-green-600">✓</span> Recently Completed
             </h4>
             <ul className="text-sm text-green-700 space-y-1">
-              <li><strong>Confidence Scores</strong> — Each triple scored 0-1 for groundedness</li>
-              <li><strong>Beam Merging</strong> — Combines top beams for better coverage</li>
-              <li><strong>Embedding Dedup</strong> — Semantic similarity for predicate matching</li>
+              <li><strong>Confidence Scores</strong> <span className="text-xs">(v0.2.0)</span> — Each triple scored 0-1 for groundedness</li>
+              <li><strong>Beam Merging</strong> <span className="text-xs">(v0.2.0)</span> — Combines top beams for better coverage</li>
+              <li><strong>Embedding Dedup</strong> <span className="text-xs">(v0.2.0)</span> — Semantic similarity for predicate matching</li>
+              <li><strong>Hybrid spaCy Extraction</strong> <span className="text-xs">(v0.2.12)</span> — Adds spaCy candidates to pool, dedup picks the best</li>
             </ul>
           </div>
 

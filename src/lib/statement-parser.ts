@@ -27,7 +27,7 @@
  * </statements>
  */
 
-import { Statement, EntityType, Entity } from './types';
+import { Statement, EntityType, Entity, ExtractionMethod } from './types';
 
 // Type for the JSON format from the library
 interface LibraryEntity {
@@ -43,6 +43,7 @@ interface LibraryStatement {
   confidence_score?: number | null;
   canonical_predicate?: string | null;
   evidence_span?: [number, number] | null;
+  extraction_method?: string | null;
 }
 
 interface LibraryExtractionResult {
@@ -67,6 +68,22 @@ function parseEntityType(typeStr: string | null): EntityType {
   }
 
   return 'UNKNOWN';
+}
+
+/**
+ * Parse extraction method from string
+ */
+function parseExtractionMethod(methodStr: string | null | undefined): ExtractionMethod | undefined {
+  if (!methodStr) return undefined;
+
+  const normalized = methodStr.toLowerCase().trim();
+  const validMethods: ExtractionMethod[] = ['hybrid', 'spacy', 'split', 'model'];
+
+  if (validMethods.includes(normalized as ExtractionMethod)) {
+    return normalized as ExtractionMethod;
+  }
+
+  return undefined;
 }
 
 /**
@@ -192,6 +209,7 @@ function parseJsonStatements(data: LibraryExtractionResult | LibraryStatement[])
     text: stmt.source_text || `${stmt.subject?.text || ''} ${stmt.predicate || ''} ${stmt.object?.text || ''}`.trim(),
     confidence: stmt.confidence_score ?? undefined,
     canonicalPredicate: stmt.canonical_predicate ?? undefined,
+    extractionMethod: parseExtractionMethod(stmt.extraction_method),
   })).filter((stmt: Statement) => stmt.subject.name && stmt.predicate);
 }
 

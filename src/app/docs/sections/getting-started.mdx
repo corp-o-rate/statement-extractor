@@ -6,17 +6,11 @@
 
 <span id="installation" />
 
-Basic installation:
-
 ```bash
 pip install corp-extractor
 ```
 
-With embeddings support for semantic similarity and clustering:
-
-```bash
-pip install "corp-extractor[embeddings]"
-```
+The spaCy model for predicate inference is downloaded automatically on first use.
 
 **GPU support**: Install PyTorch with CUDA before installing corp-extractor. The library auto-detects GPU availability at runtime.
 
@@ -29,7 +23,7 @@ pip install corp-extractor
 **Apple Silicon (M1/M2/M3)**: MPS acceleration is automatically detected. Just install normally:
 
 ```bash
-pip install "corp-extractor[embeddings]"
+pip install corp-extractor
 ```
 
 ### Quick Start
@@ -111,13 +105,13 @@ This maps synonyms like "bought", "purchased", "acquired" to a single canonical 
     </tr>
     <tr>
       <td>PyTorch</td>
-      <td>2.6.0+</td>
+      <td>2.0+</td>
       <td>Required</td>
     </tr>
     <tr>
       <td>transformers</td>
-      <td>git (dev)</td>
-      <td>Required, from <a href="https://github.com/huggingface/transformers">GitHub</a></td>
+      <td>5.0+</td>
+      <td>Required for T5-Gemma2 support</td>
     </tr>
     <tr>
       <td>Pydantic</td>
@@ -127,7 +121,12 @@ This maps synonyms like "bought", "purchased", "acquired" to a single canonical 
     <tr>
       <td>sentence-transformers</td>
       <td>2.2+</td>
-      <td>Optional, for <code>[embeddings]</code></td>
+      <td>Required, for embedding features</td>
+    </tr>
+    <tr>
+      <td>spaCy</td>
+      <td>3.5+</td>
+      <td>Required, for predicate inference (model auto-downloads)</td>
     </tr>
   </tbody>
 </table>

@@ -2,76 +2,194 @@
 Scoring module for statement extraction quality assessment.
 
 Provides:
-- TripleScorer: Score individual triples for groundedness
+- TripleScorer: Score individual triples combining semantic similarity and grammatical accuracy
 - BeamScorer: Score and select/merge beams based on quality metrics
 """
 
 import logging
 from typing import Optional
 
+import numpy as np
+
 from .models import ScoringConfig, Statement
 
 logger = logging.getLogger(__name__)
 
+# Lazy-loaded spaCy model for grammatical analysis
+_nlp = None
+
+
+def _get_nlp():
+    """Lazy-load spaCy model for POS tagging."""
+    global _nlp
+    if _nlp is None:
+        import spacy
+        try:
+            _nlp = spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
+        except OSError:
+            # Model not found, try to download
+            from .spacy_extraction import _download_model
+            if _download_model():
+                _nlp = spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
+            else:
+                raise
+    return _nlp
+
 
 class TripleScorer:
     """
-    Score individual triples for groundedness in source text.
+    Score individual triples combining semantic similarity and grammatical accuracy.
 
-    Groundedness is measured by checking:
-    - Subject text appears in source
-    - Object text appears in source
-    - Subject and object are in proximity (same/nearby sentences)
-    - Evidence span exists and is valid
+    The score is a weighted combination of:
+    - Semantic similarity (50%): Cosine similarity between source text and reassembled triple
+    - Subject noun score (25%): How noun-like the subject is
+    - Object noun score (25%): How noun-like the object is
+
+    Noun scoring:
+    - Proper noun only (PROPN): 1.0
+    - Common noun only (NOUN): 0.8
+    - Contains noun + other words: 0.6
+    - No noun: 0.2
     """
 
-    def __init__(self, config: Optional[ScoringConfig] = None):
+    def __init__(
+        self,
+        config: Optional[ScoringConfig] = None,
+        device: Optional[str] = None,
+    ):
         self.config = config or ScoringConfig()
+
+        # Auto-detect device
+        if device is None:
+            import torch
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+        else:
+            self.device = device
+
+        # Lazy-loaded embedding model
+        self._model = None
+        self._embedding_model_name = "all-MiniLM-L6-v2"
+
+    def _load_model(self):
+        """Load sentence-transformers model lazily."""
+        if self._model is not None:
+            return
+
+        from sentence_transformers import SentenceTransformer
+
+        logger.debug(f"Loading embedding model: {self._embedding_model_name} on {self.device}")
+        self._model = SentenceTransformer(self._embedding_model_name, device=self.device)
+        logger.debug(f"Embedding model loaded on {self.device}")
+
+    def _compute_embeddings(self, texts: list[str]) -> np.ndarray:
+        """Compute embeddings for a list of texts."""
+        self._load_model()
+        return self._model.encode(texts, convert_to_numpy=True)
+
+    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Compute cosine similarity between two vectors."""
+        dot = np.dot(vec1, vec2)
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        return float(dot / (norm1 * norm2))
+
+    def _score_noun_content(self, text: str) -> float:
+        """
+        Score how noun-like a text is.
+
+        Returns:
+            1.0 - Entirely proper noun(s)
+            0.8 - Entirely common noun(s)
+            0.6 - Contains noun(s) but also other words
+            0.2 - No nouns found
+        """
+        if not text or not text.strip():
+            return 0.2
+
+        try:
+            nlp = _get_nlp()
+            doc = nlp(text)
+
+            # Count token types (excluding punctuation and spaces)
+            tokens = [t for t in doc if not t.is_punct and not t.is_space]
+            if not tokens:
+                return 0.2
+
+            proper_nouns = sum(1 for t in tokens if t.pos_ == "PROPN")
+            common_nouns = sum(1 for t in tokens if t.pos_ == "NOUN")
+            total_nouns = proper_nouns + common_nouns
+            total_tokens = len(tokens)
+
+            if total_nouns == 0:
+                # No nouns at all
+                return 0.2
+
+            if total_nouns == total_tokens:
+                # Entirely nouns
+                if proper_nouns == total_tokens:
+                    # All proper nouns
+                    return 1.0
+                elif common_nouns == total_tokens:
+                    # All common nouns
+                    return 0.8
+                else:
+                    # Mix of proper and common nouns
+                    return 0.9
+
+            # Contains nouns but also other words
+            # Score based on noun ratio
+            noun_ratio = total_nouns / total_tokens
+            return 0.4 + (noun_ratio * 0.4)  # Range: 0.4 to 0.8
+
+        except Exception as e:
+            logger.debug(f"Noun scoring failed for '{text}': {e}")
+            return 0.5  # Neutral score on error
 
     def score_triple(self, statement: Statement, source_text: str) -> float:
         """
-        Score a triple's groundedness (0-1).
+        Score a triple's quality (0-1) combining semantic similarity and grammatical accuracy.
 
-        Higher scores indicate better grounding in source text.
+        The score is a weighted combination of:
+        - Semantic similarity (50%): How well the triple captures the source meaning
+        - Subject noun score (25%): Grammatical quality of subject
+        - Object noun score (25%): Grammatical quality of object
+
+        Higher scores indicate better overall quality.
         """
-        if not source_text:
+        # Use statement's source_text if available, otherwise use provided source_text
+        reference_text = statement.source_text or source_text
+        if not reference_text:
             logger.debug(f"  No source text, returning neutral score 0.5")
             return 0.5  # Neutral score if no source text
 
-        score = 0.0
-        weights_sum = 0.0
+        # Reassemble the triple
+        reassembled = f"{statement.subject.text} {statement.predicate} {statement.object.text}"
 
-        # Check subject appears in source (weight: 0.3)
-        subject_found = self._text_appears_in(statement.subject.text, source_text)
-        score += 0.3 * (1.0 if subject_found else 0.0)
-        weights_sum += 0.3
+        # Compute semantic similarity
+        embeddings = self._compute_embeddings([reference_text, reassembled])
+        semantic_similarity = self._cosine_similarity(embeddings[0], embeddings[1])
 
-        # Check object appears in source (weight: 0.3)
-        object_found = self._text_appears_in(statement.object.text, source_text)
-        score += 0.3 * (1.0 if object_found else 0.0)
-        weights_sum += 0.3
+        # Compute grammatical scores for subject and object
+        subject_noun_score = self._score_noun_content(statement.subject.text)
+        object_noun_score = self._score_noun_content(statement.object.text)
 
-        # Check predicate has lexical trigger (weight: 0.2)
-        predicate_grounded = self._predicate_has_trigger(statement.predicate, source_text)
-        score += 0.2 * (1.0 if predicate_grounded else 0.0)
-        weights_sum += 0.2
-
-        # Check proximity - subject and object in same/nearby region (weight: 0.2)
-        proximity_score = 0.0
-        if subject_found and object_found:
-            proximity_score = self._compute_proximity(
-                statement.subject.text,
-                statement.object.text,
-                source_text
-            )
-            score += 0.2 * proximity_score
-        weights_sum += 0.2
-
-        final_score = score / weights_sum if weights_sum > 0 else 0.0
+        # Weighted combination: 50% semantic, 25% subject, 25% object
+        final_score = (
+            semantic_similarity * 0.5 +
+            subject_noun_score * 0.25 +
+            object_noun_score * 0.25
+        )
 
         logger.debug(
             f"  Score for '{statement.subject.text}' --[{statement.predicate}]--> '{statement.object.text}': "
-            f"{final_score:.2f} (subj={subject_found}, obj={object_found}, pred={predicate_grounded}, prox={proximity_score:.2f})"
+            f"{final_score:.3f} (semantic={semantic_similarity:.2f}, subj_noun={subject_noun_score:.2f}, obj_noun={object_noun_score:.2f})"
         )
 
         return final_score
@@ -114,54 +232,6 @@ class TripleScorer:
             return (start, end)
 
         return None
-
-    def _text_appears_in(self, text: str, source: str) -> bool:
-        """Check if text appears in source (case-insensitive)."""
-        return text.lower() in source.lower()
-
-    def _predicate_has_trigger(self, predicate: str, source: str) -> bool:
-        """Check if predicate has a lexical trigger in source."""
-        # Extract main verb/word from predicate
-        words = predicate.lower().split()
-        source_lower = source.lower()
-
-        # Check if any predicate word appears in source
-        for word in words:
-            if len(word) > 2 and word in source_lower:
-                return True
-        return False
-
-    def _compute_proximity(
-        self,
-        subject_text: str,
-        object_text: str,
-        source: str
-    ) -> float:
-        """
-        Compute proximity score (0-1) based on distance between subject and object.
-
-        Returns 1.0 if same sentence, decreasing with distance.
-        """
-        source_lower = source.lower()
-        subj_pos = source_lower.find(subject_text.lower())
-        obj_pos = source_lower.find(object_text.lower())
-
-        if subj_pos < 0 or obj_pos < 0:
-            return 0.0
-
-        # Check if in same sentence
-        start = min(subj_pos, obj_pos)
-        end = max(subj_pos, obj_pos)
-        region = source[start:end]
-
-        # If no sentence boundary between them, high proximity
-        if '.' not in region and '!' not in region and '?' not in region:
-            return 1.0
-
-        # Otherwise, score decreases with distance
-        # Assume ~100 chars per sentence on average
-        sentence_distance = region.count('.') + region.count('!') + region.count('?')
-        return max(0.0, 1.0 - (sentence_distance * 0.2))
 
     def _extend_to_sentence(
         self,
@@ -402,7 +472,7 @@ class BeamScorer:
         # Deduplicate - keep highest confidence for each (subject, predicate, object)
         # Note: Same subject+predicate with different objects is valid (e.g., "Apple announced X and Y")
         seen: dict[tuple[str, str, str], Statement] = {}
-        for stmt in consistent:
+        for stmt in all_statements:
             key = (
                 stmt.subject.text.lower(),
                 stmt.predicate.lower(),

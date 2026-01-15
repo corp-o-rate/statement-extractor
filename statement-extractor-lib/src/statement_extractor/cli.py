@@ -34,6 +34,7 @@ def _configure_logging(verbose: bool) -> None:
         "statement_extractor.scoring",
         "statement_extractor.predicate_comparer",
         "statement_extractor.canonicalization",
+        "statement_extractor.spacy_extraction",
     ]:
         logging.getLogger(logger_name).setLevel(level)
 
@@ -65,6 +66,8 @@ from .models import (
 @click.option("--no-dedup", is_flag=True, help="Disable deduplication")
 @click.option("--no-embeddings", is_flag=True, help="Disable embedding-based deduplication (faster)")
 @click.option("--no-merge", is_flag=True, help="Disable beam merging (select single best beam)")
+@click.option("--no-spacy", is_flag=True, help="Disable spaCy extraction (use raw model output)")
+@click.option("--all-triples", is_flag=True, help="Keep all candidate triples instead of selecting best per source")
 @click.option("--dedup-threshold", type=float, default=0.65, help="Similarity threshold for deduplication (default: 0.65)")
 # Quality options
 @click.option("--min-confidence", type=float, default=0.0, help="Minimum confidence threshold 0-1 (default: 0)")
@@ -89,6 +92,8 @@ def main(
     no_dedup: bool,
     no_embeddings: bool,
     no_merge: bool,
+    no_spacy: bool,
+    all_triples: bool,
     dedup_threshold: float,
     min_confidence: float,
     taxonomy: Optional[str],
@@ -160,6 +165,8 @@ def main(
         deduplicate=not no_dedup,
         embedding_dedup=not no_embeddings,
         merge_beams=not no_merge,
+        use_spacy_extraction=not no_spacy,
+        all_triples=all_triples,
         predicate_taxonomy=predicate_taxonomy,
         predicate_config=predicate_config,
         scoring_config=scoring_config,
@@ -189,6 +196,7 @@ def main(
             result = extractor.extract(input_text, options)
             _print_table(result, verbose)
     except Exception as e:
+        logging.exception("Error extracting statements:")
         raise click.ClickException(f"Extraction failed: {e}")
 
 
@@ -224,6 +232,9 @@ def _print_table(result, verbose: bool):
         click.echo(f"   {stmt.object.text}{object_type}")
 
         if verbose:
+            # Always show extraction method
+            click.echo(f"   Method: {stmt.extraction_method.value}")
+
             if stmt.confidence_score is not None:
                 click.echo(f"   Confidence: {stmt.confidence_score:.2f}")
 

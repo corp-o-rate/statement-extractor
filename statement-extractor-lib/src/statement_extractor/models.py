@@ -24,6 +24,14 @@ class EntityType(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class ExtractionMethod(str, Enum):
+    """Method used to extract the triple components."""
+    HYBRID = "hybrid"  # Model subject/object + spaCy predicate
+    SPACY = "spacy"  # All components from spaCy dependency parsing
+    SPLIT = "split"  # Subject/object from splitting source text around predicate
+    MODEL = "model"  # All components from T5-Gemma model (when spaCy disabled)
+
+
 class Entity(BaseModel):
     """An entity (subject or object) with its text and type."""
     text: str = Field(..., description="The entity text")
@@ -52,12 +60,18 @@ class Statement(BaseModel):
     object: Entity = Field(..., description="The object entity")
     source_text: Optional[str] = Field(None, description="The original text this statement was extracted from")
 
+    # Extraction method tracking
+    extraction_method: ExtractionMethod = Field(
+        default=ExtractionMethod.MODEL,
+        description="Method used to extract this triple (hybrid, spacy, split, or model)"
+    )
+
     # Quality scoring fields
     confidence_score: Optional[float] = Field(
         None,
         ge=0.0,
         le=1.0,
-        description="Groundedness score (0-1) indicating how well the triple is supported by source text"
+        description="Semantic similarity score (0-1) between source text and reassembled triple"
     )
     evidence_span: Optional[tuple[int, int]] = Field(
         None,
@@ -99,6 +113,7 @@ class Statement(BaseModel):
             object=merged_object,
             predicate=self.predicate,
             source_text=self.source_text,
+            extraction_method=self.extraction_method,
             confidence_score=self.confidence_score,
             evidence_span=self.evidence_span,
             canonical_predicate=self.canonical_predicate,
@@ -116,6 +131,7 @@ class Statement(BaseModel):
             object=self.subject,
             predicate=self.predicate,
             source_text=self.source_text,
+            extraction_method=self.extraction_method,
             confidence_score=self.confidence_score,
             evidence_span=self.evidence_span,
             canonical_predicate=self.canonical_predicate,
@@ -279,11 +295,21 @@ class ExtractionOptions(BaseModel):
         default=True,
         description="Use embedding similarity for predicate deduplication"
     )
+    use_spacy_extraction: bool = Field(
+        default=True,
+        description="Use spaCy for predicate/subject/object extraction (model provides structure + coreference)"
+    )
 
     # Verbose logging
     verbose: bool = Field(
         default=False,
         description="Enable verbose logging for debugging"
+    )
+
+    # Triple selection
+    all_triples: bool = Field(
+        default=False,
+        description="Keep all candidate triples instead of selecting the highest-scoring one per source"
     )
 
     class Config:

@@ -29,12 +29,13 @@ Example:
     >>> data = extract_statements_as_dict("Some text...")
 """
 
-__version__ = "0.2.5"
+__version__ = "0.3.0"
 
 # Core models
 from .models import (
     Entity,
     EntityType,
+    ExtractionMethod,
     ExtractionOptions,
     ExtractionResult,
     Statement,
@@ -73,6 +74,7 @@ __all__ = [
     # Core models
     "Entity",
     "EntityType",
+    "ExtractionMethod",
     "ExtractionOptions",
     "ExtractionResult",
     "Statement",

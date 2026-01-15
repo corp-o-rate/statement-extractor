@@ -10,7 +10,11 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
-- **Quality Scoring** *(v0.2.0)*: Each triple scored for groundedness (0-1) based on source text
+- **Combined Quality Scoring** *(v0.3.0)*: Confidence combines semantic similarity (50%) + subject/object noun scores (25% each)
+- **spaCy-First Predicates** *(v0.3.0)*: Always uses spaCy for predicate extraction (model predicates are unreliable)
+- **Multi-Candidate Extraction** *(v0.3.0)*: Generates 3 candidates per statement (hybrid, spaCy-only, predicate-split)
+- **Best Triple Selection** *(v0.3.0)*: Keeps only highest-scoring triple per source (use `--all-triples` to keep all)
+- **Extraction Method Tracking** *(v0.3.0)*: Each statement includes `extraction_method` field (hybrid, spacy, split, model)
 - **Beam Merging** *(v0.2.0)*: Combines top beams for better coverage instead of picking one
 - **Embedding-based Dedup** *(v0.2.0)*: Uses semantic similarity to detect near-duplicate predicates
 - **Predicate Taxonomies** *(v0.2.0)*: Normalize predicates to canonical forms via embeddings
@@ -23,27 +27,22 @@ Extract structured subject-predicate-object statements from unstructured text us
 ## Installation
 
 ```bash
-# Recommended: include embedding support for smart deduplication
-pip install "corp-extractor[embeddings]"
-
-# Minimal installation (no embedding features)
 pip install corp-extractor
 ```
 
-**Note**: This package requires `transformers>=5.0.0` (pre-release) for T5-Gemma2 model support. Install with `--pre` flag if needed:
-```bash
-pip install --pre "corp-extractor[embeddings]"
-```
+The spaCy model for predicate inference is downloaded automatically on first use.
+
+**Note**: This package requires `transformers>=5.0.0` for T5-Gemma2 model support.
 
 **For GPU support**, install PyTorch with CUDA first:
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu121
-pip install "corp-extractor[embeddings]"
+pip install corp-extractor
 ```
 
 **For Apple Silicon (M1/M2/M3)**, MPS acceleration is automatically detected:
 ```bash
-pip install "corp-extractor[embeddings]"  # MPS used automatically
+pip install corp-extractor  # MPS used automatically
 ```
 
 ## Quick Start
@@ -141,6 +140,8 @@ Options:
   --no-dedup                   Disable deduplication
   --no-embeddings              Disable embedding-based dedup (faster)
   --no-merge                   Disable beam merging
+  --no-spacy                   Disable spaCy extraction (use raw model output)
+  --all-triples                Keep all candidate triples (default: best per source)
   --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
   --min-confidence FLOAT       Min confidence filter (default: 0)
   --taxonomy PATH              Load predicate taxonomy from file
@@ -243,7 +244,91 @@ for stmt in fixed_statements:
 
 During deduplication, reversed duplicates (e.g., "A -> P -> B" and "B -> P -> A") are now detected and merged, with the correct orientation determined by source text similarity.
 
-## Disable Embeddings (Faster, No Extra Dependencies)
+## New in v0.3.0: spaCy-First Extraction & Semantic Scoring
+
+v0.3.0 introduces significant improvements to extraction quality:
+
+### spaCy-First Predicate Extraction
+
+The T5-Gemma model is excellent at:
+- **Triple isolation** - identifying that a relationship exists
+- **Coreference resolution** - resolving pronouns to named entities
+
+But unreliable at:
+- **Predicate extraction** - often returns empty or wrong predicates
+
+**Solution:** v0.3.0 always uses spaCy for predicate extraction. The model provides subject, object, entity types, and source text; spaCy provides the predicate.
+
+### Three Candidate Extraction Methods
+
+For each statement, three candidates are generated and the best is selected:
+
+| Method | Description |
+|--------|-------------|
+| `hybrid` | Model subject/object + spaCy predicate |
+| `spacy` | All components from spaCy dependency parsing |
+| `split` | Source text split around the predicate |
+
+```python
+for stmt in result:
+    print(f"{stmt.subject.text} --[{stmt.predicate}]--> {stmt.object.text}")
+    print(f"  Method: {stmt.extraction_method}")  # hybrid, spacy, split, or model
+    print(f"  Confidence: {stmt.confidence_score:.2f}")
+```
+
+### Combined Quality Scoring
+
+Confidence scores combine **semantic similarity** and **grammatical accuracy**:
+
+| Component | Weight | Description |
+|-----------|--------|-------------|
+| Semantic similarity | 50% | Cosine similarity between source text and reassembled triple |
+| Subject noun score | 25% | How noun-like the subject is |
+| Object noun score | 25% | How noun-like the object is |
+
+**Noun scoring:**
+- Proper noun(s) only: 1.0
+- Common noun(s) only: 0.8
+- Contains noun + other words: 0.4-0.8 (based on ratio)
+- No nouns: 0.2
+
+This ensures extracted subjects and objects are grammatically valid entities, not fragments or verb phrases.
+
+### Extraction Method Tracking
+
+Each statement now includes an `extraction_method` field:
+- `hybrid` - Model subject/object + spaCy predicate
+- `spacy` - All components from spaCy dependency parsing
+- `split` - Subject/object from splitting source text around predicate
+- `model` - All components from T5-Gemma model (only when `--no-spacy`)
+
+### Best Triple Selection
+
+By default, only the **highest-scoring triple** is kept for each source sentence. This ensures clean output without redundant candidates.
+
+To keep all candidate triples (for debugging or analysis):
+```python
+options = ExtractionOptions(all_triples=True)
+result = extract_statements(text, options)
+```
+
+Or via CLI:
+```bash
+corp-extractor "Your text" --all-triples --verbose
+```
+
+**Disable spaCy extraction** to use only model output:
+```python
+options = ExtractionOptions(use_spacy_extraction=False)
+result = extract_statements(text, options)
+```
+
+Or via CLI:
+```bash
+corp-extractor "Your text" --no-spacy
+```
+
+## Disable Embeddings
 
 ```python
 options = ExtractionOptions(
@@ -319,14 +404,16 @@ This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam 
 6. **Contextualized Matching** *(v0.2.2)*: Full statement context used for canonicalization and dedup
 7. **Entity Type Merging** *(v0.2.3)*: UNKNOWN types merged with specific types during dedup
 8. **Reversal Detection** *(v0.2.3)*: Subject-object reversals detected and corrected via embedding comparison
+9. **Hybrid spaCy** *(v0.2.12)*: spaCy candidates added to pool alongside model output for better coverage
 
 ## Requirements
 
 - Python 3.10+
 - PyTorch 2.0+
-- Transformers 4.35+
+- Transformers 5.0+
 - Pydantic 2.0+
-- sentence-transformers 2.2+ *(optional, for embedding features)*
+- sentence-transformers 2.2+
+- spaCy 3.5+ (model downloaded automatically on first use)
 - ~2GB VRAM (GPU) or ~4GB RAM (CPU)
 
 ## Links

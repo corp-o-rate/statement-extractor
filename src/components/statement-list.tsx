@@ -1,6 +1,6 @@
 'use client';
 
-import { Statement, getEntityBadgeClass } from '@/lib/types';
+import { Statement, ExtractionMethod, getEntityBadgeClass } from '@/lib/types';
 import { ArrowRight, Quote, ThumbsUp, Loader2 } from 'lucide-react';
 
 interface StatementListProps {
@@ -47,6 +47,42 @@ function ConfidenceBadge({ confidence }: { confidence?: number }) {
   );
 }
 
+function ExtractionMethodBadge({ method }: { method?: ExtractionMethod }) {
+  if (!method) {
+    return null;
+  }
+
+  const methodLabels: Record<ExtractionMethod, string> = {
+    hybrid: 'Hybrid',
+    spacy: 'spaCy',
+    split: 'Split',
+    model: 'Model',
+  };
+
+  const methodColors: Record<ExtractionMethod, string> = {
+    hybrid: 'bg-blue-100 text-blue-700',
+    spacy: 'bg-purple-100 text-purple-700',
+    split: 'bg-orange-100 text-orange-700',
+    model: 'bg-gray-100 text-gray-600',
+  };
+
+  const methodDescriptions: Record<ExtractionMethod, string> = {
+    hybrid: 'Model subject/object + spaCy predicate',
+    spacy: 'All components from spaCy parsing',
+    split: 'Source text split around predicate',
+    model: 'All components from T5-Gemma model',
+  };
+
+  return (
+    <span
+      className={`text-xs font-medium px-1.5 py-0.5 rounded ${methodColors[method]}`}
+      title={methodDescriptions[method]}
+    >
+      {methodLabels[method]}
+    </span>
+  );
+}
+
 function StatementCard({ statement, index }: { statement: Statement; index: number }) {
   return (
     <div className="editorial-card p-4">
@@ -76,8 +112,11 @@ function StatementCard({ statement, index }: { statement: Statement; index: numb
             </div>
           </div>
         </div>
-        {/* Confidence badge in top right */}
-        <ConfidenceBadge confidence={statement.confidence} />
+        {/* Method and confidence badges in top right */}
+        <div className="flex items-center gap-1.5">
+          <ExtractionMethodBadge method={statement.extractionMethod} />
+          <ConfidenceBadge confidence={statement.confidence} />
+        </div>
       </div>
 
       {/* Full statement text */}

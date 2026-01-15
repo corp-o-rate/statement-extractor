@@ -89,17 +89,20 @@ corp-extractor -f article.txt --min-confidence 0.7
 # --no-dedup                   Disable deduplication
 # --no-embeddings              Disable embedding-based dedup (faster)
 # --no-merge                   Disable beam merging
+# --no-spacy                    Disable spaCy extraction (use raw model output)
 # --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
 # --min-confidence FLOAT       Min confidence filter (default: 0)
 # --taxonomy PATH              Load predicate taxonomy from file
 # --taxonomy-threshold FLOAT   Taxonomy matching threshold (default: 0.5)
-# --device [auto|cuda|cpu]     Device to use (default: auto)
+# --device [auto|cuda|mps|cpu] Device to use (default: auto)
 # -v, --verbose                Show confidence scores and metadata
 # -q, --quiet                  Suppress progress messages
 # --version                    Show version`,
 
-  python: `# Installation (v0.2.0+)
-pip install "${PYPI_PACKAGE}[embeddings]"  # Recommended: includes smart deduplication
+  python: `# Installation
+pip install "${PYPI_PACKAGE}"
+
+# spaCy model downloads automatically on first use
 
 # For GPU support, install PyTorch with CUDA first:
 # pip install torch --index-url https://download.pytorch.org/whl/cu121
