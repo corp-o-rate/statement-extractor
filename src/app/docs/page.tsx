@@ -157,7 +157,7 @@ export default function DocsPage() {
             {/* Hero */}
             <div className="not-prose mb-12">
               <span className="text-red-600 text-xs font-bold tracking-widest uppercase">
-                corp-extractor v0.2.4
+                corp-extractor v0.2.5
               </span>
               <h1 className="text-4xl font-black mt-2 mb-4">
                 Statement Extractor Documentation

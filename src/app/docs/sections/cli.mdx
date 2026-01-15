@@ -4,6 +4,23 @@
 
 The `corp-extractor` CLI provides a convenient way to extract statements directly from the terminal without writing code.
 
+### Installation
+
+<span id="cli-installation" />
+
+For best results, install globally:
+
+```bash
+# Using uv (recommended)
+uv tool install "corp-extractor[embeddings]"
+
+# Using pipx
+pipx install "corp-extractor[embeddings]"
+
+# Using pip
+pip install "corp-extractor[embeddings]"
+```
+
 ### Quick Run with uvx
 
 <span id="uvx" />
@@ -11,32 +28,10 @@ The `corp-extractor` CLI provides a convenient way to extract statements directl
 Run directly without installing using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-# Quick run (downloads temporarily)
 uvx corp-extractor "Apple announced a new iPhone."
-
-# With embeddings support (recommended)
-uvx --with sentence-transformers corp-extractor "Apple announced a new iPhone."
-
-# With options
-uvx --with sentence-transformers corp-extractor -f article.txt --json --beams 8
 ```
 
-### Installation
-
-<span id="cli-installation" />
-
-For repeated use, install globally:
-
-```bash
-# Using uv (recommended)
-uv tool install corp-extractor[embeddings]
-
-# Using pipx
-pipx install corp-extractor[embeddings]
-
-# Using pip
-pip install corp-extractor[embeddings]
-```
+**Note**: First run downloads the model (~1.5GB) which may take a few minutes.
 
 ### Basic Usage
 
@@ -146,11 +141,14 @@ corp-extractor -f article.txt --taxonomy predicates.txt --taxonomy-threshold 0.6
 <span id="cli-device" />
 
 ```bash
-# Auto-detect (default)
+# Auto-detect (default) - uses CUDA > MPS > CPU
 corp-extractor -f article.txt --device auto
 
-# Force GPU
+# Force NVIDIA GPU
 corp-extractor -f article.txt --device cuda
+
+# Force Apple Silicon GPU (M1/M2/M3)
+corp-extractor -f article.txt --device mps
 
 # Force CPU
 corp-extractor -f article.txt --device cpu
@@ -191,7 +189,7 @@ Taxonomy:
   --taxonomy-threshold FLOAT    Matching threshold (default: 0.5)
 
 Runtime:
-  --device [auto|cuda|cpu]      Device to use (default: auto)
+  --device [auto|cuda|mps|cpu]  Device to use (default: auto)
 
 Output:
   -v, --verbose                 Show confidence scores and metadata

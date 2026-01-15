@@ -80,11 +80,16 @@ class StatementExtractor:
 
         # Auto-detect device
         if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
         else:
             self.device = device
 
-        # Auto-detect dtype
+        # Auto-detect dtype (bfloat16 only for CUDA, float32 for MPS/CPU)
         if torch_dtype is None:
             self.torch_dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
         else:
@@ -175,6 +180,14 @@ class StatementExtractor:
         if options is None:
             options = ExtractionOptions()
 
+        logger.debug("=" * 60)
+        logger.debug("EXTRACTION STARTED")
+        logger.debug("=" * 60)
+        logger.debug(f"Input text length: {len(text)} chars")
+        logger.debug(f"Options: num_beams={options.num_beams}, diversity={options.diversity_penalty}")
+        logger.debug(f"  merge_beams={options.merge_beams}, embedding_dedup={options.embedding_dedup}")
+        logger.debug(f"  deduplicate={options.deduplicate}, max_new_tokens={options.max_new_tokens}")
+
         # Store original text for scoring
         original_text = text
 
@@ -184,6 +197,10 @@ class StatementExtractor:
 
         # Run extraction with retry logic
         statements = self._extract_with_scoring(text, original_text, options)
+
+        logger.debug("=" * 60)
+        logger.debug(f"EXTRACTION COMPLETE: {len(statements)} statements")
+        logger.debug("=" * 60)
 
         return ExtractionResult(
             statements=statements,
@@ -270,6 +287,10 @@ class StatementExtractor:
         4. Merges top beams or selects best beam
         5. Deduplicates using embeddings (if enabled)
         """
+        logger.debug("-" * 40)
+        logger.debug("PHASE 1: Tokenization")
+        logger.debug("-" * 40)
+
         # Tokenize input
         inputs = self.tokenizer(
             text,
@@ -278,48 +299,77 @@ class StatementExtractor:
             truncation=True,
         ).to(self.device)
 
+        input_ids = inputs["input_ids"]
+        logger.debug(f"Tokenized: {input_ids.shape[1]} tokens")
+
         # Count sentences for quality check
         num_sentences = self._count_sentences(text)
         min_expected = int(num_sentences * options.min_statement_ratio)
 
-        logger.info(f"Input has ~{num_sentences} sentences, expecting >= {min_expected} statements")
+        logger.debug(f"Input has ~{num_sentences} sentences, min expected: {min_expected}")
 
         # Get beam scorer
         beam_scorer = self._get_beam_scorer(options)
 
+        logger.debug("-" * 40)
+        logger.debug("PHASE 2: Diverse Beam Search Generation")
+        logger.debug("-" * 40)
+
         all_candidates: list[list[Statement]] = []
 
         for attempt in range(options.max_attempts):
+            logger.debug(f"Attempt {attempt + 1}/{options.max_attempts}: Generating {options.num_beams} beams...")
+
             # Generate candidate beams
             candidates = self._generate_candidate_beams(inputs, options)
+            logger.debug(f"  Generated {len(candidates)} valid XML outputs")
 
             # Parse each candidate to statements
             parsed_candidates = []
-            for xml_output in candidates:
+            for i, xml_output in enumerate(candidates):
                 statements = self._parse_xml_to_statements(xml_output)
                 if statements:
                     parsed_candidates.append(statements)
+                    logger.debug(f"  Beam {i}: {len(statements)} statements parsed")
+                else:
+                    logger.debug(f"  Beam {i}: 0 statements (parse failed)")
 
             all_candidates.extend(parsed_candidates)
 
             # Check if we have enough statements
             total_stmts = sum(len(c) for c in parsed_candidates)
-            logger.info(f"Attempt {attempt + 1}/{options.max_attempts}: {len(parsed_candidates)} beams, {total_stmts} total statements")
+            logger.debug(f"  Total: {len(parsed_candidates)} beams, {total_stmts} statements")
 
             if total_stmts >= min_expected:
+                logger.debug(f"  Sufficient statements ({total_stmts} >= {min_expected}), stopping")
                 break
 
         if not all_candidates:
+            logger.debug("No valid candidates generated, returning empty result")
             return []
+
+        logger.debug("-" * 40)
+        logger.debug("PHASE 3: Beam Selection/Merging")
+        logger.debug("-" * 40)
 
         # Select or merge beams
         if options.merge_beams:
+            logger.debug(f"Merging {len(all_candidates)} beams...")
             statements = beam_scorer.merge_beams(all_candidates, original_text)
+            logger.debug(f"  After merge: {len(statements)} statements")
         else:
+            logger.debug(f"Selecting best beam from {len(all_candidates)} candidates...")
             statements = beam_scorer.select_best_beam(all_candidates, original_text)
+            logger.debug(f"  Selected beam has {len(statements)} statements")
+
+        logger.debug("-" * 40)
+        logger.debug("PHASE 4: Deduplication")
+        logger.debug("-" * 40)
 
         # Apply embedding-based deduplication if enabled
         if options.embedding_dedup and options.deduplicate:
+            logger.debug("Using embedding-based deduplication...")
+            pre_dedup_count = len(statements)
             try:
                 comparer = self._get_predicate_comparer(options)
                 if comparer:
@@ -327,14 +377,32 @@ class StatementExtractor:
                         statements,
                         entity_canonicalizer=options.entity_canonicalizer
                     )
+                    logger.debug(f"  After embedding dedup: {len(statements)} statements (removed {pre_dedup_count - len(statements)})")
+
                     # Also normalize predicates if taxonomy provided
                     if options.predicate_taxonomy or self._predicate_taxonomy:
+                        logger.debug("Normalizing predicates to taxonomy...")
                         statements = comparer.normalize_predicates(statements)
             except Exception as e:
                 logger.warning(f"Embedding deduplication failed, falling back to exact match: {e}")
                 statements = self._deduplicate_statements_exact(statements, options)
+                logger.debug(f"  After exact dedup: {len(statements)} statements")
         elif options.deduplicate:
+            logger.debug("Using exact text deduplication...")
+            pre_dedup_count = len(statements)
             statements = self._deduplicate_statements_exact(statements, options)
+            logger.debug(f"  After exact dedup: {len(statements)} statements (removed {pre_dedup_count - len(statements)})")
+        else:
+            logger.debug("Deduplication disabled")
+
+        # Log final statements
+        logger.debug("-" * 40)
+        logger.debug("FINAL STATEMENTS:")
+        logger.debug("-" * 40)
+        for i, stmt in enumerate(statements):
+            conf = f" (conf={stmt.confidence_score:.2f})" if stmt.confidence_score else ""
+            canonical = f" -> {stmt.canonical_predicate}" if stmt.canonical_predicate else ""
+            logger.debug(f"  {i+1}. {stmt.subject.text} --[{stmt.predicate}{canonical}]--> {stmt.object.text}{conf}")
 
         return statements
 
@@ -350,12 +418,16 @@ class StatementExtractor:
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=options.max_new_tokens,
+                max_length=None,  # Override model default, use max_new_tokens only
                 num_beams=num_seqs,
                 num_beam_groups=num_seqs,
                 num_return_sequences=num_seqs,
                 diversity_penalty=options.diversity_penalty,
                 do_sample=False,
+                top_p=None,  # Override model config to suppress warning
+                top_k=None,  # Override model config to suppress warning
                 trust_remote_code=True,
+                custom_generate="transformers-community/group-beam-search",
             )
 
         # Decode and process candidates

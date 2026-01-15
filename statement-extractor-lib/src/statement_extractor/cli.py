@@ -7,10 +7,35 @@ Usage:
     cat input.txt | corp-extractor -
 """
 
+import logging
 import sys
 from typing import Optional
 
 import click
+
+
+def _configure_logging(verbose: bool) -> None:
+    """Configure logging for the extraction pipeline."""
+    level = logging.DEBUG if verbose else logging.WARNING
+
+    # Configure root logger for statement_extractor package
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+        force=True,
+    )
+
+    # Set level for all statement_extractor loggers
+    for logger_name in [
+        "statement_extractor",
+        "statement_extractor.extractor",
+        "statement_extractor.scoring",
+        "statement_extractor.predicate_comparer",
+        "statement_extractor.canonicalization",
+    ]:
+        logging.getLogger(logger_name).setLevel(level)
 
 from . import __version__
 from .models import (
@@ -47,7 +72,7 @@ from .models import (
 @click.option("--taxonomy", type=click.Path(exists=True), help="Load predicate taxonomy from file (one per line)")
 @click.option("--taxonomy-threshold", type=float, default=0.5, help="Similarity threshold for taxonomy matching (default: 0.5)")
 # Device options
-@click.option("--device", type=click.Choice(["auto", "cuda", "cpu"]), default="auto", help="Device to use (default: auto)")
+@click.option("--device", type=click.Choice(["auto", "cuda", "mps", "cpu"]), default="auto", help="Device to use (default: auto)")
 # Output options
 @click.option("-v", "--verbose", is_flag=True, help="Show verbose output with confidence scores")
 @click.option("-q", "--quiet", is_flag=True, help="Suppress progress messages")
@@ -91,6 +116,9 @@ def main(
         json   JSON with full metadata
         xml    Raw XML from model
     """
+    # Configure logging based on verbose flag
+    _configure_logging(verbose)
+
     # Determine output format
     if output_json:
         output = "json"
@@ -135,6 +163,7 @@ def main(
         predicate_taxonomy=predicate_taxonomy,
         predicate_config=predicate_config,
         scoring_config=scoring_config,
+        verbose=verbose,
     )
 
     # Import here to allow --help without loading torch

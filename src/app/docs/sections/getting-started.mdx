@@ -15,7 +15,7 @@ pip install corp-extractor
 With embeddings support for semantic similarity and clustering:
 
 ```bash
-pip install corp-extractor[embeddings]
+pip install "corp-extractor[embeddings]"
 ```
 
 **GPU support**: Install PyTorch with CUDA before installing corp-extractor. The library auto-detects GPU availability at runtime.
@@ -24,6 +24,12 @@ pip install corp-extractor[embeddings]
 # Example for CUDA 12.1
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 pip install corp-extractor
+```
+
+**Apple Silicon (M1/M2/M3)**: MPS acceleration is automatically detected. Just install normally:
+
+```bash
+pip install "corp-extractor[embeddings]"
 ```
 
 ### Quick Start
@@ -128,7 +134,8 @@ This maps synonyms like "bought", "purchased", "acquired" to a single canonical 
 
 **Hardware requirements**:
 
-- **GPU**: ~2GB VRAM minimum. CUDA-enabled NVIDIA GPU recommended for production.
+- **NVIDIA GPU**: ~2GB VRAM minimum. CUDA-enabled GPU recommended for production.
+- **Apple Silicon**: M1/M2/M3 Macs with MPS acceleration. Good performance, auto-detected.
 - **CPU**: ~4GB RAM. Functional but significantly slower. Use for development or low-volume processing.
 
-The model uses bfloat16 precision on GPU (faster, less memory) and float32 on CPU.
+The model uses bfloat16 precision on CUDA (faster, less memory) and float32 on MPS/CPU.

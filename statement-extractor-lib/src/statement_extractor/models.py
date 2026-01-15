@@ -280,5 +280,11 @@ class ExtractionOptions(BaseModel):
         description="Use embedding similarity for predicate deduplication"
     )
 
+    # Verbose logging
+    verbose: bool = Field(
+        default=False,
+        description="Enable verbose logging for debugging"
+    )
+
     class Config:
         arbitrary_types_allowed = True  # Allow Callable type

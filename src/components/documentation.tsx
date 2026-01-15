@@ -20,26 +20,25 @@ const PYPI_PACKAGE = 'corp-extractor';
 
 const CODE_SNIPPETS: Record<TabId, string> = {
   cli: `# Command Line Interface (v0.2.4+)
-# Run directly without installing using uvx (requires uv)
-
-# Quick run (downloads temporarily)
-uvx ${PYPI_PACKAGE} "Apple announced a new iPhone."
-
-# With embeddings support (recommended for better quality)
-uvx --with sentence-transformers ${PYPI_PACKAGE} "Apple announced a new iPhone."
 
 # ============================================
-# Install globally for repeated use
+# Install globally (recommended)
 # ============================================
 
 # Using uv (recommended)
-uv tool install ${PYPI_PACKAGE}[embeddings]
+uv tool install "${PYPI_PACKAGE}[embeddings]"
 
 # Or using pipx
-pipx install ${PYPI_PACKAGE}[embeddings]
+pipx install "${PYPI_PACKAGE}[embeddings]"
 
 # Or using pip
-pip install ${PYPI_PACKAGE}[embeddings]
+pip install "${PYPI_PACKAGE}[embeddings]"
+
+# ============================================
+# Quick run with uvx (no install)
+# ============================================
+# Note: First run downloads the model (~1.5GB)
+uvx ${PYPI_PACKAGE} "Apple announced a new iPhone."
 
 # ============================================
 # Usage Examples
@@ -100,7 +99,7 @@ corp-extractor -f article.txt --min-confidence 0.7
 # --version                    Show version`,
 
   python: `# Installation (v0.2.0+)
-pip install ${PYPI_PACKAGE}[embeddings]  # Recommended: includes smart deduplication
+pip install "${PYPI_PACKAGE}[embeddings]"  # Recommended: includes smart deduplication
 
 # For GPU support, install PyTorch with CUDA first:
 # pip install torch --index-url https://download.pytorch.org/whl/cu121

@@ -24,16 +24,26 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 ```bash
 # Recommended: include embedding support for smart deduplication
-pip install corp-extractor[embeddings]
+pip install "corp-extractor[embeddings]"
 
 # Minimal installation (no embedding features)
 pip install corp-extractor
 ```
 
-**Note**: For GPU support, install PyTorch with CUDA first:
+**Note**: This package requires `transformers>=5.0.0` (pre-release) for T5-Gemma2 model support. Install with `--pre` flag if needed:
+```bash
+pip install --pre "corp-extractor[embeddings]"
+```
+
+**For GPU support**, install PyTorch with CUDA first:
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu121
-pip install corp-extractor[embeddings]
+pip install "corp-extractor[embeddings]"
+```
+
+**For Apple Silicon (M1/M2/M3)**, MPS acceleration is automatically detected:
+```bash
+pip install "corp-extractor[embeddings]"  # MPS used automatically
 ```
 
 ## Quick Start
@@ -56,33 +66,33 @@ for stmt in result:
 
 The library includes a CLI for quick extraction from the terminal.
 
-### Quick Run with uvx (No Installation)
+### Install Globally (Recommended)
 
-Run directly without installing using [uv](https://docs.astral.sh/uv/):
-
-```bash
-# Run directly (downloads temporarily)
-uvx corp-extractor "Apple announced a new iPhone."
-
-# With embeddings support (recommended)
-uvx --with sentence-transformers corp-extractor "Apple announced a new iPhone."
-
-# Run with options
-uvx --with sentence-transformers corp-extractor -f article.txt --json --beams 8
-```
-
-### Install Globally with uv or pipx
+For best results, install globally first:
 
 ```bash
-# Install with uv (recommended)
-uv tool install corp-extractor[embeddings]
+# Using uv (recommended)
+uv tool install "corp-extractor[embeddings]"
 
-# Or with pipx
-pipx install corp-extractor[embeddings]
+# Using pipx
+pipx install "corp-extractor[embeddings]"
+
+# Using pip
+pip install "corp-extractor[embeddings]"
 
 # Then use anywhere
 corp-extractor "Your text here"
 ```
+
+### Quick Run with uvx
+
+Run directly without installing using [uv](https://docs.astral.sh/uv/):
+
+```bash
+uvx corp-extractor "Apple announced a new iPhone."
+```
+
+**Note**: First run downloads the model (~1.5GB) which may take a few minutes.
 
 ### Usage Examples
 
@@ -135,7 +145,7 @@ Options:
   --min-confidence FLOAT       Min confidence filter (default: 0)
   --taxonomy PATH              Load predicate taxonomy from file
   --taxonomy-threshold FLOAT   Taxonomy matching threshold (default: 0.5)
-  --device [auto|cuda|cpu]     Device to use (default: auto)
+  --device [auto|cuda|mps|cpu] Device to use (default: auto)
   -v, --verbose                Show confidence scores and metadata
   -q, --quiet                  Suppress progress messages
   --version                    Show version
@@ -271,7 +281,7 @@ dict_output = extract_statements_as_dict(text)
 ```python
 from statement_extractor import StatementExtractor
 
-extractor = StatementExtractor(device="cuda")  # or "cpu"
+extractor = StatementExtractor(device="cuda")  # or "mps" (Apple Silicon) or "cpu"
 
 texts = ["Text 1...", "Text 2...", "Text 3..."]
 for text in texts:

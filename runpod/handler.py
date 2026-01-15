@@ -243,12 +243,16 @@ def batched_generate(texts: list[str]) -> list[str]:
         outputs = model.generate(
             **inputs,
             max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
+            max_length=None,  # Override model default, use max_new_tokens only
             num_beams=DEFAULT_NUM_BEAMS,
             num_beam_groups=DEFAULT_NUM_BEAMS,
             num_return_sequences=1,  # One best result per input
             diversity_penalty=1.0,
             do_sample=False,
+            top_p=None,  # Override model config to suppress warning
+            top_k=None,  # Override model config to suppress warning
             trust_remote_code=True,
+            custom_generate="transformers-community/group-beam-search",
         )
 
     # Decode each output

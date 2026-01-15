@@ -83,7 +83,12 @@ class PredicateComparer:
         # Auto-detect device
         if device is None:
             import torch
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
         else:
             self.device = device
 
@@ -289,6 +294,8 @@ class PredicateComparer:
         Returns:
             Deduplicated list of statements (keeps best contextualized match)
         """
+        logger.debug(f"Embedding deduplication: {len(statements)} statements, detect_reversals={detect_reversals}")
+
         if len(statements) <= 1:
             return statements
 
@@ -297,27 +304,33 @@ class PredicateComparer:
                 return entity_canonicalizer(text)
             return text.lower().strip()
 
+        logger.debug("  Computing predicate embeddings...")
         # Compute all predicate embeddings at once for efficiency
         predicates = [s.predicate for s in statements]
         pred_embeddings = self._compute_embeddings(predicates)
+        logger.debug(f"  Computed {len(pred_embeddings)} predicate embeddings")
 
+        logger.debug("  Computing contextualized embeddings (S P O)...")
         # Compute contextualized embeddings: "Subject Predicate Object" for each statement
         contextualized_texts = [
             f"{s.subject.text} {s.predicate} {s.object.text}" for s in statements
         ]
         contextualized_embeddings = self._compute_embeddings(contextualized_texts)
 
+        logger.debug("  Computing reversed embeddings (O P S)...")
         # Compute reversed contextualized embeddings: "Object Predicate Subject"
         reversed_texts = [
             f"{s.object.text} {s.predicate} {s.subject.text}" for s in statements
         ]
         reversed_embeddings = self._compute_embeddings(reversed_texts)
 
+        logger.debug("  Computing source text embeddings...")
         # Compute source text embeddings for scoring which duplicate to keep
         source_embeddings = []
         for stmt in statements:
             source_text = stmt.source_text or f"{stmt.subject.text} {stmt.predicate} {stmt.object.text}"
             source_embeddings.append(self._compute_embeddings([source_text])[0])
+        logger.debug("  All embeddings computed, starting comparison loop...")
 
         unique_statements: list[Statement] = []
         unique_pred_embeddings: list[np.ndarray] = []
@@ -358,9 +371,17 @@ class PredicateComparer:
                 if similarity >= self.config.dedup_threshold:
                     duplicate_idx = j
                     is_reversed_match = reversed_match and not direct_match
+                    match_type = "reversed" if is_reversed_match else "direct"
+                    logger.debug(
+                        f"  [{i}] DUPLICATE of [{unique_indices[j]}] ({match_type}, sim={similarity:.3f}): "
+                        f"'{stmt.subject.text}' --[{stmt.predicate}]--> '{stmt.object.text}'"
+                    )
                     break
 
             if duplicate_idx is None:
+                logger.debug(
+                    f"  [{i}] UNIQUE: '{stmt.subject.text}' --[{stmt.predicate}]--> '{stmt.object.text}'"
+                )
                 # Not a duplicate - add to unique list
                 unique_statements.append(stmt)
                 unique_pred_embeddings.append(pred_embeddings[i])
@@ -451,6 +472,7 @@ class PredicateComparer:
                         merged_stmt = existing_stmt.merge_entity_types_from(stmt)
                         unique_statements[duplicate_idx] = merged_stmt
 
+        logger.debug(f"  Deduplication complete: {len(statements)} -> {len(unique_statements)} statements")
         return unique_statements
 
     def normalize_predicates(

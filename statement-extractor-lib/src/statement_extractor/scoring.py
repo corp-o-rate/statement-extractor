@@ -6,9 +6,12 @@ Provides:
 - BeamScorer: Score and select/merge beams based on quality metrics
 """
 
+import logging
 from typing import Optional
 
 from .models import ScoringConfig, Statement
+
+logger = logging.getLogger(__name__)
 
 
 class TripleScorer:
@@ -32,6 +35,7 @@ class TripleScorer:
         Higher scores indicate better grounding in source text.
         """
         if not source_text:
+            logger.debug(f"  No source text, returning neutral score 0.5")
             return 0.5  # Neutral score if no source text
 
         score = 0.0
@@ -53,6 +57,7 @@ class TripleScorer:
         weights_sum += 0.2
 
         # Check proximity - subject and object in same/nearby region (weight: 0.2)
+        proximity_score = 0.0
         if subject_found and object_found:
             proximity_score = self._compute_proximity(
                 statement.subject.text,
@@ -62,7 +67,14 @@ class TripleScorer:
             score += 0.2 * proximity_score
         weights_sum += 0.2
 
-        return score / weights_sum if weights_sum > 0 else 0.0
+        final_score = score / weights_sum if weights_sum > 0 else 0.0
+
+        logger.debug(
+            f"  Score for '{statement.subject.text}' --[{statement.predicate}]--> '{statement.object.text}': "
+            f"{final_score:.2f} (subj={subject_found}, obj={object_found}, pred={predicate_grounded}, prox={proximity_score:.2f})"
+        )
+
+        return final_score
 
     def find_evidence_span(
         self,
@@ -347,10 +359,12 @@ class BeamScorer:
             return []
 
         top_n = top_n or self.config.merge_top_n
+        logger.debug(f"Merging beams: {len(candidates)} candidates, selecting top {top_n}")
 
         # Score each beam
         scored_beams = []
-        for beam in candidates:
+        for i, beam in enumerate(candidates):
+            logger.debug(f"  Scoring beam {i} ({len(beam)} statements)...")
             for stmt in beam:
                 if stmt.confidence_score is None:
                     stmt.confidence_score = self.triple_scorer.score_triple(stmt, source_text)
@@ -359,26 +373,31 @@ class BeamScorer:
 
             beam_score = self.score_beam(beam, source_text)
             scored_beams.append((beam_score, beam))
+            logger.debug(f"    Beam {i} score: {beam_score:.3f}")
 
         # Sort and take top N
         scored_beams.sort(key=lambda x: x[0], reverse=True)
         top_beams = [beam for _, beam in scored_beams[:top_n]]
+        logger.debug(f"  Selected top {len(top_beams)} beams")
 
         # Pool all triples
         all_statements: list[Statement] = []
         for beam in top_beams:
             all_statements.extend(beam)
+        logger.debug(f"  Pooled {len(all_statements)} statements from top beams")
 
         # Filter by confidence threshold
         min_conf = self.config.min_confidence
         filtered = [s for s in all_statements if (s.confidence_score or 0) >= min_conf]
+        logger.debug(f"  After confidence filter (>={min_conf}): {len(filtered)} statements")
 
-        # Filter out statements where source_text doesn't support the predicate
-        # This catches model hallucinations where predicate doesn't match the evidence
-        consistent = [
-            s for s in filtered
-            if self._source_text_supports_predicate(s)
-        ]
+        # # Filter out statements where source_text doesn't support the predicate
+        # # This catches model hallucinations where predicate doesn't match the evidence
+        # consistent = [
+        #     s for s in filtered
+        #     if self._source_text_supports_predicate(s)
+        # ]
+        # logger.debug(f"  After predicate consistency filter: {len(consistent)} statements")
 
         # Deduplicate - keep highest confidence for each (subject, predicate, object)
         # Note: Same subject+predicate with different objects is valid (e.g., "Apple announced X and Y")
@@ -392,7 +411,10 @@ class BeamScorer:
             if key not in seen or (stmt.confidence_score or 0) > (seen[key].confidence_score or 0):
                 seen[key] = stmt
 
-        return list(seen.values())
+        result = list(seen.values())
+        logger.debug(f"  After deduplication: {len(result)} unique statements")
+
+        return result
 
     def _source_text_supports_predicate(self, stmt: Statement) -> bool:
         """
