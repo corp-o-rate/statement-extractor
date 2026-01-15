@@ -78,9 +78,19 @@ export async function GET(request: NextRequest) {
     // Handle failed job
     if (data.status === 'FAILED') {
       console.error(`Job ${jobId} failed:`, data.error);
+      // DO NOT cache failed results
       return NextResponse.json({
         status: 'FAILED',
         error: data.error || 'Job failed',
+      });
+    }
+
+    // Handle timed out job - DO NOT cache
+    if (data.status === 'TIMED_OUT') {
+      console.error(`Job ${jobId} timed out`);
+      return NextResponse.json({
+        status: 'TIMED_OUT',
+        error: 'Request timed out. The server may be busy or starting up. Please try again.',
       });
     }
 

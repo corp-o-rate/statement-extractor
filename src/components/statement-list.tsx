@@ -22,8 +22,16 @@ function EntityBadge({ name, type }: { name: string; type: string }) {
 }
 
 function ConfidenceBadge({ confidence }: { confidence?: number }) {
+  // Show dash if no confidence
   if (confidence === undefined || confidence === null) {
-    return null;
+    return (
+      <span
+        className="text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-500"
+        title="Confidence not available"
+      >
+        —%
+      </span>
+    );
   }
 
   // Color based on confidence level
@@ -31,7 +39,7 @@ function ConfidenceBadge({ confidence }: { confidence?: number }) {
   let colorClass = 'bg-gray-100 text-gray-600';
   if (confidence >= 0.8) {
     colorClass = 'bg-green-100 text-green-700';
-  } else if (confidence >= 0.5) {
+  } else if (confidence >= 0.6) {
     colorClass = 'bg-yellow-100 text-yellow-700';
   } else {
     colorClass = 'bg-red-100 text-red-700';
@@ -48,10 +56,6 @@ function ConfidenceBadge({ confidence }: { confidence?: number }) {
 }
 
 function ExtractionMethodBadge({ method }: { method?: ExtractionMethod }) {
-  if (!method) {
-    return null;
-  }
-
   const methodLabels: Record<ExtractionMethod, string> = {
     hybrid: 'Hybrid',
     spacy: 'spaCy',
@@ -72,6 +76,18 @@ function ExtractionMethodBadge({ method }: { method?: ExtractionMethod }) {
     split: 'Source text split around predicate',
     model: 'All components from T5-Gemma model',
   };
+
+  // Show "Unknown" if no method
+  if (!method) {
+    return (
+      <span
+        className="text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-500"
+        title="Extraction method not specified"
+      >
+        —
+      </span>
+    );
+  }
 
   return (
     <span
@@ -113,9 +129,15 @@ function StatementCard({ statement, index }: { statement: Statement; index: numb
           </div>
         </div>
         {/* Method and confidence badges in top right */}
-        <div className="flex items-center gap-1.5">
-          <ExtractionMethodBadge method={statement.extractionMethod} />
-          <ConfidenceBadge confidence={statement.confidence} />
+        <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-1">
+            <span className="text-gray-400">Source:</span>
+            <ExtractionMethodBadge method={statement.extractionMethod} />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-gray-400">Conf:</span>
+            <ConfidenceBadge confidence={statement.confidence} />
+          </div>
         </div>
       </div>
 

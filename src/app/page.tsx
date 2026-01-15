@@ -106,6 +106,10 @@ export default function Home() {
           throw new Error(statusResult.error || 'Job failed');
         }
 
+        if (statusResult.status === 'TIMED_OUT') {
+          throw new Error(statusResult.error || 'Request timed out. Please try again.');
+        }
+
         // Job completed
         const statements = statusResult.statements || [];
         setStatements(statements);

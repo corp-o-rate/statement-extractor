@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir \
     spacy \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
-# Install corp-extractor library with embeddings support (after transformers to avoid version conflicts)
+# Install corp-extractor library
 RUN pip install --no-cache-dir --no-deps corp-extractor==0.3.0
 
 # Download models at build time for faster cold starts

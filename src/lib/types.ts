@@ -53,7 +53,7 @@ export interface JobSubmissionResponse {
 
 // Job status response
 export interface JobStatusResponse {
-  status: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  status: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED' | 'TIMED_OUT';
   statements?: Statement[];
   cached?: boolean;
   error?: string;
