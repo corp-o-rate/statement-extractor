@@ -35,8 +35,8 @@ export async function POST() {
       prompt: `Write a realistic news article or press release about ${topic}.
 
 Requirements:
-- Write exactly 3 paragraphs
-- Minimum 250 words total
+- Write exactly 2 paragraphs
+- Maximum 1000 words total
 - Include specific names of people, organizations, and places
 - Include dates, numbers, and statistics where appropriate
 - Write in a professional journalistic style

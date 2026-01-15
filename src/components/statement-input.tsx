@@ -66,7 +66,7 @@ export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: Sta
   };
 
   const charCount = text.length;
-  const maxChars = 10000;
+  const maxChars = 4000;
 
   return (
     <div className="w-full">
