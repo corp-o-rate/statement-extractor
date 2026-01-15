@@ -20,6 +20,7 @@ RUN pip install --no-cache-dir \
     sentencepiece \
     pydantic \
     sentence-transformers \
+    spacy \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
 # Install corp-extractor library with embeddings support (after transformers to avoid version conflicts)
@@ -34,6 +35,9 @@ RUN python -c "from statement_extractor import StatementExtractor; \
 RUN python -c "from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('sentence-transformers/paraphrase-MiniLM-L6-v2'); \
     print('Embedding model downloaded')"
+
+#Download spacy files
+RUN python -m spacy download en_core_web_sm
 
 # Copy handler
 COPY handler.py /app/handler.py

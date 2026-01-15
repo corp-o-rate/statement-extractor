@@ -39,7 +39,7 @@ text = "Apple Inc. acquired Beats Electronics for $3 billion in May 2014."
 statements = extract_statements(text)
 
 for stmt in statements:
-    print(f"{stmt.subject.text} ({stmt.subject.entity_type}) -> {stmt.predicate} -> {stmt.object.text}")
+    print(f"{stmt.subject.text} ({stmt.subject.type}) -> {stmt.predicate} -> {stmt.object.text}")
 ```
 
 Output:
@@ -50,15 +50,16 @@ Apple Inc. (ORG) -> paid -> $3 billion
 Beats Electronics (ORG) -> acquisition price -> $3 billion
 ```
 
-Each statement includes confidence scores (v0.2.0+):
+Each statement includes confidence scores and extraction method (v0.3.0+):
 
 ```python
 for stmt in statements:
     print(f"{stmt.subject.text} -> {stmt.predicate} -> {stmt.object.text}")
-    print(f"  confidence: {stmt.confidence:.2f}")
+    print(f"  method: {stmt.extraction_method}")  # hybrid, spacy, split, or model
+    print(f"  confidence: {stmt.confidence_score:.2f}")
 ```
 
-v0.2.0 features: confidence scoring, batch processing, embedding support, and improved entity type detection.
+v0.3.0 features: spaCy-first predicate extraction, multi-candidate generation, combined scoring (semantic + grammatical), best triple selection per source.
 
 ### Using Predicate Taxonomies
 

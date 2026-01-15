@@ -89,7 +89,8 @@ corp-extractor -f article.txt --min-confidence 0.7
 # --no-dedup                   Disable deduplication
 # --no-embeddings              Disable embedding-based dedup (faster)
 # --no-merge                   Disable beam merging
-# --no-spacy                    Disable spaCy extraction (use raw model output)
+# --no-spacy                   Disable spaCy extraction (use raw model output)
+# --all-triples                Keep all candidate triples (default: best per source)
 # --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
 # --min-confidence FLOAT       Min confidence filter (default: 0)
 # --taxonomy PATH              Load predicate taxonomy from file
@@ -122,16 +123,27 @@ result = extract_statements(text)
 for stmt in result:
     print(f"{stmt.subject.text} ({stmt.subject.type})")
     print(f"  --[{stmt.predicate}]--> {stmt.object.text}")
-    print(f"  Confidence: {stmt.confidence_score:.2f}")  # NEW in v0.2.0
+    print(f"  Method: {stmt.extraction_method}")  # NEW in v0.3.0
+    print(f"  Confidence: {stmt.confidence_score:.2f}")
     print()
 
 # ============================================
-# NEW in v0.2.0: Quality Scoring & Beam Merging
+# NEW in v0.3.0: spaCy-First Extraction
 # ============================================
 # By default, the library now:
-# - Scores each triple for groundedness (0-1)
-# - Merges top beams for better coverage
-# - Uses embedding-based deduplication
+# - Always uses spaCy for predicate extraction
+# - Generates 3 candidates per statement (hybrid, spacy, split)
+# - Selects best triple per source using combined scoring
+# - Tracks extraction method (stmt.extraction_method)
+
+# Keep all candidates instead of best per source:
+options = ExtractionOptions(all_triples=True)
+result = extract_statements(text, options)
+
+# ============================================
+# Quality Scoring & Beam Merging (v0.2.0+)
+# ============================================
+# Combined scoring: 50% semantic similarity + 25% subject/object noun scores
 
 from statement_extractor import ExtractionOptions, ScoringConfig
 

@@ -192,10 +192,10 @@ export function HowItWorks() {
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Quality Scoring <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.2</span></h4>
+              <h4 className="font-semibold mb-2">Combined Scoring <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.3</span></h4>
               <p className="text-sm text-gray-600">
-                Each triple is scored for groundedness (0-1) based on whether subject/object appear in source text,
-                predicate has a lexical trigger, and entities are in proximity.
+                Each triple scored 0-1 combining semantic similarity (50%) with grammatical accuracy:
+                subject noun score (25%) and object noun score (25%). Proper nouns score highest.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
@@ -260,10 +260,11 @@ export function HowItWorks() {
               <span className="text-green-600">✓</span> Recently Completed
             </h4>
             <ul className="text-sm text-green-700 space-y-1">
-              <li><strong>Confidence Scores</strong> <span className="text-xs">(v0.2.0)</span> — Each triple scored 0-1 for groundedness</li>
-              <li><strong>Beam Merging</strong> <span className="text-xs">(v0.2.0)</span> — Combines top beams for better coverage</li>
-              <li><strong>Embedding Dedup</strong> <span className="text-xs">(v0.2.0)</span> — Semantic similarity for predicate matching</li>
-              <li><strong>Hybrid spaCy Extraction</strong> <span className="text-xs">(v0.2.12)</span> — Adds spaCy candidates to pool, dedup picks the best</li>
+              <li><strong>spaCy-First Predicates</strong> <span className="text-xs">(v0.3.0)</span> — Always uses spaCy for predicate extraction</li>
+              <li><strong>Combined Scoring</strong> <span className="text-xs">(v0.3.0)</span> — 50% semantic similarity + 25% subject/object noun scores</li>
+              <li><strong>Multi-Candidate Extraction</strong> <span className="text-xs">(v0.3.0)</span> — 3 candidates per statement (hybrid, spaCy, split)</li>
+              <li><strong>Best Triple Selection</strong> <span className="text-xs">(v0.3.0)</span> — Keeps highest-scoring triple per source</li>
+              <li><strong>Extraction Method Tracking</strong> <span className="text-xs">(v0.3.0)</span> — Each statement tagged with extraction method</li>
             </ul>
           </div>
 

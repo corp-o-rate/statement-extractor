@@ -38,7 +38,7 @@ MODEL_ID = os.environ.get("MODEL_ID", "Corp-o-Rate-Community/statement-extractor
 MAX_CACHE_SIZE_BYTES = int(os.environ.get("MAX_CACHE_SIZE_BYTES", 10 * 1024 * 1024 * 1024))
 
 # Extraction options from environment
-DEFAULT_NUM_BEAMS = int(os.environ.get("NUM_RETURN_SEQUENCES", 8))
+DEFAULT_NUM_BEAMS = int(os.environ.get("NUM_RETURN_SEQUENCES", 4))
 MIN_STATEMENT_RATIO = float(os.environ.get("MIN_STATEMENT_RATIO", 1.0))
 MAX_EXTRACTION_ATTEMPTS = int(os.environ.get("MAX_EXTRACTION_ATTEMPTS", 3))
 DEFAULT_MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", 4096))
