@@ -89,7 +89,7 @@ corp-extractor -f article.txt --min-confidence 0.7
 # --no-dedup                   Disable deduplication
 # --no-embeddings              Disable embedding-based dedup (faster)
 # --no-merge                   Disable beam merging
-# --no-spacy                   Disable spaCy extraction (use raw model output)
+# --predicates PATH            Load predicate list for GLiNER2 relation extraction
 # --all-triples                Keep all candidate triples (default: best per source)
 # --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
 # --min-confidence FLOAT       Min confidence filter (default: 0)
@@ -103,7 +103,7 @@ corp-extractor -f article.txt --min-confidence 0.7
   python: `# Installation
 pip install "${PYPI_PACKAGE}"
 
-# spaCy model downloads automatically on first use
+# GLiNER2 model downloads automatically on first use (~800MB)
 
 # For GPU support, install PyTorch with CUDA first:
 # pip install torch --index-url https://download.pytorch.org/whl/cu121
@@ -123,21 +123,20 @@ result = extract_statements(text)
 for stmt in result:
     print(f"{stmt.subject.text} ({stmt.subject.type})")
     print(f"  --[{stmt.predicate}]--> {stmt.object.text}")
-    print(f"  Method: {stmt.extraction_method}")  # NEW in v0.3.0
     print(f"  Confidence: {stmt.confidence_score:.2f}")
     print()
 
 # ============================================
-# NEW in v0.3.0: spaCy-First Extraction
+# NEW in v0.4.0: GLiNER2 Integration
 # ============================================
-# By default, the library now:
-# - Always uses spaCy for predicate extraction
-# - Generates 3 candidates per statement (hybrid, spacy, split)
-# - Selects best triple per source using combined scoring
-# - Tracks extraction method (stmt.extraction_method)
+# The library uses GLiNER2 (205M params) for:
+# - Entity recognition and boundary refinement
+# - Relation extraction when predicates are provided
+# - Entity-based confidence scoring
 
-# Keep all candidates instead of best per source:
-options = ExtractionOptions(all_triples=True)
+# Use GLiNER2 relation extraction with predefined predicates:
+from statement_extractor import ExtractionOptions
+options = ExtractionOptions(predicates=["works_for", "founded", "acquired"])
 result = extract_statements(text, options)
 
 # ============================================

@@ -5,49 +5,62 @@ import { Mail, Heart, Zap, AlertTriangle, RefreshCw, GitBranch, Target, Users, B
 // SVG Diagram: Processing Pipeline
 function PipelineDiagram() {
   return (
-    <svg viewBox="0 0 800 200" className="w-full max-w-3xl mx-auto my-8">
+    <svg viewBox="0 0 900 200" className="w-full max-w-4xl mx-auto my-8">
       {/* Input */}
       <g>
-        <rect x="20" y="60" width="120" height="80" rx="8" fill="#f3f4f6" stroke="#d1d5db" strokeWidth="2" />
-        <text x="80" y="95" textAnchor="middle" className="fill-gray-700 text-sm font-semibold">Raw Text</text>
-        <text x="80" y="115" textAnchor="middle" className="fill-gray-500 text-xs">Unstructured</text>
+        <rect x="10" y="60" width="100" height="80" rx="8" fill="#f3f4f6" stroke="#d1d5db" strokeWidth="2" />
+        <text x="60" y="95" textAnchor="middle" className="fill-gray-700 text-sm font-semibold">Raw Text</text>
+        <text x="60" y="115" textAnchor="middle" className="fill-gray-500 text-xs">Unstructured</text>
       </g>
 
       {/* Arrow 1 */}
-      <path d="M145 100 L195 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
+      <path d="M115 100 L145 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
 
-      {/* Model */}
+      {/* T5-Gemma 2 Model */}
       <g>
-        <rect x="200" y="40" width="140" height="120" rx="8" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
-        <text x="270" y="75" textAnchor="middle" className="fill-red-700 text-sm font-bold">T5-Gemma 2</text>
-        <text x="270" y="95" textAnchor="middle" className="fill-gray-600 text-xs">540M params</text>
-        <line x1="220" y1="110" x2="320" y2="110" stroke="#fca5a5" strokeWidth="1" />
-        <text x="270" y="130" textAnchor="middle" className="fill-gray-500 text-xs">Beam Search</text>
-        <text x="270" y="145" textAnchor="middle" className="fill-gray-500 text-xs">4 candidates</text>
+        <rect x="150" y="45" width="130" height="110" rx="8" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
+        <text x="215" y="75" textAnchor="middle" className="fill-red-700 text-sm font-bold">T5-Gemma 2</text>
+        <text x="215" y="93" textAnchor="middle" className="fill-gray-600 text-xs">540M params</text>
+        <line x1="165" y1="105" x2="265" y2="105" stroke="#fca5a5" strokeWidth="1" />
+        <text x="215" y="122" textAnchor="middle" className="fill-gray-500 text-xs">Beam Search</text>
+        <text x="215" y="137" textAnchor="middle" className="fill-gray-500 text-xs">4 candidates</text>
       </g>
 
       {/* Arrow 2 */}
-      <path d="M345 100 L395 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
+      <path d="M285 100 L315 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
 
-      {/* Handler */}
+      {/* GLiNER2 */}
       <g>
-        <rect x="400" y="40" width="140" height="120" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
-        <text x="470" y="70" textAnchor="middle" className="fill-green-700 text-sm font-bold">Handler</text>
-        <text x="470" y="90" textAnchor="middle" className="fill-gray-500 text-xs">Retry logic</text>
-        <text x="470" y="105" textAnchor="middle" className="fill-gray-500 text-xs">Deduplication</text>
-        <text x="470" y="120" textAnchor="middle" className="fill-gray-500 text-xs">Best selection</text>
-        <text x="470" y="135" textAnchor="middle" className="fill-gray-500 text-xs">XML validation</text>
+        <rect x="320" y="45" width="130" height="110" rx="8" fill="#fefce8" stroke="#ca8a04" strokeWidth="2" />
+        <text x="385" y="75" textAnchor="middle" className="fill-yellow-700 text-sm font-bold">GLiNER2</text>
+        <text x="385" y="93" textAnchor="middle" className="fill-gray-600 text-xs">205M params</text>
+        <line x1="335" y1="105" x2="435" y2="105" stroke="#fde68a" strokeWidth="1" />
+        <text x="385" y="122" textAnchor="middle" className="fill-gray-500 text-xs">Entity extraction</text>
+        <text x="385" y="137" textAnchor="middle" className="fill-gray-500 text-xs">Boundary refinement</text>
       </g>
 
       {/* Arrow 3 */}
-      <path d="M545 100 L595 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
+      <path d="M455 100 L485 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
+
+      {/* Handler */}
+      <g>
+        <rect x="490" y="45" width="130" height="110" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
+        <text x="555" y="70" textAnchor="middle" className="fill-green-700 text-sm font-bold">Handler</text>
+        <text x="555" y="88" textAnchor="middle" className="fill-gray-500 text-xs">Scoring</text>
+        <text x="555" y="103" textAnchor="middle" className="fill-gray-500 text-xs">Deduplication</text>
+        <text x="555" y="118" textAnchor="middle" className="fill-gray-500 text-xs">Best selection</text>
+        <text x="555" y="133" textAnchor="middle" className="fill-gray-500 text-xs">XML validation</text>
+      </g>
+
+      {/* Arrow 4 */}
+      <path d="M625 100 L655 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
 
       {/* Output */}
       <g>
-        <rect x="600" y="60" width="160" height="80" rx="8" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
-        <text x="680" y="90" textAnchor="middle" className="fill-blue-700 text-sm font-semibold">Structured Data</text>
-        <text x="680" y="110" textAnchor="middle" className="fill-gray-500 text-xs">Subject-Predicate-Object</text>
-        <text x="680" y="125" textAnchor="middle" className="fill-gray-500 text-xs">+ Entity Types</text>
+        <rect x="660" y="60" width="140" height="80" rx="8" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
+        <text x="730" y="90" textAnchor="middle" className="fill-blue-700 text-sm font-semibold">Structured Data</text>
+        <text x="730" y="110" textAnchor="middle" className="fill-gray-500 text-xs">Subject-Predicate-Object</text>
+        <text x="730" y="125" textAnchor="middle" className="fill-gray-500 text-xs">+ Entity Types</text>
       </g>
 
       {/* Arrowhead marker */}
@@ -60,54 +73,64 @@ function PipelineDiagram() {
   );
 }
 
-// SVG Diagram: v0.2.0 Processing Flow
+// SVG Diagram: v0.4.0 Processing Flow
 function ProcessingFlowDiagram() {
   return (
-    <svg viewBox="0 0 700 140" className="w-full max-w-3xl mx-auto my-6">
+    <svg viewBox="0 0 800 140" className="w-full max-w-4xl mx-auto my-6">
       {/* Generate */}
       <g>
-        <rect x="20" y="40" width="100" height="60" rx="8" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
-        <text x="70" y="65" textAnchor="middle" className="fill-red-700 text-xs font-bold">Generate</text>
-        <text x="70" y="80" textAnchor="middle" className="fill-gray-500 text-xs">4 diverse beams</text>
+        <rect x="10" y="40" width="90" height="60" rx="8" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
+        <text x="55" y="65" textAnchor="middle" className="fill-red-700 text-xs font-bold">Generate</text>
+        <text x="55" y="80" textAnchor="middle" className="fill-gray-500 text-xs">4 diverse beams</text>
       </g>
 
       {/* Arrow 1 */}
-      <path d="M125 70 L165 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+      <path d="M105 70 L135 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
 
-      {/* Score */}
+      {/* GLiNER2 */}
       <g>
-        <rect x="170" y="40" width="100" height="60" rx="8" fill="#fefce8" stroke="#ca8a04" strokeWidth="2" />
-        <text x="220" y="65" textAnchor="middle" className="fill-yellow-700 text-xs font-bold">Score</text>
-        <text x="220" y="80" textAnchor="middle" className="fill-gray-500 text-xs">groundedness 0-1</text>
+        <rect x="140" y="40" width="100" height="60" rx="8" fill="#fefce8" stroke="#ca8a04" strokeWidth="2" />
+        <text x="190" y="65" textAnchor="middle" className="fill-yellow-700 text-xs font-bold">GLiNER2</text>
+        <text x="190" y="80" textAnchor="middle" className="fill-gray-500 text-xs">entity extraction</text>
       </g>
 
       {/* Arrow 2 */}
-      <path d="M275 70 L315 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+      <path d="M245 70 L275 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
 
-      {/* Merge Beams */}
+      {/* Score */}
       <g>
-        <rect x="320" y="40" width="100" height="60" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
-        <text x="370" y="65" textAnchor="middle" className="fill-green-700 text-xs font-bold">Merge</text>
-        <text x="370" y="80" textAnchor="middle" className="fill-gray-500 text-xs">top-N beams</text>
+        <rect x="280" y="40" width="100" height="60" rx="8" fill="#fef2f2" stroke="#f87171" strokeWidth="2" />
+        <text x="330" y="65" textAnchor="middle" className="fill-red-600 text-xs font-bold">Score</text>
+        <text x="330" y="80" textAnchor="middle" className="fill-gray-500 text-xs">entity + similarity</text>
       </g>
 
       {/* Arrow 3 */}
-      <path d="M425 70 L465 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+      <path d="M385 70 L415 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
 
-      {/* Deduplicate */}
+      {/* Merge Beams */}
       <g>
-        <rect x="470" y="40" width="100" height="60" rx="8" fill="#f5f3ff" stroke="#7c3aed" strokeWidth="2" />
-        <text x="520" y="65" textAnchor="middle" className="fill-purple-700 text-xs font-bold">Deduplicate</text>
-        <text x="520" y="80" textAnchor="middle" className="fill-gray-500 text-xs">embeddings</text>
+        <rect x="420" y="40" width="90" height="60" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
+        <text x="465" y="65" textAnchor="middle" className="fill-green-700 text-xs font-bold">Merge</text>
+        <text x="465" y="80" textAnchor="middle" className="fill-gray-500 text-xs">top-N beams</text>
       </g>
 
       {/* Arrow 4 */}
-      <path d="M575 70 L615 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+      <path d="M515 70 L545 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
+
+      {/* Deduplicate */}
+      <g>
+        <rect x="550" y="40" width="100" height="60" rx="8" fill="#f5f3ff" stroke="#7c3aed" strokeWidth="2" />
+        <text x="600" y="65" textAnchor="middle" className="fill-purple-700 text-xs font-bold">Deduplicate</text>
+        <text x="600" y="80" textAnchor="middle" className="fill-gray-500 text-xs">embeddings</text>
+      </g>
+
+      {/* Arrow 5 */}
+      <path d="M655 70 L685 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
 
       {/* Output */}
       <g>
-        <circle cx="650" cy="70" r="35" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
-        <text x="650" y="75" textAnchor="middle" className="fill-blue-700 text-xs font-bold">Output</text>
+        <circle cx="720" cy="70" r="35" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
+        <text x="720" y="75" textAnchor="middle" className="fill-blue-700 text-xs font-bold">Output</text>
       </g>
 
       <defs>
@@ -162,16 +185,16 @@ export function HowItWorks() {
           </p>
         </div>
 
-        {/* v0.2.0 Processing Flow */}
+        {/* v0.4.0 Processing Flow */}
         <div className="mb-12">
           <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
             <RefreshCw className="w-5 h-5 text-red-600" />
-            Quality-First Extraction <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-2">v0.2.0</span>
+            Quality-First Extraction <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-2">v0.4.0</span>
           </h3>
           <ProcessingFlowDiagram />
           <p className="text-gray-600 text-center max-w-2xl mx-auto mb-6">
-            Multiple beam outputs are scored for quality, merged for coverage, and deduplicated using
-            semantic similarity (paraphrase-MiniLM-L6-v2, 0.65 threshold).
+            Multiple beam outputs pass through GLiNER2 for entity extraction and boundary refinement,
+            scored using entity confidence + semantic similarity, then deduplicated using embeddings.
           </p>
           <div className="grid md:grid-cols-2 gap-6 mt-6">
             <div className="bg-gray-50 p-4 rounded-lg border">
@@ -192,10 +215,10 @@ export function HowItWorks() {
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Combined Scoring <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.3</span></h4>
+              <h4 className="font-semibold mb-2">Entity-Based Scoring <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.4</span></h4>
               <p className="text-sm text-gray-600">
-                Each triple scored 0-1 combining semantic similarity (50%) with grammatical accuracy:
-                subject noun score (25%) and object noun score (25%). Proper nouns score highest.
+                Each triple scored 0-1 combining semantic similarity (50%) with GLiNER2 entity recognition:
+                subject entity score (25%) and object entity score (25%). Named entities score highest.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
@@ -260,11 +283,11 @@ export function HowItWorks() {
               <span className="text-green-600">✓</span> Recently Completed
             </h4>
             <ul className="text-sm text-green-700 space-y-1">
-              <li><strong>spaCy-First Predicates</strong> <span className="text-xs">(v0.3.0)</span> — Always uses spaCy for predicate extraction</li>
-              <li><strong>Combined Scoring</strong> <span className="text-xs">(v0.3.0)</span> — 50% semantic similarity + 25% subject/object noun scores</li>
-              <li><strong>Multi-Candidate Extraction</strong> <span className="text-xs">(v0.3.0)</span> — 3 candidates per statement (hybrid, spaCy, split)</li>
+              <li><strong>GLiNER2 Integration</strong> <span className="text-xs">(v0.4.0)</span> — 205M param model for entity recognition and relation extraction</li>
+              <li><strong>Entity-Based Scoring</strong> <span className="text-xs">(v0.4.0)</span> — 50% semantic similarity + 25% subject/object entity scores</li>
+              <li><strong>Relation Extraction Mode</strong> <span className="text-xs">(v0.4.0)</span> — Use predefined predicates with GLiNER2 relation extraction</li>
+              <li><strong>Entity Boundary Refinement</strong> <span className="text-xs">(v0.4.0)</span> — GLiNER2 refines subject/object boundaries from T5-Gemma</li>
               <li><strong>Best Triple Selection</strong> <span className="text-xs">(v0.3.0)</span> — Keeps highest-scoring triple per source</li>
-              <li><strong>Extraction Method Tracking</strong> <span className="text-xs">(v0.3.0)</span> — Each statement tagged with extraction method</li>
             </ul>
           </div>
 

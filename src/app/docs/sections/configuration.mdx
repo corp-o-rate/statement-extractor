@@ -59,16 +59,16 @@ The primary configuration class for controlling extraction behavior.
       <td>Use embedding similarity for deduplication (v0.2.0)</td>
     </tr>
     <tr>
-      <td><code>use_spacy_extraction</code></td>
-      <td>bool</td>
-      <td>True</td>
-      <td>Use spaCy for predicate extraction - always recommended (v0.3.0)</td>
+      <td><code>predicates</code></td>
+      <td>list[str]</td>
+      <td>None</td>
+      <td>Predefined predicates for GLiNER2 relation extraction (v0.4.0)</td>
     </tr>
     <tr>
       <td><code>all_triples</code></td>
       <td>bool</td>
       <td>False</td>
-      <td>Keep all candidate triples instead of best per source (v0.3.0)</td>
+      <td>Keep all candidate triples instead of best per source</td>
     </tr>
     <tr>
       <td><code>predicate_taxonomy</code></td>

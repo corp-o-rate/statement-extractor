@@ -23,13 +23,6 @@ RUN pip install --no-cache-dir \
     gliner2 \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
-# Install corp-extractor library
-RUN pip install --no-cache-dir --no-deps corp-extractor==0.4.1
-
-# Download models at build time for faster cold starts
-RUN python -c "from statement_extractor import StatementExtractor; \
-    extractor = StatementExtractor(); \
-    print(f'T5-Gemma model loaded on {extractor.device}')"
 
 # Pre-download embedding model (downloads on CPU during build, will use GPU at runtime)
 RUN python -c "from sentence_transformers import SentenceTransformer; \
@@ -40,6 +33,14 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
 RUN python -c "from gliner2 import GLiNER2; \
     model = GLiNER2.from_pretrained('fastino/gliner2-base-v1'); \
     print('GLiNER2 model downloaded')"
+
+# Install corp-extractor library
+RUN pip install --no-cache-dir --no-deps corp-extractor==0.4.1
+
+# Download models at build time for faster cold starts
+RUN python -c "from statement_extractor import StatementExtractor; \
+    extractor = StatementExtractor(); \
+    print(f'T5-Gemma2 model loaded on {extractor.device}')"
 
 # Copy handler
 COPY handler.py /app/handler.py
