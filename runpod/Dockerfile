@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
 # Install corp-extractor library
-RUN pip install --no-cache-dir --no-deps corp-extractor==0.4.0
+RUN pip install --no-cache-dir --no-deps corp-extractor==0.4.1
 
 # Download models at build time for faster cold starts
 RUN python -c "from statement_extractor import StatementExtractor; \

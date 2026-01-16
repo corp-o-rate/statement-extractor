@@ -132,18 +132,12 @@ def extract_triple_from_text(
                         if len(entity) >= len(refined_object):
                             refined_object = entity
 
-            # Extract predicate from source text using predicate split
-            predicate_result = extract_triple_by_predicate_split(source_text, model_predicate)
-            if predicate_result:
-                _, extracted_predicate, _ = predicate_result
-            else:
-                extracted_predicate = model_predicate
-
-            if extracted_predicate:
+            # Use model predicate directly (T5-Gemma provides the predicate)
+            if model_predicate:
                 logger.debug(
-                    f"GLiNER2 extracted (entity-refined): subj='{refined_subject}', pred='{extracted_predicate}', obj='{refined_object}'"
+                    f"GLiNER2 extracted (entity-refined): subj='{refined_subject}', pred='{model_predicate}', obj='{refined_object}'"
                 )
-                return (refined_subject, extracted_predicate, refined_object)
+                return (refined_subject, model_predicate, refined_object)
 
         return None
 
@@ -153,70 +147,6 @@ def extract_triple_from_text(
     except Exception as e:
         logger.debug(f"GLiNER2 extraction failed: {e}")
         return None
-
-
-def extract_triple_by_predicate_split(
-    source_text: str,
-    predicate: str,
-) -> tuple[str, str, str] | None:
-    """
-    Extract subject and object by splitting the source text around the predicate.
-
-    This is useful when the predicate is known but subject/object boundaries
-    are uncertain. Uses the predicate as an anchor point.
-
-    Args:
-        source_text: The source sentence
-        predicate: The predicate (verb phrase) to split on
-
-    Returns:
-        Tuple of (subject, predicate, object) or None if split fails
-    """
-    if not source_text or not predicate:
-        return None
-
-    # Find the predicate in the source text (case-insensitive)
-    source_lower = source_text.lower()
-    pred_lower = predicate.lower()
-
-    pred_pos = source_lower.find(pred_lower)
-    if pred_pos < 0:
-        # Try finding just the main verb (first word of predicate)
-        main_verb = pred_lower.split()[0] if pred_lower.split() else ""
-        if main_verb and len(main_verb) > 2:
-            pred_pos = source_lower.find(main_verb)
-            if pred_pos >= 0:
-                # Adjust to use the actual predicate length for splitting
-                predicate = main_verb
-
-    if pred_pos < 0:
-        return None
-
-    # Extract subject (text before predicate, trimmed)
-    subject = source_text[:pred_pos].strip()
-
-    # Extract object (text after predicate, trimmed)
-    pred_end = pred_pos + len(predicate)
-    obj = source_text[pred_end:].strip()
-
-    # Clean up: remove trailing punctuation from object
-    obj = obj.rstrip('.,;:!?')
-
-    # Clean up: remove leading articles/prepositions from object if very short
-    obj_words = obj.split()
-    if obj_words and obj_words[0].lower() in ('a', 'an', 'the', 'to', 'of', 'for'):
-        if len(obj_words) > 1:
-            obj = ' '.join(obj_words[1:])
-
-    # Validate: both subject and object should have meaningful content
-    if len(subject) < 2 or len(obj) < 2:
-        return None
-
-    logger.debug(
-        f"Predicate-split extracted: subj='{subject}', pred='{predicate}', obj='{obj}'"
-    )
-
-    return (subject, predicate, obj)
 
 
 def score_entity_content(text: str) -> float:

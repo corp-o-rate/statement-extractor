@@ -28,7 +28,6 @@ class ExtractionMethod(str, Enum):
     """Method used to extract the triple components."""
     HYBRID = "hybrid"  # Model subject/object + GLiNER2 predicate
     GLINER = "gliner"  # All components from GLiNER2 extraction
-    SPLIT = "split"  # Subject/object from splitting source text around predicate
     MODEL = "model"  # All components from T5-Gemma model (when GLiNER2 disabled)
 
 

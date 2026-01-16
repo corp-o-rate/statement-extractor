@@ -13,9 +13,9 @@ Extract structured subject-predicate-object statements from unstructured text us
 - **GLiNER2 Integration** *(v0.4.0)*: Uses GLiNER2 (205M params) for entity recognition and relation extraction
 - **Predefined Predicates** *(v0.4.0)*: Optional `--predicates` list for GLiNER2 relation extraction mode
 - **Entity-based Scoring** *(v0.4.0)*: Confidence combines semantic similarity (50%) + entity recognition scores (25% each)
-- **Multi-Candidate Extraction**: Generates 3 candidates per statement (hybrid, GLiNER2-only, predicate-split)
+- **Multi-Candidate Extraction**: Generates 2 candidates per statement (hybrid, GLiNER2-only)
 - **Best Triple Selection**: Keeps only highest-scoring triple per source (use `--all-triples` to keep all)
-- **Extraction Method Tracking**: Each statement includes `extraction_method` field (hybrid, gliner, split, model)
+- **Extraction Method Tracking**: Each statement includes `extraction_method` field (hybrid, gliner, model)
 - **Beam Merging**: Combines top beams for better coverage instead of picking one
 - **Embedding-based Dedup**: Uses semantic similarity to detect near-duplicate predicates
 - **Predicate Taxonomies**: Normalize predicates to canonical forms via embeddings
@@ -283,20 +283,19 @@ result = extract_statements("Apple announced a new iPhone.")
 # Extracts predicate from source text using T5-Gemma's hint
 ```
 
-### Three Candidate Extraction Methods
+### Two Candidate Extraction Methods
 
-For each statement, three candidates are generated and the best is selected:
+For each statement, two candidates are generated and the best is selected:
 
 | Method | Description |
 |--------|-------------|
 | `hybrid` | Model subject/object + GLiNER2/extracted predicate |
-| `gliner` | All components refined by GLiNER2 |
-| `split` | Source text split around the predicate |
+| `gliner` | All components refined by GLiNER2 entity recognition |
 
 ```python
 for stmt in result:
     print(f"{stmt.subject.text} --[{stmt.predicate}]--> {stmt.object.text}")
-    print(f"  Method: {stmt.extraction_method}")  # hybrid, gliner, split, or model
+    print(f"  Method: {stmt.extraction_method}")  # hybrid, gliner, or model
     print(f"  Confidence: {stmt.confidence_score:.2f}")
 ```
 
@@ -320,8 +319,7 @@ Confidence scores combine **semantic similarity** and **entity recognition**:
 
 Each statement includes an `extraction_method` field:
 - `hybrid` - Model subject/object + GLiNER2 predicate
-- `gliner` - All components refined by GLiNER2
-- `split` - Subject/object from splitting source text around predicate
+- `gliner` - All components refined by GLiNER2 entity recognition
 - `model` - All components from T5-Gemma model (only when `--no-gliner`)
 
 ### Best Triple Selection

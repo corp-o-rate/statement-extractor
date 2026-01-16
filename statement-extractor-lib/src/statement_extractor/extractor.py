@@ -783,7 +783,7 @@ class StatementExtractor:
 
                 if use_gliner_extraction and source_text:
                     try:
-                        from .gliner_extraction import extract_triple_from_text, extract_triple_by_predicate_split
+                        from .gliner_extraction import extract_triple_from_text
 
                         # Get model predicate for fallback/refinement
                         predicate_elem = stmt_elem.find('predicate')
@@ -825,28 +825,6 @@ class StatementExtractor:
                                             object=Entity(text=gliner_obj, type=object_type),
                                             source_text=source_text,
                                             extraction_method=ExtractionMethod.GLINER,
-                                        ))
-
-                                # Candidate 3: Predicate-split (split source text around predicate)
-                                split_result = extract_triple_by_predicate_split(
-                                    source_text=source_text,
-                                    predicate=gliner_pred,
-                                )
-                                if split_result:
-                                    split_subj, split_pred, split_obj = split_result
-                                    # Only add if different from previous candidates
-                                    is_different_from_hybrid = (split_subj != subject_text or split_obj != object_text)
-                                    is_different_from_gliner = (split_subj != gliner_subj or split_obj != gliner_obj)
-                                    if is_different_from_hybrid and is_different_from_gliner:
-                                        logger.debug(
-                                            f"Adding predicate-split candidate: '{split_subj}' --[{split_pred}]--> '{split_obj}'"
-                                        )
-                                        statements.append(Statement(
-                                            subject=Entity(text=split_subj, type=subject_type),
-                                            predicate=split_pred,
-                                            object=Entity(text=split_obj, type=object_type),
-                                            source_text=source_text,
-                                            extraction_method=ExtractionMethod.SPLIT,
                                         ))
                             else:
                                 logger.debug(
