@@ -10,18 +10,19 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
-- **Combined Quality Scoring** *(v0.3.0)*: Confidence combines semantic similarity (50%) + subject/object noun scores (25% each)
-- **spaCy-First Predicates** *(v0.3.0)*: Always uses spaCy for predicate extraction (model predicates are unreliable)
-- **Multi-Candidate Extraction** *(v0.3.0)*: Generates 3 candidates per statement (hybrid, spaCy-only, predicate-split)
-- **Best Triple Selection** *(v0.3.0)*: Keeps only highest-scoring triple per source (use `--all-triples` to keep all)
-- **Extraction Method Tracking** *(v0.3.0)*: Each statement includes `extraction_method` field (hybrid, spacy, split, model)
-- **Beam Merging** *(v0.2.0)*: Combines top beams for better coverage instead of picking one
-- **Embedding-based Dedup** *(v0.2.0)*: Uses semantic similarity to detect near-duplicate predicates
-- **Predicate Taxonomies** *(v0.2.0)*: Normalize predicates to canonical forms via embeddings
-- **Contextualized Matching** *(v0.2.2)*: Compares full "Subject Predicate Object" against source text for better accuracy
-- **Entity Type Merging** *(v0.2.3)*: Automatically merges UNKNOWN entity types with specific types during deduplication
-- **Reversal Detection** *(v0.2.3)*: Detects and corrects subject-object reversals using embedding comparison
-- **Command Line Interface** *(v0.2.4)*: Full-featured CLI for terminal usage
+- **GLiNER2 Integration** *(v0.4.0)*: Uses GLiNER2 (205M params) for entity recognition and relation extraction
+- **Predefined Predicates** *(v0.4.0)*: Optional `--predicates` list for GLiNER2 relation extraction mode
+- **Entity-based Scoring** *(v0.4.0)*: Confidence combines semantic similarity (50%) + entity recognition scores (25% each)
+- **Multi-Candidate Extraction**: Generates 3 candidates per statement (hybrid, GLiNER2-only, predicate-split)
+- **Best Triple Selection**: Keeps only highest-scoring triple per source (use `--all-triples` to keep all)
+- **Extraction Method Tracking**: Each statement includes `extraction_method` field (hybrid, gliner, split, model)
+- **Beam Merging**: Combines top beams for better coverage instead of picking one
+- **Embedding-based Dedup**: Uses semantic similarity to detect near-duplicate predicates
+- **Predicate Taxonomies**: Normalize predicates to canonical forms via embeddings
+- **Contextualized Matching**: Compares full "Subject Predicate Object" against source text for better accuracy
+- **Entity Type Merging**: Automatically merges UNKNOWN entity types with specific types during deduplication
+- **Reversal Detection**: Detects and corrects subject-object reversals using embedding comparison
+- **Command Line Interface**: Full-featured CLI for terminal usage
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
 
 ## Installation
@@ -30,7 +31,7 @@ Extract structured subject-predicate-object statements from unstructured text us
 pip install corp-extractor
 ```
 
-The spaCy model for predicate inference is downloaded automatically on first use.
+The GLiNER2 model (205M params) is downloaded automatically on first use.
 
 **Note**: This package requires `transformers>=5.0.0` for T5-Gemma2 model support.
 
@@ -140,7 +141,8 @@ Options:
   --no-dedup                   Disable deduplication
   --no-embeddings              Disable embedding-based dedup (faster)
   --no-merge                   Disable beam merging
-  --no-spacy                   Disable spaCy extraction (use raw model output)
+  --no-gliner                  Disable GLiNER2 extraction (use raw model output)
+  --predicates TEXT            Comma-separated predicate types for GLiNER2 relation extraction
   --all-triples                Keep all candidate triples (default: best per source)
   --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
   --min-confidence FLOAT       Min confidence filter (default: 0)
@@ -244,20 +246,42 @@ for stmt in fixed_statements:
 
 During deduplication, reversed duplicates (e.g., "A -> P -> B" and "B -> P -> A") are now detected and merged, with the correct orientation determined by source text similarity.
 
-## New in v0.3.0: spaCy-First Extraction & Semantic Scoring
+## New in v0.4.0: GLiNER2 Integration
 
-v0.3.0 introduces significant improvements to extraction quality:
+v0.4.0 replaces spaCy with **GLiNER2** (205M params) for entity recognition and relation extraction. GLiNER2 is a unified model that handles NER, text classification, structured data extraction, and relation extraction with CPU-optimized inference.
 
-### spaCy-First Predicate Extraction
+### Why GLiNER2?
 
-The T5-Gemma model is excellent at:
+The T5-Gemma model excels at:
 - **Triple isolation** - identifying that a relationship exists
 - **Coreference resolution** - resolving pronouns to named entities
 
-But unreliable at:
-- **Predicate extraction** - often returns empty or wrong predicates
+GLiNER2 now handles:
+- **Entity recognition** - refining subject/object boundaries
+- **Relation extraction** - when predefined predicates are provided
+- **Entity scoring** - scoring how "entity-like" subjects/objects are
 
-**Solution:** v0.3.0 always uses spaCy for predicate extraction. The model provides subject, object, entity types, and source text; spaCy provides the predicate.
+### Two Extraction Modes
+
+**Mode 1: With Predicate List** (GLiNER2 relation extraction)
+```python
+from statement_extractor import extract_statements, ExtractionOptions
+
+options = ExtractionOptions(predicates=["works_for", "founded", "acquired", "headquartered_in"])
+result = extract_statements("John works for Apple Inc. in Cupertino.", options)
+```
+
+Or via CLI:
+```bash
+corp-extractor "John works for Apple Inc." --predicates "works_for,founded,acquired"
+```
+
+**Mode 2: Without Predicate List** (entity-refined extraction)
+```python
+result = extract_statements("Apple announced a new iPhone.")
+# Uses GLiNER2 for entity extraction to refine boundaries
+# Extracts predicate from source text using T5-Gemma's hint
+```
 
 ### Three Candidate Extraction Methods
 
@@ -265,48 +289,46 @@ For each statement, three candidates are generated and the best is selected:
 
 | Method | Description |
 |--------|-------------|
-| `hybrid` | Model subject/object + spaCy predicate |
-| `spacy` | All components from spaCy dependency parsing |
+| `hybrid` | Model subject/object + GLiNER2/extracted predicate |
+| `gliner` | All components refined by GLiNER2 |
 | `split` | Source text split around the predicate |
 
 ```python
 for stmt in result:
     print(f"{stmt.subject.text} --[{stmt.predicate}]--> {stmt.object.text}")
-    print(f"  Method: {stmt.extraction_method}")  # hybrid, spacy, split, or model
+    print(f"  Method: {stmt.extraction_method}")  # hybrid, gliner, split, or model
     print(f"  Confidence: {stmt.confidence_score:.2f}")
 ```
 
 ### Combined Quality Scoring
 
-Confidence scores combine **semantic similarity** and **grammatical accuracy**:
+Confidence scores combine **semantic similarity** and **entity recognition**:
 
 | Component | Weight | Description |
 |-----------|--------|-------------|
 | Semantic similarity | 50% | Cosine similarity between source text and reassembled triple |
-| Subject noun score | 25% | How noun-like the subject is |
-| Object noun score | 25% | How noun-like the object is |
+| Subject entity score | 25% | How entity-like the subject is (via GLiNER2) |
+| Object entity score | 25% | How entity-like the object is (via GLiNER2) |
 
-**Noun scoring:**
-- Proper noun(s) only: 1.0
-- Common noun(s) only: 0.8
-- Contains noun + other words: 0.4-0.8 (based on ratio)
-- No nouns: 0.2
-
-This ensures extracted subjects and objects are grammatically valid entities, not fragments or verb phrases.
+**Entity scoring (via GLiNER2):**
+- Recognized entity with high confidence: 1.0
+- Recognized entity with moderate confidence: 0.8
+- Partially recognized: 0.6
+- Not recognized: 0.2
 
 ### Extraction Method Tracking
 
-Each statement now includes an `extraction_method` field:
-- `hybrid` - Model subject/object + spaCy predicate
-- `spacy` - All components from spaCy dependency parsing
+Each statement includes an `extraction_method` field:
+- `hybrid` - Model subject/object + GLiNER2 predicate
+- `gliner` - All components refined by GLiNER2
 - `split` - Subject/object from splitting source text around predicate
-- `model` - All components from T5-Gemma model (only when `--no-spacy`)
+- `model` - All components from T5-Gemma model (only when `--no-gliner`)
 
 ### Best Triple Selection
 
-By default, only the **highest-scoring triple** is kept for each source sentence. This ensures clean output without redundant candidates.
+By default, only the **highest-scoring triple** is kept for each source sentence.
 
-To keep all candidate triples (for debugging or analysis):
+To keep all candidate triples:
 ```python
 options = ExtractionOptions(all_triples=True)
 result = extract_statements(text, options)
@@ -317,15 +339,15 @@ Or via CLI:
 corp-extractor "Your text" --all-triples --verbose
 ```
 
-**Disable spaCy extraction** to use only model output:
+**Disable GLiNER2 extraction** to use only model output:
 ```python
-options = ExtractionOptions(use_spacy_extraction=False)
+options = ExtractionOptions(use_gliner_extraction=False)
 result = extract_statements(text, options)
 ```
 
 Or via CLI:
 ```bash
-corp-extractor "Your text" --no-spacy
+corp-extractor "Your text" --no-gliner
 ```
 
 ## Disable Embeddings
@@ -397,14 +419,14 @@ for text in texts:
 This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam Search** ([Vijayakumar et al., 2016](https://arxiv.org/abs/1610.02424)):
 
 1. **Diverse Beam Search**: Generates 4+ candidate outputs using beam groups with diversity penalty
-2. **Quality Scoring** *(v0.2.0)*: Each triple scored for groundedness in source text
-3. **Beam Merging** *(v0.2.0)*: Top beams combined for better coverage
-4. **Embedding Dedup** *(v0.2.0)*: Semantic similarity removes near-duplicate predicates
-5. **Predicate Normalization** *(v0.2.0)*: Optional taxonomy matching via embeddings
-6. **Contextualized Matching** *(v0.2.2)*: Full statement context used for canonicalization and dedup
-7. **Entity Type Merging** *(v0.2.3)*: UNKNOWN types merged with specific types during dedup
-8. **Reversal Detection** *(v0.2.3)*: Subject-object reversals detected and corrected via embedding comparison
-9. **Hybrid spaCy** *(v0.2.12)*: spaCy candidates added to pool alongside model output for better coverage
+2. **Quality Scoring**: Each triple scored for groundedness in source text
+3. **Beam Merging**: Top beams combined for better coverage
+4. **Embedding Dedup**: Semantic similarity removes near-duplicate predicates
+5. **Predicate Normalization**: Optional taxonomy matching via embeddings
+6. **Contextualized Matching**: Full statement context used for canonicalization and dedup
+7. **Entity Type Merging**: UNKNOWN types merged with specific types during dedup
+8. **Reversal Detection**: Subject-object reversals detected and corrected via embedding comparison
+9. **GLiNER2 Extraction** *(v0.4.0)*: Entity recognition and relation extraction for improved accuracy
 
 ## Requirements
 
@@ -413,7 +435,7 @@ This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam 
 - Transformers 5.0+
 - Pydantic 2.0+
 - sentence-transformers 2.2+
-- spaCy 3.5+ (model downloaded automatically on first use)
+- GLiNER2 (model downloaded automatically on first use)
 - ~2GB VRAM (GPU) or ~4GB RAM (CPU)
 
 ## Links

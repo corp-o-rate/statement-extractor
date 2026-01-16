@@ -26,10 +26,10 @@ class EntityType(str, Enum):
 
 class ExtractionMethod(str, Enum):
     """Method used to extract the triple components."""
-    HYBRID = "hybrid"  # Model subject/object + spaCy predicate
-    SPACY = "spacy"  # All components from spaCy dependency parsing
+    HYBRID = "hybrid"  # Model subject/object + GLiNER2 predicate
+    GLINER = "gliner"  # All components from GLiNER2 extraction
     SPLIT = "split"  # Subject/object from splitting source text around predicate
-    MODEL = "model"  # All components from T5-Gemma model (when spaCy disabled)
+    MODEL = "model"  # All components from T5-Gemma model (when GLiNER2 disabled)
 
 
 class Entity(BaseModel):
@@ -295,9 +295,15 @@ class ExtractionOptions(BaseModel):
         default=True,
         description="Use embedding similarity for predicate deduplication"
     )
-    use_spacy_extraction: bool = Field(
+    use_gliner_extraction: bool = Field(
         default=True,
-        description="Use spaCy for predicate/subject/object extraction (model provides structure + coreference)"
+        description="Use GLiNER2 for predicate/subject/object extraction (model provides structure + coreference)"
+    )
+
+    # GLiNER2 predicate configuration
+    predicates: Optional[list[str]] = Field(
+        default=None,
+        description="Optional list of predefined predicate types for GLiNER2 relation extraction (e.g., ['works_for', 'founded'])"
     )
 
     # Verbose logging

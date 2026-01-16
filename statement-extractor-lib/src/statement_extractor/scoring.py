@@ -15,41 +15,21 @@ from .models import ScoringConfig, Statement
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded spaCy model for grammatical analysis
-_nlp = None
-
-
-def _get_nlp():
-    """Lazy-load spaCy model for POS tagging."""
-    global _nlp
-    if _nlp is None:
-        import spacy
-        try:
-            _nlp = spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
-        except OSError:
-            # Model not found, try to download
-            from .spacy_extraction import _download_model
-            if _download_model():
-                _nlp = spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
-            else:
-                raise
-    return _nlp
-
 
 class TripleScorer:
     """
-    Score individual triples combining semantic similarity and grammatical accuracy.
+    Score individual triples combining semantic similarity and entity recognition.
 
     The score is a weighted combination of:
     - Semantic similarity (50%): Cosine similarity between source text and reassembled triple
-    - Subject noun score (25%): How noun-like the subject is
-    - Object noun score (25%): How noun-like the object is
+    - Subject entity score (25%): How entity-like the subject is (via GLiNER2)
+    - Object entity score (25%): How entity-like the object is (via GLiNER2)
 
-    Noun scoring:
-    - Proper noun only (PROPN): 1.0
-    - Common noun only (NOUN): 0.8
-    - Contains noun + other words: 0.6
-    - No noun: 0.2
+    Entity scoring (via GLiNER2):
+    - Recognized entity with high confidence: 1.0
+    - Recognized entity with moderate confidence: 0.8
+    - Partially recognized: 0.6
+    - Not recognized: 0.2
     """
 
     def __init__(
@@ -102,54 +82,22 @@ class TripleScorer:
 
     def _score_noun_content(self, text: str) -> float:
         """
-        Score how noun-like a text is.
+        Score how entity-like a text is using GLiNER2 entity recognition.
 
         Returns:
-            1.0 - Entirely proper noun(s)
-            0.8 - Entirely common noun(s)
-            0.6 - Contains noun(s) but also other words
-            0.2 - No nouns found
+            1.0 - Recognized as a named entity with high confidence
+            0.8 - Recognized as an entity with moderate confidence
+            0.6 - Partially recognized or contains entity-like content
+            0.2 - Not recognized as any entity type
         """
         if not text or not text.strip():
             return 0.2
 
         try:
-            nlp = _get_nlp()
-            doc = nlp(text)
-
-            # Count token types (excluding punctuation and spaces)
-            tokens = [t for t in doc if not t.is_punct and not t.is_space]
-            if not tokens:
-                return 0.2
-
-            proper_nouns = sum(1 for t in tokens if t.pos_ == "PROPN")
-            common_nouns = sum(1 for t in tokens if t.pos_ == "NOUN")
-            total_nouns = proper_nouns + common_nouns
-            total_tokens = len(tokens)
-
-            if total_nouns == 0:
-                # No nouns at all
-                return 0.2
-
-            if total_nouns == total_tokens:
-                # Entirely nouns
-                if proper_nouns == total_tokens:
-                    # All proper nouns
-                    return 1.0
-                elif common_nouns == total_tokens:
-                    # All common nouns
-                    return 0.8
-                else:
-                    # Mix of proper and common nouns
-                    return 0.9
-
-            # Contains nouns but also other words
-            # Score based on noun ratio
-            noun_ratio = total_nouns / total_tokens
-            return 0.4 + (noun_ratio * 0.4)  # Range: 0.4 to 0.8
-
+            from .gliner_extraction import score_entity_content
+            return score_entity_content(text)
         except Exception as e:
-            logger.debug(f"Noun scoring failed for '{text}': {e}")
+            logger.debug(f"Entity scoring failed for '{text}': {e}")
             return 0.5  # Neutral score on error
 
     def score_triple(self, statement: Statement, source_text: str) -> float:

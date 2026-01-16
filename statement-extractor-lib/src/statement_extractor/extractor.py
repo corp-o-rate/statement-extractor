@@ -721,16 +721,17 @@ class StatementExtractor:
         Parse XML output into Statement objects.
 
         Uses model for subject, object, entity types, and source_text.
-        Always uses spaCy for predicate extraction (model predicates are unreliable).
+        Always uses GLiNER2 for predicate extraction (model predicates are unreliable).
 
         Produces two candidates for each statement:
-        1. Hybrid: model subject/object + spaCy predicate
-        2. spaCy-only: all components from spaCy
+        1. Hybrid: model subject/object + GLiNER2 predicate
+        2. GLiNER2-only: all components from GLiNER2
 
         Both go into the candidate pool; scoring/dedup picks the best.
         """
         statements: list[Statement] = []
-        use_spacy_extraction = options.use_spacy_extraction if options else True
+        use_gliner_extraction = options.use_gliner_extraction if options else True
+        predicates = options.predicates if options else None
 
         try:
             root = ET.fromstring(xml_output)
@@ -780,57 +781,63 @@ class StatementExtractor:
                     logger.debug(f"Skipping statement: missing subject or object from model")
                     continue
 
-                if use_spacy_extraction and source_text:
+                if use_gliner_extraction and source_text:
                     try:
-                        from .spacy_extraction import extract_triple_from_text, extract_triple_by_predicate_split
-                        spacy_result = extract_triple_from_text(
+                        from .gliner_extraction import extract_triple_from_text, extract_triple_by_predicate_split
+
+                        # Get model predicate for fallback/refinement
+                        predicate_elem = stmt_elem.find('predicate')
+                        model_predicate = predicate_elem.text.strip() if predicate_elem is not None and predicate_elem.text else ""
+
+                        gliner_result = extract_triple_from_text(
                             source_text=source_text,
                             model_subject=subject_text,
                             model_object=object_text,
-                            model_predicate="",  # Don't pass model predicate
+                            model_predicate=model_predicate,
+                            predicates=predicates,
                         )
-                        if spacy_result:
-                            spacy_subj, spacy_pred, spacy_obj = spacy_result
+                        if gliner_result:
+                            gliner_subj, gliner_pred, gliner_obj = gliner_result
 
-                            if spacy_pred:
-                                # Candidate 1: Hybrid (model subject/object + spaCy predicate)
+                            if gliner_pred:
+                                # Candidate 1: Hybrid (model subject/object + GLiNER2 predicate)
                                 logger.debug(
-                                    f"Adding hybrid candidate: '{subject_text}' --[{spacy_pred}]--> '{object_text}'"
+                                    f"Adding hybrid candidate: '{subject_text}' --[{gliner_pred}]--> '{object_text}'"
                                 )
                                 statements.append(Statement(
                                     subject=Entity(text=subject_text, type=subject_type),
-                                    predicate=spacy_pred,
+                                    predicate=gliner_pred,
                                     object=Entity(text=object_text, type=object_type),
                                     source_text=source_text,
                                     extraction_method=ExtractionMethod.HYBRID,
                                 ))
 
-                                # Candidate 2: spaCy-only (if different from hybrid)
-                                if spacy_subj and spacy_obj:
-                                    is_different = (spacy_subj != subject_text or spacy_obj != object_text)
+                                # Candidate 2: GLiNER2-only (if different from hybrid)
+                                if gliner_subj and gliner_obj:
+                                    is_different = (gliner_subj != subject_text or gliner_obj != object_text)
                                     if is_different:
                                         logger.debug(
-                                            f"Adding spaCy-only candidate: '{spacy_subj}' --[{spacy_pred}]--> '{spacy_obj}'"
+                                            f"Adding GLiNER2-only candidate: '{gliner_subj}' --[{gliner_pred}]--> '{gliner_obj}'"
                                         )
                                         statements.append(Statement(
-                                            subject=Entity(text=spacy_subj, type=subject_type),
-                                            predicate=spacy_pred,
-                                            object=Entity(text=spacy_obj, type=object_type),
+                                            subject=Entity(text=gliner_subj, type=subject_type),
+                                            predicate=gliner_pred,
+                                            object=Entity(text=gliner_obj, type=object_type),
                                             source_text=source_text,
-                                            extraction_method=ExtractionMethod.SPACY,
+                                            extraction_method=ExtractionMethod.GLINER,
                                         ))
 
                                 # Candidate 3: Predicate-split (split source text around predicate)
                                 split_result = extract_triple_by_predicate_split(
                                     source_text=source_text,
-                                    predicate=spacy_pred,
+                                    predicate=gliner_pred,
                                 )
                                 if split_result:
                                     split_subj, split_pred, split_obj = split_result
                                     # Only add if different from previous candidates
                                     is_different_from_hybrid = (split_subj != subject_text or split_obj != object_text)
-                                    is_different_from_spacy = (split_subj != spacy_subj or split_obj != spacy_obj)
-                                    if is_different_from_hybrid and is_different_from_spacy:
+                                    is_different_from_gliner = (split_subj != gliner_subj or split_obj != gliner_obj)
+                                    if is_different_from_hybrid and is_different_from_gliner:
                                         logger.debug(
                                             f"Adding predicate-split candidate: '{split_subj}' --[{split_pred}]--> '{split_obj}'"
                                         )
@@ -843,12 +850,12 @@ class StatementExtractor:
                                         ))
                             else:
                                 logger.debug(
-                                    f"spaCy found no predicate for: '{subject_text}' --> '{object_text}'"
+                                    f"GLiNER2 found no predicate for: '{subject_text}' --> '{object_text}'"
                                 )
                     except Exception as e:
-                        logger.debug(f"spaCy extraction failed: {e}")
+                        logger.debug(f"GLiNER2 extraction failed: {e}")
                 else:
-                    # spaCy disabled - fall back to model predicate
+                    # GLiNER2 disabled - fall back to model predicate
                     predicate_elem = stmt_elem.find('predicate')
                     model_predicate = predicate_elem.text.strip() if predicate_elem is not None and predicate_elem.text else ""
 

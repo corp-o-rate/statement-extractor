@@ -162,7 +162,7 @@ def extract_sync(
         max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
         merge_beams=True,
         embedding_dedup=True,
-        use_spacy_extraction=True,
+        use_gliner_extraction=True,
         scoring_config=ScoringConfig(),
         predicate_config=predicate_config,
     )

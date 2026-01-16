@@ -10,7 +10,7 @@
 pip install corp-extractor
 ```
 
-The spaCy model for predicate inference is downloaded automatically on first use.
+The GLiNER2 model (205M params) is downloaded automatically on first use.
 
 **GPU support**: Install PyTorch with CUDA before installing corp-extractor. The library auto-detects GPU availability at runtime.
 
@@ -50,16 +50,16 @@ Apple Inc. (ORG) -> paid -> $3 billion
 Beats Electronics (ORG) -> acquisition price -> $3 billion
 ```
 
-Each statement includes confidence scores and extraction method (v0.3.0+):
+Each statement includes confidence scores and extraction method:
 
 ```python
 for stmt in statements:
     print(f"{stmt.subject.text} -> {stmt.predicate} -> {stmt.object.text}")
-    print(f"  method: {stmt.extraction_method}")  # hybrid, spacy, split, or model
+    print(f"  method: {stmt.extraction_method}")  # hybrid, gliner, split, or model
     print(f"  confidence: {stmt.confidence_score:.2f}")
 ```
 
-v0.3.0 features: spaCy-first predicate extraction, multi-candidate generation, combined scoring (semantic + grammatical), best triple selection per source.
+v0.4.0 features: GLiNER2 entity recognition, optional predicate list for relation extraction, entity-based scoring, best triple selection per source.
 
 ### Using Predicate Taxonomies
 
@@ -125,9 +125,9 @@ This maps synonyms like "bought", "purchased", "acquired" to a single canonical 
       <td>Required, for embedding features</td>
     </tr>
     <tr>
-      <td>spaCy</td>
-      <td>3.5+</td>
-      <td>Required, for predicate inference (model auto-downloads)</td>
+      <td>GLiNER2</td>
+      <td>latest</td>
+      <td>Required, for entity recognition and relation extraction (model auto-downloads)</td>
     </tr>
   </tbody>
 </table>

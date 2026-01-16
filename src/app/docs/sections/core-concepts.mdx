@@ -301,3 +301,71 @@ result = extract_statements(text, beam_strategy="best")
 ```
 
 When using `merge`, statements are deduplicated based on normalized subject-predicate-object content, and the highest groundedness score is retained for duplicates.
+
+---
+
+### GLiNER2 Integration
+
+<a id="gliner2-integration"></a>
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.4.0</span>
+
+Version 0.4.0 introduces **GLiNER2** (205M parameters) for entity recognition and relation extraction, replacing spaCy.
+
+#### Why GLiNER2?
+
+GLiNER2 is a unified model that handles:
+- **Named Entity Recognition** - identifying entities with types
+- **Relation Extraction** - extracting relationships when predicates are predefined
+- **Entity Scoring** - measuring how "entity-like" subjects and objects are
+
+#### Two Extraction Modes
+
+**With predicate list**: Use GLiNER2's relation extraction for predefined relation types:
+
+```python
+from statement_extractor import extract_statements, ExtractionOptions
+
+options = ExtractionOptions(predicates=["works_for", "founded", "acquired"])
+result = extract_statements("John works for Apple Inc.", options)
+```
+
+**Without predicate list**: Use entity extraction to refine boundaries, extract predicate from source text:
+
+```python
+result = extract_statements("Apple announced a new iPhone.")
+# GLiNER2 refines entity boundaries, predicate extracted from source
+```
+
+#### Entity-Based Scoring
+
+Confidence scores now use GLiNER2 entity recognition instead of POS tagging:
+
+<table>
+  <thead>
+    <tr>
+      <th>Component</th>
+      <th>Weight</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Semantic similarity</td>
+      <td>50%</td>
+      <td>Cosine similarity between source text and reassembled triple</td>
+    </tr>
+    <tr>
+      <td>Subject entity score</td>
+      <td>25%</td>
+      <td>GLiNER2 entity recognition confidence for subject</td>
+    </tr>
+    <tr>
+      <td>Object entity score</td>
+      <td>25%</td>
+      <td>GLiNER2 entity recognition confidence for object</td>
+    </tr>
+  </tbody>
+</table>
+
+Entity scores: 1.0 (high confidence entity), 0.8 (moderate confidence), 0.6 (partial match), 0.2 (not recognized).

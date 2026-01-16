@@ -34,7 +34,7 @@ def _configure_logging(verbose: bool) -> None:
         "statement_extractor.scoring",
         "statement_extractor.predicate_comparer",
         "statement_extractor.canonicalization",
-        "statement_extractor.spacy_extraction",
+        "statement_extractor.gliner_extraction",
     ]:
         logging.getLogger(logger_name).setLevel(level)
 
@@ -66,7 +66,8 @@ from .models import (
 @click.option("--no-dedup", is_flag=True, help="Disable deduplication")
 @click.option("--no-embeddings", is_flag=True, help="Disable embedding-based deduplication (faster)")
 @click.option("--no-merge", is_flag=True, help="Disable beam merging (select single best beam)")
-@click.option("--no-spacy", is_flag=True, help="Disable spaCy extraction (use raw model output)")
+@click.option("--no-gliner", is_flag=True, help="Disable GLiNER2 extraction (use raw model output)")
+@click.option("--predicates", type=str, help="Comma-separated list of predicate types for GLiNER2 relation extraction")
 @click.option("--all-triples", is_flag=True, help="Keep all candidate triples instead of selecting best per source")
 @click.option("--dedup-threshold", type=float, default=0.65, help="Similarity threshold for deduplication (default: 0.65)")
 # Quality options
@@ -92,7 +93,8 @@ def main(
     no_dedup: bool,
     no_embeddings: bool,
     no_merge: bool,
-    no_spacy: bool,
+    no_gliner: bool,
+    predicates: Optional[str],
     all_triples: bool,
     dedup_threshold: float,
     min_confidence: float,
@@ -157,6 +159,13 @@ def main(
     # Configure scoring
     scoring_config = ScoringConfig(min_confidence=min_confidence)
 
+    # Parse predicates if provided
+    predicate_list = None
+    if predicates:
+        predicate_list = [p.strip() for p in predicates.split(",") if p.strip()]
+        if not quiet:
+            click.echo(f"Using predicate list: {predicate_list}", err=True)
+
     # Configure extraction options
     options = ExtractionOptions(
         num_beams=beams,
@@ -165,7 +174,8 @@ def main(
         deduplicate=not no_dedup,
         embedding_dedup=not no_embeddings,
         merge_beams=not no_merge,
-        use_spacy_extraction=not no_spacy,
+        use_gliner_extraction=not no_gliner,
+        predicates=predicate_list,
         all_triples=all_triples,
         predicate_taxonomy=predicate_taxonomy,
         predicate_config=predicate_config,
