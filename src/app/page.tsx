@@ -17,9 +17,12 @@ import { ExportFormats } from '@/components/export-formats';
 import { Network, FileText, BookOpen, Bot, Edit3, Eye, Code } from 'lucide-react';
 import { HowItWorks, AboutCorpORate } from '@/components/about-sections';
 import { CanonicalPredicates } from '@/components/canonical-predicates';
+import { WarmUpDialog } from '@/components/warm-up-dialog';
 
 // Polling interval in milliseconds
 const POLL_INTERVAL = 5000;
+// Show warm-up dialog after this many seconds
+const WARMUP_DIALOG_THRESHOLD = 30;
 
 export default function Home() {
   const [statements, setStatements] = useState<Statement[]>([]);
@@ -34,10 +37,20 @@ export default function Home() {
   const [userUuid, setUserUuid] = useState('');
   const [isLiking, setIsLiking] = useState(false);
   const [hasLiked, setHasLiked] = useState(false);
+  const [showWarmUpDialog, setShowWarmUpDialog] = useState(false);
+  const [showTimeoutDialog, setShowTimeoutDialog] = useState(false);
+  const [warmUpDialogDismissed, setWarmUpDialogDismissed] = useState(false);
 
   useEffect(() => {
     setUserUuid(getUserUuid());
   }, []);
+
+  // Show warm-up dialog after threshold seconds of loading
+  useEffect(() => {
+    if (isLoading && elapsedSeconds >= WARMUP_DIALOG_THRESHOLD && !warmUpDialogDismissed) {
+      setShowWarmUpDialog(true);
+    }
+  }, [isLoading, elapsedSeconds, warmUpDialogDismissed]);
 
   const pollJobStatus = async (
     jobId: string,
@@ -65,6 +78,9 @@ export default function Home() {
     setRateLimitMessage(undefined);
     setInputText(text);
     setHasLiked(false); // Reset like status for new extraction
+    setShowWarmUpDialog(false);
+    setShowTimeoutDialog(false);
+    setWarmUpDialogDismissed(false);
 
     // Start elapsed time counter
     const startTime = Date.now();
@@ -107,7 +123,12 @@ export default function Home() {
         }
 
         if (statusResult.status === 'TIMED_OUT') {
-          throw new Error(statusResult.error || 'Request timed out. Please try again.');
+          // Show timeout dialog instead of error toast
+          clearInterval(timerInterval);
+          setIsLoading(false);
+          setShowWarmUpDialog(false);
+          setShowTimeoutDialog(true);
+          return; // Exit early - don't cache, don't show error toast
         }
 
         // Job completed
@@ -146,6 +167,7 @@ export default function Home() {
       clearInterval(timerInterval);
       setIsLoading(false);
       setElapsedSeconds(0);
+      setShowWarmUpDialog(false);
     }
   };
 
@@ -419,6 +441,24 @@ export default function Home() {
       </main>
 
       <Footer />
+
+      {/* Warm-up Dialog - shown after 30 seconds of loading */}
+      <WarmUpDialog
+        isOpen={showWarmUpDialog}
+        elapsedSeconds={elapsedSeconds}
+        onClose={() => {
+          setShowWarmUpDialog(false);
+          setWarmUpDialogDismissed(true);
+        }}
+      />
+
+      {/* Timeout Dialog - shown when request times out */}
+      <WarmUpDialog
+        isOpen={showTimeoutDialog}
+        elapsedSeconds={elapsedSeconds}
+        onClose={() => setShowTimeoutDialog(false)}
+        isTimeout
+      />
     </div>
   );
 }

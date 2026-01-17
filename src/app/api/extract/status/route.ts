@@ -64,7 +64,8 @@ export async function GET(request: NextRequest) {
       }
 
       // Cache the result if we have the input text
-      if (inputText) {
+      // Note: setCachedStatements will skip empty results to prevent caching failures/timeouts
+      if (inputText && statements.length > 0) {
         await setCachedStatements(inputText, statements, { useCanonicalPredicates });
       }
 

@@ -64,12 +64,19 @@ export async function getCachedStatements(
 
 /**
  * Store statements in cache for input text.
+ * IMPORTANT: Never cache empty results to avoid persisting failures or timeouts.
  */
 export async function setCachedStatements(
   inputText: string,
   statements: Statement[],
   options?: CacheOptions
 ): Promise<void> {
+  // Never cache empty results - these could be from timeouts or failures
+  if (!statements || statements.length === 0) {
+    console.log('Skipping cache: empty statements array (possible timeout or failure)');
+    return;
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) {
     return;
