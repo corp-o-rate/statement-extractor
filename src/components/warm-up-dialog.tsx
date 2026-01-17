@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Clock, Zap, Server, Heart, X, ExternalLink } from 'lucide-react';
 
 interface WarmUpDialogProps {
@@ -11,25 +10,10 @@ interface WarmUpDialogProps {
 }
 
 export function WarmUpDialog({ isOpen, elapsedSeconds, onClose, isTimeout }: WarmUpDialogProps) {
-  const [isVisible, setIsVisible] = useState(false);
-
-  useEffect(() => {
-    if (isOpen) {
-      // Small delay for animation
-      requestAnimationFrame(() => setIsVisible(true));
-    } else {
-      setIsVisible(false);
-    }
-  }, [isOpen]);
-
   if (!isOpen) return null;
 
   return (
-    <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-200 ${
-        isVisible ? 'opacity-100' : 'opacity-0'
-      }`}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -37,11 +21,7 @@ export function WarmUpDialog({ isOpen, elapsedSeconds, onClose, isTimeout }: War
       />
 
       {/* Dialog */}
-      <div
-        className={`relative bg-white border-2 border-black shadow-[6px_6px_0_0_#000] max-w-lg w-full transform transition-all duration-200 ${
-          isVisible ? 'scale-100 translate-y-0' : 'scale-95 translate-y-4'
-        }`}
-      >
+      <div className="relative bg-white border-2 border-black shadow-[6px_6px_0_0_#000] max-w-lg w-full animate-slide-up">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b-2 border-black">
           <div className="flex items-center gap-3">
