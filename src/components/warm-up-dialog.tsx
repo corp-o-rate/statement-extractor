@@ -74,8 +74,7 @@ export function WarmUpDialog({ isOpen, elapsedSeconds, onClose, isTimeout }: War
               <div className="flex items-start gap-3 p-3 bg-green-50 border border-green-200">
                 <Zap className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
                 <p className="text-sm text-green-800">
-                  <strong>Good news:</strong> After warm-up, subsequent extractions will be much
-                  faster (5-15 seconds). The instance stays warm for several minutes between requests.
+                  <strong>Good news:</strong>The library can be run locally and it goes much faster, or reach out to us to pay to keep a GPU warm 24/7.
                 </p>
               </div>
             </>
@@ -94,7 +93,7 @@ export function WarmUpDialog({ isOpen, elapsedSeconds, onClose, isTimeout }: War
                 <ExternalLink className="w-4 h-4 text-gray-400 group-hover:text-black" />
               </a>
               <a
-                href="https://github.com/sponsors/corp-o-rate"
+                href="mailto:neil@corp-o-rate.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 hover:border-red-600 hover:bg-red-100 transition-all group"
