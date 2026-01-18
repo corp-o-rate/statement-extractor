@@ -264,14 +264,14 @@ export default function Home() {
         <section className="py-12 px-4 sm:px-6 lg:px-8 border-b">
           <div className="max-w-6xl mx-auto">
             <div className="text-center mb-8">
-              <span className="section-label">NLP MODEL DEMO</span>
+              <span className="section-label">corp-extractor demo</span>
               <h1 className="text-4xl md:text-5xl font-black mt-4 tracking-tight">
                 EXTRACT STATEMENTS.
                 <br />
-                <span className="text-gray-400">VISUALIZE RELATIONSHIPS.</span>
+                <span className="text-gray-400">MAP RELATIONSHIPS.</span>
               </h1>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                This demo showcases a fine-tuned{' '}
+                This demo showcases a python library which uses a custom fine-tuned{' '}
                 <a
                   href="https://blog.google/technology/developers/t5gemma-2/"
                   target="_blank"
@@ -280,7 +280,7 @@ export default function Home() {
                 >
                   T5-Gemma 2
                 </a>{' '}
-                model that extracts structured subject-predicate-object statements from unstructured text,
+                model that extracts atomic subject-predicate-object statements from unstructured text and resolves coreferences (e.g., pronouns to named entities),
                 inspired by{' '}
                 <a
                   href="https://www.microsoft.com/en-us/research/publication/towards-effective-extraction-and-evaluation-of-factual-claims/"
@@ -290,10 +290,9 @@ export default function Home() {
                 >
                   Microsoft Research&apos;s work on factual claim extraction
                 </a>.
-                The model identifies entities (organizations, people, locations, dates, etc.) and their
-                relationships, resolves coreferences (e.g., pronouns to named entities), and outputs
-                structured data for downstream tasks like fact-checking, knowledge graph construction,
-                and information retrieval.
+                The library then identifies entities (organizations, people, locations, dates, etc. ) and their
+                relationships using GLiNER2, and outputs structured data for downstream tasks like fact-checking,
+                knowledge graph construction, and information retrieval.
               </p>
             </div>
 

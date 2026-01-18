@@ -1,6 +1,5 @@
-import { generateText } from 'ai';
+import { streamText } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { NextResponse } from 'next/server';
 
 const TOPICS = [
   'a technology company announcing a new product or partnership',
@@ -21,17 +20,17 @@ export async function POST() {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    return NextResponse.json(
-      { error: 'OpenAI API key not configured' },
-      { status: 503 }
+    return new Response(
+      JSON.stringify({ error: 'OpenAI API key not configured' }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } }
     );
   }
 
   const topic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
 
   try {
-    const { text } = await generateText({
-      model: openai('gpt-5-nano'),
+    const result = streamText({
+      model: openai('gpt-4o-mini'),
       prompt: `Write a realistic news article or press release about ${topic}.
 
 Requirements:
@@ -44,12 +43,12 @@ Requirements:
 - Do not include a headline or title, just the body text`,
     });
 
-    return NextResponse.json({ text: text.trim() });
+    return result.toTextStreamResponse();
   } catch (error) {
     console.error('Text generation error:', error);
-    return NextResponse.json(
-      { error: 'Failed to generate text' },
-      { status: 500 }
+    return new Response(
+      JSON.stringify({ error: 'Failed to generate text' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
 }

@@ -44,14 +44,32 @@ export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: Sta
 
   const generateRandomText = async () => {
     setIsGenerating(true);
+    setText(''); // Clear existing text before streaming
     try {
       const response = await fetch('/api/generate', { method: 'POST' });
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.error || 'Failed to generate text');
       }
-      const { text: generatedText } = await response.json();
-      setText(generatedText);
+
+      // Read the stream
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      const decoder = new TextDecoder();
+      let streamedText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        streamedText += chunk;
+        setText(streamedText);
+      }
+
       toast.success('Random text generated!');
     } catch (error) {
       console.error('Generation error:', error);

@@ -296,6 +296,31 @@ body::before {
   animation: spin 1s linear infinite;
 }
 
+/* Dialog animations */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out forwards;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.2s ease-out forwards;
+}
+
 /* Statement highlight */
 .statement-highlight {
   background: linear-gradient(90deg, rgba(220, 38, 38, 0.1) 0%, transparent 100%);
