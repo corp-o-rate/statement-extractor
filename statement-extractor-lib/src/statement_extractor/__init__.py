@@ -97,6 +97,9 @@ __all__ = [
     # Scoring
     "BeamScorer",
     "TripleScorer",
+    # LLM (lazy import)
+    "LLM",
+    "get_llm",
 ]
 
 
@@ -109,4 +112,10 @@ def __getattr__(name: str):
     if name == "EmbeddingDependencyError":
         from .predicate_comparer import EmbeddingDependencyError
         return EmbeddingDependencyError
+    if name == "LLM":
+        from .llm import LLM
+        return LLM
+    if name == "get_llm":
+        from .llm import get_llm
+        return get_llm
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

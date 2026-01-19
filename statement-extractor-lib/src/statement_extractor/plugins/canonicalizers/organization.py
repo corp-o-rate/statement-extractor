@@ -34,6 +34,8 @@ def normalize_org_name(name: str) -> str:
     normalized = name.strip()
     for pattern in ORG_SUFFIXES:
         normalized = re.sub(pattern, '', normalized, flags=re.IGNORECASE)
+    # Strip trailing punctuation (commas, periods) that may be left after suffix removal
+    normalized = re.sub(r'[,.\s]+$', '', normalized)
     return normalized.strip().lower()
 
 

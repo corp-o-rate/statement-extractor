@@ -1,7 +1,7 @@
 """
 PersonQualifierPlugin - Qualifies PERSON entities with role and organization.
 
-Uses Gemma3 1B (instruction-tuned) to extract:
+Uses Gemma3 12B (instruction-tuned) to extract:
 - role: Job title/position (e.g., "CEO", "President")
 - org: Organization/employer (e.g., "Apple Inc", "Microsoft")
 """
@@ -15,6 +15,7 @@ from ..base import BaseQualifierPlugin, PluginCapability
 from ...pipeline.context import PipelineContext
 from ...pipeline.registry import PluginRegistry
 from ...models import ExtractedEntity, EntityQualifiers, EntityType
+from ...llm import LLM
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
     """
     Qualifier plugin for PERSON entities.
 
-    Uses Gemma3 1B to extract role and organization from context.
+    Uses Gemma3 12B to extract role and organization from context.
     Falls back to pattern matching if model is not available.
     """
 
@@ -40,7 +41,8 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
 
     def __init__(
         self,
-        model_id: str = "google/gemma-3-1b-it",
+        model_id: str = "google/gemma-3-12b-it-qat-q4_0-gguf",
+        gguf_file: Optional[str] = None,
         use_llm: bool = True,
         use_4bit: bool = True,
     ):
@@ -49,14 +51,18 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
 
         Args:
             model_id: HuggingFace model ID for LLM qualification
-            use_llm: Whether to use LLM (False = pattern matching only)
-            use_4bit: Use 4-bit quantization (requires bitsandbytes)
+            gguf_file: GGUF filename for quantized models (auto-detected if model_id ends with -gguf)
+            use_llm: Whether to use LLM
+            use_4bit: Use 4-bit quantization (requires bitsandbytes, ignored for GGUF)
         """
-        self._model_id = model_id
         self._use_llm = use_llm
-        self._use_4bit = use_4bit
-        self._model = None
-        self._tokenizer = None
+        self._llm: Optional[LLM] = None
+        if use_llm:
+            self._llm = LLM(
+                model_id=model_id,
+                gguf_file=gguf_file,
+                use_4bit=use_4bit,
+            )
 
     @property
     def name(self) -> str:
@@ -85,54 +91,6 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
     def provided_identifier_types(self) -> list[str]:
         return []  # Provides qualifiers, not identifiers
 
-    def _load_model(self):
-        """Lazy-load the Gemma3 model."""
-        if self._model is not None:
-            return
-
-        if not self._use_llm:
-            return
-
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-
-            logger.info(f"Loading {self._model_id} for person qualification...")
-
-            self._tokenizer = AutoTokenizer.from_pretrained(self._model_id)
-
-            if self._use_4bit:
-                try:
-                    from transformers import BitsAndBytesConfig
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
-                    )
-                    self._model = AutoModelForCausalLM.from_pretrained(
-                        self._model_id,
-                        quantization_config=quantization_config,
-                        device_map="auto",
-                    )
-                except ImportError:
-                    logger.warning("bitsandbytes not available, loading full precision")
-                    self._model = AutoModelForCausalLM.from_pretrained(
-                        self._model_id,
-                        device_map="auto",
-                        torch_dtype=torch.float16,
-                    )
-            else:
-                self._model = AutoModelForCausalLM.from_pretrained(
-                    self._model_id,
-                    device_map="auto",
-                    torch_dtype=torch.float16,
-                )
-
-            logger.debug("Gemma3 model loaded")
-
-        except Exception as e:
-            logger.warning(f"Failed to load Gemma3 model: {e}")
-            self._use_llm = False
-
     def qualify(
         self,
         entity: ExtractedEntity,
@@ -151,30 +109,18 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         if entity.type != EntityType.PERSON:
             return None
 
-        # Find statements involving this entity
-        relevant_statements = [
-            stmt for stmt in context.statements
-            if stmt.subject.entity_ref == entity.entity_ref or
-               stmt.object.entity_ref == entity.entity_ref
-        ]
+        # Use the full source text for LLM qualification
+        # This provides maximum context for understanding the person's role/org
+        full_text = context.source_text
 
-        if not relevant_statements:
-            return None
+        # Try LLM extraction first with full text
+        if self._llm is not None:
+            result = self._extract_with_llm(entity.text, full_text)
+            if result and (result.role or result.org):
+                return result
 
-        # Combine source texts for context
-        source_texts = [stmt.source_text for stmt in relevant_statements]
-        combined_context = " ".join(source_texts)
-
-        # Try LLM extraction first
-        if self._use_llm:
-            self._load_model()
-            if self._model is not None:
-                result = self._extract_with_llm(entity.text, combined_context)
-                if result and (result.role or result.org):
-                    return result
-
-        # Fallback to pattern matching
-        return self._extract_with_patterns(entity.text, combined_context)
+        # Fallback to pattern matching with full text
+        return self._extract_with_patterns(entity.text, full_text)
 
     def _extract_with_llm(
         self,
@@ -182,31 +128,36 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         context_text: str,
     ) -> Optional[EntityQualifiers]:
         """Extract role and org using Gemma3."""
+        if self._llm is None:
+            return None
+
         try:
-            prompt = f"""Given the context, extract qualifiers for the person.
-Context: {context_text}
-Person: {person_name}
+            prompt = f"""Extract qualifiers for a person from the given context.
+Instructions:
+- "role" = job title or position (e.g., "CEO", "President", "Director")
+- "org" = company or organization name (e.g., "Amazon", "Apple Inc", "Microsoft")
+- These are DIFFERENT things: role is a job title, org is a company name
+- Return null for fields not mentioned in the context
 
-Extract the person's job title/role and their organization/employer from the context.
-Return ONLY a JSON object with these fields:
-- "role": the job title or role (null if not found)
-- "org": the organization or employer (null if not found)
+Return ONLY valid JSON:
 
-JSON:"""
+E.g.
+<context>We interviewed Big Ducks Quacking Inc team. James is new in the role of the CEO</context>
+<person>James</person>
 
-            inputs = self._tokenizer(prompt, return_tensors="pt").to(self._model.device)
+Should return:
 
-            with self._model.no_grad() if hasattr(self._model, 'no_grad') else __import__('contextlib').nullcontext():
-                import torch
-                with torch.no_grad():
-                    outputs = self._model.generate(
-                        **inputs,
-                        max_new_tokens=100,
-                        do_sample=False,
-                        pad_token_id=self._tokenizer.pad_token_id,
-                    )
+{{"role": "CEO", "org": "Big Ducks Quacking Inc"}}
 
-            response = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
+---
+
+<context>{context_text}</context>
+<person>{person_name}</person>
+"""
+
+            logger.debug(f"LLM request: {prompt}")
+            response = self._llm.generate(prompt, max_tokens=100, stop=["\n\n", "</s>"])
+            logger.debug(f"LLM response: {response}")
 
             # Extract JSON from response
             json_match = re.search(r'\{[^}]+\}', response)
@@ -215,11 +166,17 @@ JSON:"""
                 role = data.get("role")
                 org = data.get("org")
 
+                # Validate: role and org should be different (reject if same)
+                if role and org and role.lower() == org.lower():
+                    logger.debug(f"Rejected duplicate role/org: {role}")
+                    org = None  # Clear org if it's same as role
+
                 if role or org:
                     return EntityQualifiers(role=role, org=org)
 
         except Exception as e:
-            logger.debug(f"LLM extraction failed: {e}")
+            logger.exception(f"LLM extraction failed: {e}")
+            raise e
 
         return None
 

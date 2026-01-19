@@ -2,7 +2,38 @@
 
 <span id="cli" />
 
-The `corp-extractor` CLI provides a convenient way to extract statements directly from the terminal without writing code.
+The `corp-extractor` CLI provides three commands for different use cases.
+
+### Commands Overview
+
+<span id="commands-overview" />
+
+<table>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Description</th>
+      <th>Use Case</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>split</code></td>
+      <td>Simple extraction (Stage 1 only)</td>
+      <td>Fast extraction, basic triples</td>
+    </tr>
+    <tr>
+      <td><code>pipeline</code></td>
+      <td>Full 6-stage pipeline</td>
+      <td>Entity resolution, canonicalization, labeling, taxonomy</td>
+    </tr>
+    <tr>
+      <td><code>plugins</code></td>
+      <td>Plugin management</td>
+      <td>List and inspect available plugins</td>
+    </tr>
+  </tbody>
+</table>
 
 ### Installation
 
@@ -28,189 +59,323 @@ pip install "corp-extractor[embeddings]"
 Run directly without installing using [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uvx corp-extractor "Apple announced a new iPhone."
+uvx corp-extractor split "Apple announced a new iPhone."
 ```
 
 **Note**: First run downloads the model (~1.5GB) which may take a few minutes.
 
-### Basic Usage
+---
 
-<span id="cli-usage" />
+### Split Command
+
+<span id="split-command" />
+
+The `split` command extracts sub-statements using the T5-Gemma model. It's fast and simple—use `pipeline` for full entity resolution.
 
 ```bash
 # Extract from text argument
-corp-extractor "Apple Inc. announced the iPhone 15 at their September event."
+corp-extractor split "Apple Inc. announced the iPhone 15."
 
 # Extract from file
-corp-extractor -f article.txt
+corp-extractor split -f article.txt
 
 # Pipe from stdin
-cat article.txt | corp-extractor -
+cat article.txt | corp-extractor split -
 
-# Read from stdin explicitly
-echo "Tim Cook is CEO of Apple." | corp-extractor -
+# Output as JSON
+corp-extractor split "Tim Cook is CEO of Apple." --json
+
+# Output as XML
+corp-extractor split "Tim Cook is CEO of Apple." --xml
+
+# Verbose output with confidence scores
+corp-extractor split -f article.txt --verbose
+
+# Use more beams for better quality
+corp-extractor split -f article.txt --beams 8
 ```
+
+#### Split Options
+
+<table>
+  <thead>
+    <tr>
+      <th>Option</th>
+      <th>Description</th>
+      <th>Default</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>-f, --file PATH</code></td>
+      <td>Read input from file</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>-o, --output</code></td>
+      <td>Output format: table, json, xml</td>
+      <td>table</td>
+    </tr>
+    <tr>
+      <td><code>--json / --xml</code></td>
+      <td>Output format shortcuts</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>-b, --beams</code></td>
+      <td>Number of beams for diverse beam search</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td><code>--diversity</code></td>
+      <td>Diversity penalty for beam search</td>
+      <td>1.0</td>
+    </tr>
+    <tr>
+      <td><code>--no-gliner</code></td>
+      <td>Disable GLiNER2 extraction</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>--predicates</code></td>
+      <td>Comma-separated predicates for relation extraction</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>--predicates-file</code></td>
+      <td>Path to custom predicates JSON file</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>--device</code></td>
+      <td>Device: auto, cuda, mps, cpu</td>
+      <td>auto</td>
+    </tr>
+    <tr>
+      <td><code>-v, --verbose</code></td>
+      <td>Show confidence scores and metadata</td>
+      <td>—</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+### Pipeline Command
+
+<span id="pipeline-command" />
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
+
+The `pipeline` command runs the full 6-stage extraction pipeline for comprehensive entity resolution and taxonomy classification.
+
+```bash
+# Run all 6 stages
+corp-extractor pipeline "Amazon CEO Andy Jassy announced plans to hire workers."
+
+# Run from file
+corp-extractor pipeline -f article.txt
+
+# Run specific stages
+corp-extractor pipeline "..." --stages 1-3
+corp-extractor pipeline "..." --stages 1,2,5
+
+# Skip specific stages
+corp-extractor pipeline "..." --skip-stages 4,5
+
+# Enable specific plugins only
+corp-extractor pipeline "..." --plugins gleif,companies_house
+
+# Disable specific plugins
+corp-extractor pipeline "..." --disable-plugins sec_edgar
+
+# Output formats
+corp-extractor pipeline "..." -o json
+corp-extractor pipeline "..." -o yaml
+corp-extractor pipeline "..." -o triples
+```
+
+#### Pipeline Stages
+
+<table>
+  <thead>
+    <tr>
+      <th>Stage</th>
+      <th>Name</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td>Splitting</td>
+      <td>Text → Raw triples (T5-Gemma)</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>Extraction</td>
+      <td>Raw triples → Typed statements (GLiNER2)</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>Qualification</td>
+      <td>Add qualifiers and identifiers (roles, LEI, etc.)</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>Canonicalization</td>
+      <td>Resolve to canonical forms</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td>Labeling</td>
+      <td>Apply sentiment, relation type, confidence</td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td>Taxonomy</td>
+      <td>Classify against large taxonomies (MNLI/embeddings)</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Pipeline Options
+
+<table>
+  <thead>
+    <tr>
+      <th>Option</th>
+      <th>Description</th>
+      <th>Example</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--stages</code></td>
+      <td>Stages to run</td>
+      <td><code>1-3</code> or <code>1,2,5</code></td>
+    </tr>
+    <tr>
+      <td><code>--skip-stages</code></td>
+      <td>Stages to skip</td>
+      <td><code>4,5</code></td>
+    </tr>
+    <tr>
+      <td><code>--plugins</code></td>
+      <td>Enable only these plugins</td>
+      <td><code>gleif,person</code></td>
+    </tr>
+    <tr>
+      <td><code>--disable-plugins</code></td>
+      <td>Disable these plugins</td>
+      <td><code>sec_edgar</code></td>
+    </tr>
+    <tr>
+      <td><code>--predicates-file</code></td>
+      <td>Custom predicates JSON file for GLiNER2</td>
+      <td><code>custom.json</code></td>
+    </tr>
+    <tr>
+      <td><code>-o, --output</code></td>
+      <td>Output format</td>
+      <td>table, json, yaml, triples</td>
+    </tr>
+  </tbody>
+</table>
+
+---
+
+### Plugins Command
+
+<span id="plugins-command" />
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
+
+The `plugins` command lists and inspects available pipeline plugins.
+
+```bash
+# List all plugins
+corp-extractor plugins list
+
+# List plugins for a specific stage
+corp-extractor plugins list --stage 3
+
+# Get details about a plugin
+corp-extractor plugins info gleif_qualifier
+corp-extractor plugins info person_qualifier
+```
+
+**Example output:**
+
+```
+Stage 1: Splitting
+----------------------------------------
+  t5_gemma_splitter  [priority: 100]
+
+Stage 2: Extraction
+----------------------------------------
+  gliner2_extractor  [priority: 100]
+
+Stage 3: Qualification
+----------------------------------------
+  person_qualifier (PERSON)  [priority: 100]
+  gleif_qualifier (ORG)  [priority: 90]
+  companies_house_qualifier (ORG)  [priority: 80]
+  sec_edgar_qualifier (ORG)  [priority: 70]
+
+Stage 4: Canonicalization
+----------------------------------------
+  organization_canonicalizer (ORG)  [priority: 100]
+  person_canonicalizer (PERSON)  [priority: 100]
+
+Stage 5: Labeling
+----------------------------------------
+  sentiment_labeler  [priority: 100]
+```
+
+---
 
 ### Output Formats
 
 <span id="cli-output" />
 
-The CLI supports three output formats:
-
-```bash
-# Human-readable table (default)
-corp-extractor "Tim Cook is CEO of Apple."
-
-# JSON with full metadata
-corp-extractor "Tim Cook is CEO of Apple." --json
-
-# Raw XML from model
-corp-extractor "Tim Cook is CEO of Apple." --xml
+**Table output (default):**
 ```
-
-**Table output example:**
-```
-Extracted 1 statement(s):
+Extracted 2 statement(s):
 
 --------------------------------------------------------------------------------
-1. Tim Cook (PERSON)
-   --[CEO of]-->
-   Apple (ORG)
+1. Andy Jassy (CEO, Amazon)
+   --[announced]-->
+   plans to hire workers
 --------------------------------------------------------------------------------
 ```
 
-**JSON output example:**
+**JSON output:**
 ```json
 {
-  "statements": [
+  "statement_count": 2,
+  "labeled_statements": [
     {
-      "subject": {"text": "Tim Cook", "type": "PERSON"},
-      "predicate": "CEO of",
-      "object": {"text": "Apple", "type": "ORG"},
-      "confidence_score": 0.95
+      "subject": {"text": "Andy Jassy", "type": "PERSON", "fqn": "Andy Jassy (CEO, Amazon)"},
+      "predicate": "announced",
+      "object": {"text": "plans to hire workers", "type": "EVENT"},
+      "labels": {"sentiment": "positive"}
     }
-  ],
-  "source_text": "Tim Cook is CEO of Apple."
+  ]
 }
 ```
 
-### Quality Options
-
-<span id="cli-quality" />
-
-```bash
-# Use more beams for better quality (slower)
-corp-extractor -f article.txt --beams 8
-
-# Filter low-confidence results
-corp-extractor -f article.txt --min-confidence 0.7
-
-# Verbose output with confidence scores
-corp-extractor -f article.txt --verbose
-
-# Disable embedding-based deduplication (faster)
-corp-extractor -f article.txt --no-embeddings
+**Triples output:**
+```
+Andy Jassy (CEO, Amazon)	announced	plans to hire workers
+Amazon	has CEO	Andy Jassy (CEO, Amazon)
 ```
 
-### Predicate Taxonomy
-
-<span id="cli-taxonomy" />
-
-Normalize predicates to canonical forms using a taxonomy file:
-
-```bash
-# Create taxonomy file (one predicate per line)
-cat > predicates.txt << EOF
-acquired
-founded
-works_for
-headquartered_in
-CEO of
-invested_in
-EOF
-
-# Use taxonomy
-corp-extractor -f article.txt --taxonomy predicates.txt
-
-# Adjust matching threshold (default: 0.5)
-corp-extractor -f article.txt --taxonomy predicates.txt --taxonomy-threshold 0.6
-```
-
-### Device Selection
-
-<span id="cli-device" />
-
-```bash
-# Auto-detect (default) - uses CUDA > MPS > CPU
-corp-extractor -f article.txt --device auto
-
-# Force NVIDIA GPU
-corp-extractor -f article.txt --device cuda
-
-# Force Apple Silicon GPU (M1/M2/M3)
-corp-extractor -f article.txt --device mps
-
-# Force CPU
-corp-extractor -f article.txt --device cpu
-```
-
-### All Options Reference
-
-<span id="cli-reference" />
-
-```
-Usage: corp-extractor [OPTIONS] [TEXT]
-
-Arguments:
-  TEXT  Input text (or use -f for file, - for stdin)
-
-Options:
-  -f, --file PATH               Read input from file
-  -o, --output [table|json|xml] Output format (default: table)
-  --json                        Output as JSON (shortcut for -o json)
-  --xml                         Output as XML (shortcut for -o xml)
-
-Beam Search:
-  -b, --beams INTEGER           Number of beams (default: 4)
-  --diversity FLOAT             Diversity penalty (default: 1.0)
-  --max-tokens INTEGER          Max tokens to generate (default: 2048)
-
-Deduplication:
-  --no-dedup                    Disable deduplication entirely
-  --no-embeddings               Disable embedding-based dedup (faster)
-  --no-merge                    Disable beam merging
-  --no-gliner                   Disable GLiNER2 extraction (use raw model output)
-  --predicates TEXT             Comma-separated predicate types for GLiNER2 relation extraction
-  --all-triples                 Keep all candidates (default: best per source)
-  --dedup-threshold FLOAT       Similarity threshold (default: 0.65)
-
-Quality:
-  --min-confidence FLOAT        Minimum confidence filter 0-1 (default: 0)
-
-Taxonomy:
-  --taxonomy PATH               Load predicate taxonomy from file
-  --taxonomy-threshold FLOAT    Matching threshold (default: 0.5)
-
-Runtime:
-  --device [auto|cuda|mps|cpu]  Device to use (default: auto)
-
-Output:
-  -v, --verbose                 Show confidence scores and metadata
-  -q, --quiet                   Suppress progress messages
-  --version                     Show version and exit
-  --help                        Show this message and exit
-```
+---
 
 ### Shell Integration
 
 <span id="cli-shell" />
-
-**Bash/Zsh completion** (coming soon):
-
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-eval "$(corp-extractor --show-completion bash)"
-```
 
 **Processing multiple files:**
 
@@ -218,19 +383,19 @@ eval "$(corp-extractor --show-completion bash)"
 # Process all .txt files
 for f in *.txt; do
   echo "=== $f ==="
-  corp-extractor -f "$f" --json > "${f%.txt}.json"
+  corp-extractor pipeline -f "$f" -o json > "${f%.txt}.json"
 done
-
-# Using find and xargs
-find . -name "*.txt" -exec corp-extractor -f {} --json \; > all_results.json
 ```
 
 **Combining with jq:**
 
 ```bash
 # Extract just predicates
-corp-extractor "Your text" --json | jq '.statements[].predicate'
+corp-extractor split "Your text" --json | jq '.statements[].predicate'
 
 # Filter high-confidence statements
-corp-extractor -f article.txt --json | jq '.statements[] | select(.confidence_score > 0.8)'
+corp-extractor split -f article.txt --json | jq '.statements[] | select(.confidence_score > 0.8)'
+
+# Get FQNs from pipeline
+corp-extractor pipeline "Your text" -o json | jq '.labeled_statements[].subject.fqn'
 ```

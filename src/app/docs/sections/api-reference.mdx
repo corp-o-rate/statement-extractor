@@ -458,3 +458,429 @@ print(match.canonical)    # "acquired"
 print(match.similarity)   # ~0.82
 print(match.matched)      # True
 ```
+
+---
+
+### Pipeline API
+
+<span id="pipeline-api" />
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
+
+The pipeline API provides comprehensive entity resolution and taxonomy classification through a 6-stage plugin architecture.
+
+#### ExtractionPipeline
+
+The main orchestrator class that runs all pipeline stages.
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
+
+class ExtractionPipeline:
+    def __init__(self, config: Optional[PipelineConfig] = None):
+        """
+        Initialize the extraction pipeline.
+
+        Args:
+            config: Pipeline configuration (default: all stages enabled)
+        """
+
+    def process(self, text: str, metadata: Optional[dict] = None) -> PipelineContext:
+        """
+        Process text through the pipeline stages.
+
+        Args:
+            text: Input text to process
+            metadata: Optional source metadata (document ID, URL, etc.)
+
+        Returns:
+            PipelineContext with results from all stages
+        """
+```
+
+**Example:**
+
+```python
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Amazon CEO Andy Jassy announced plans.")
+
+print(f"Statements: {ctx.statement_count}")
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} -> {stmt.statement.predicate} -> {stmt.object_fqn}")
+```
+
+---
+
+#### PipelineConfig
+
+Configuration for stage and plugin selection.
+
+```python
+from statement_extractor.pipeline import PipelineConfig
+
+class PipelineConfig(BaseModel):
+    enabled_stages: set[int] = {1, 2, 3, 4, 5, 6}  # Stages to run (1-6)
+    enabled_plugins: Optional[set[str]] = None   # Plugins to enable (None = all)
+    disabled_plugins: set[str] = set()           # Plugins to disable
+    fail_fast: bool = False                       # Stop on first error
+    parallel_processing: bool = False             # Enable parallel processing
+    max_statements: Optional[int] = None          # Limit statements processed
+
+    # Stage-specific options
+    splitter_options: dict = {}
+    extractor_options: dict = {}
+    qualifier_options: dict = {}
+    canonicalizer_options: dict = {}
+    labeler_options: dict = {}
+    taxonomy_options: dict = {}
+
+    @classmethod
+    def from_stage_string(cls, stages: str, **kwargs) -> "PipelineConfig":
+        """Create config from stage string like '1-3' or '1,2,5'."""
+
+    @classmethod
+    def default(cls) -> "PipelineConfig":
+        """All stages enabled."""
+
+    @classmethod
+    def minimal(cls) -> "PipelineConfig":
+        """Only splitting and extraction (stages 1-2)."""
+```
+
+**Example:**
+
+```python
+# Run only stages 1-3
+config = PipelineConfig(enabled_stages={1, 2, 3})
+
+# Disable specific plugins
+config = PipelineConfig(disabled_plugins={"sec_edgar_qualifier"})
+
+# From stage string
+config = PipelineConfig.from_stage_string("1-3")
+```
+
+---
+
+#### PipelineContext
+
+Data container that flows through all pipeline stages.
+
+```python
+from statement_extractor.pipeline import PipelineContext
+
+class PipelineContext(BaseModel):
+    # Input
+    source_text: str                                    # Original input text
+    source_metadata: dict = {}                          # Document metadata
+
+    # Stage outputs
+    raw_triples: list[RawTriple] = []                   # Stage 1 output
+    statements: list[PipelineStatement] = []           # Stage 2 output
+    qualified_entities: dict[str, QualifiedEntity] = {} # Stage 3 output
+    canonical_entities: dict[str, CanonicalEntity] = {} # Stage 4 output
+    labeled_statements: list[LabeledStatement] = []    # Stage 5 output
+    taxonomy_results: dict[tuple, list[TaxonomyResult]] = {}  # Stage 6 output (multiple labels per statement)
+
+    # Processing metadata
+    processing_errors: list[str] = []
+    processing_warnings: list[str] = []
+    stage_timings: dict[str, float] = {}
+
+    @property
+    def statement_count(self) -> int:
+        """Number of statements in final output."""
+
+    @property
+    def has_errors(self) -> bool:
+        """Check if any errors occurred."""
+```
+
+---
+
+#### PluginRegistry
+
+Registry for discovering and managing plugins.
+
+```python
+from statement_extractor.pipeline import PluginRegistry
+
+class PluginRegistry:
+    @classmethod
+    def list_plugins(cls, stage: Optional[int] = None) -> list[dict]:
+        """List all registered plugins, optionally filtered by stage."""
+
+    @classmethod
+    def get_plugin(cls, name: str) -> Optional[BasePlugin]:
+        """Get a plugin by name."""
+```
+
+---
+
+### Pipeline Data Models
+
+<span id="pipeline-models" />
+
+#### RawTriple
+
+Output of Stage 1 (Splitting).
+
+```python
+class RawTriple(BaseModel):
+    subject_text: str                    # Raw subject text
+    predicate_text: str                  # Raw predicate text
+    object_text: str                     # Raw object text
+    source_sentence: str                 # Source sentence
+    confidence: float = 1.0              # Extraction confidence (0-1)
+
+    def as_tuple(self) -> tuple[str, str, str]:
+        """Return as (subject, predicate, object) tuple."""
+```
+
+---
+
+#### PipelineStatement
+
+Output of Stage 2 (Extraction).
+
+```python
+class PipelineStatement(BaseModel):
+    subject: ExtractedEntity             # Subject with type, span, confidence
+    predicate: str                       # Predicate text
+    predicate_category: Optional[str]    # Predicate category (e.g., "employment_leadership")
+    object: ExtractedEntity              # Object with type, span, confidence
+    source_text: str                     # Source text
+    confidence_score: float = 1.0        # Overall confidence (from GLiNER2)
+    extraction_method: Optional[str]     # Method: gliner_relation
+```
+
+**Note:** Stage 2 returns **all matching relations** from GLiNER2, not just the best one. Relations are sorted by confidence (descending).
+
+---
+
+#### GLiNER2Extractor
+
+The Stage 2 extractor plugin that uses GLiNER2 for relation extraction.
+
+```python
+from statement_extractor.plugins.extractors.gliner2 import GLiNER2Extractor
+
+class GLiNER2Extractor(BaseExtractorPlugin):
+    def __init__(
+        self,
+        predicates: Optional[list[str]] = None,
+        predicates_file: Optional[str | Path] = None,
+        entity_types: Optional[list[str]] = None,
+        use_default_predicates: bool = True,
+    ):
+        """
+        Initialize the GLiNER2 extractor.
+
+        Args:
+            predicates: Custom list of predicate names
+            predicates_file: Path to custom predicates JSON file
+            entity_types: Entity types to extract (default: all)
+            use_default_predicates: Use 324 built-in predicates when no custom provided
+        """
+```
+
+**Key behaviors:**
+- Uses `include_confidence=True` for real confidence scores from GLiNER2
+- Iterates through 21 predicate categories to stay under GLiNER2's ~25 label limit
+- Returns **all matching relations** per source sentence (filtered later)
+- Predicates loaded from `default_predicates.json` (324 predicates)
+
+---
+
+#### EntityQualifiers
+
+Qualifiers added in Stage 3.
+
+```python
+class EntityQualifiers(BaseModel):
+    # Semantic qualifiers
+    org: Optional[str] = None            # Organization/employer
+    role: Optional[str] = None           # Job title/position
+
+    # Location qualifiers
+    region: Optional[str] = None         # State/province
+    country: Optional[str] = None        # Country
+    city: Optional[str] = None           # City
+    jurisdiction: Optional[str] = None   # Legal jurisdiction
+
+    # External identifiers
+    identifiers: dict[str, str] = {}     # lei, ch_number, sec_cik, ticker, etc.
+
+    def has_any_qualifier(self) -> bool:
+        """Check if any qualifier is set."""
+```
+
+---
+
+#### QualifiedEntity
+
+Output of Stage 3 (Qualification).
+
+```python
+class QualifiedEntity(BaseModel):
+    entity_ref: str                      # Reference to original entity
+    original_text: str                   # Original entity text
+    entity_type: EntityType              # Entity type
+    qualifiers: EntityQualifiers         # Qualifiers and identifiers
+    qualification_sources: list[str]     # Plugins that contributed
+```
+
+---
+
+#### CanonicalMatch
+
+Result of canonical matching in Stage 4.
+
+```python
+class CanonicalMatch(BaseModel):
+    canonical_id: Optional[str]          # ID in canonical database
+    canonical_name: Optional[str]        # Canonical name/label
+    match_method: str                    # identifier, name_exact, name_fuzzy, llm_verified
+    match_confidence: float = 1.0        # Confidence in match (0-1)
+    match_details: Optional[dict]        # Additional match details
+```
+
+---
+
+#### CanonicalEntity
+
+Output of Stage 4 (Canonicalization).
+
+```python
+class CanonicalEntity(BaseModel):
+    entity_ref: str                      # Reference to original entity
+    qualified_entity: QualifiedEntity    # Qualified entity from Stage 3
+    canonical_match: Optional[CanonicalMatch]  # Canonical match if found
+    fqn: str                             # Fully Qualified Name
+
+    @classmethod
+    def from_qualified(cls, qualified: QualifiedEntity, ...) -> "CanonicalEntity":
+        """Create from QualifiedEntity."""
+```
+
+---
+
+#### StatementLabel
+
+A label applied in Stage 5.
+
+```python
+class StatementLabel(BaseModel):
+    label_type: str                      # sentiment, relation_type, confidence
+    label_value: Union[str, float, bool] # The label value
+    confidence: float = 1.0              # Confidence in label
+    labeler: Optional[str]               # Plugin that produced the label
+```
+
+---
+
+#### LabeledStatement
+
+Final output from Stage 5 (Labeling).
+
+```python
+class LabeledStatement(BaseModel):
+    statement: PipelineStatement         # Original statement
+    subject_canonical: CanonicalEntity   # Canonicalized subject
+    object_canonical: CanonicalEntity    # Canonicalized object
+    labels: list[StatementLabel] = []    # Applied labels
+
+    @property
+    def subject_fqn(self) -> str:
+        """Subject's fully qualified name."""
+
+    @property
+    def object_fqn(self) -> str:
+        """Object's fully qualified name."""
+
+    def get_label(self, label_type: str) -> Optional[StatementLabel]:
+        """Get label by type."""
+
+    def as_dict(self) -> dict:
+        """Convert to simplified dictionary."""
+```
+
+**Example:**
+
+```python
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} -> {stmt.statement.predicate} -> {stmt.object_fqn}")
+
+    # Access labels
+    sentiment = stmt.get_label("sentiment")
+    if sentiment:
+        print(f"  Sentiment: {sentiment.label_value}")
+
+    # Access qualifiers
+    subject_quals = stmt.subject_canonical.qualified_entity.qualifiers
+    if subject_quals.role:
+        print(f"  Role: {subject_quals.role}")
+```
+
+---
+
+#### TaxonomyResult
+
+Output of Stage 6 (Taxonomy) classification.
+
+```python
+class TaxonomyResult(BaseModel):
+    taxonomy_name: str                   # e.g., "esg_topics"
+    category: str                        # Top-level category
+    label: str                           # Specific label
+    label_id: Optional[int] = None       # Numeric ID if available
+    confidence: float = 1.0              # Classification confidence (0-1)
+    classifier: Optional[str] = None     # Plugin that produced this result
+    metadata: dict = {}                  # Additional metadata
+
+    @property
+    def full_label(self) -> str:
+        """Return category:label format."""
+```
+
+**Example:**
+
+```python
+# Access taxonomy results from context
+# Each statement may have multiple labels above the threshold
+for (source_text, taxonomy_name), results in ctx.taxonomy_results.items():
+    print(f"Statement: {source_text[:50]}...")
+    print(f"  Taxonomy: {taxonomy_name}")
+    print(f"  Labels ({len(results)}):")
+    for result in results:
+        print(f"    - {result.full_label} (confidence: {result.confidence:.2f})")
+```
+
+---
+
+#### ClassificationSchema
+
+Schema for simple multi-choice classification (2-20 options). Used by labelers that need GLiNER2 to perform classification.
+
+```python
+class ClassificationSchema(BaseModel):
+    label_type: str                      # e.g., "sentiment"
+    choices: list[str]                   # Available choices
+    description: str = ""                # Description for the classifier
+    scope: str = "statement"             # statement or entity
+```
+
+---
+
+#### TaxonomySchema
+
+Schema for large taxonomy classification (100+ values). Used by taxonomy plugins.
+
+```python
+class TaxonomySchema(BaseModel):
+    label_type: str                      # e.g., "taxonomy"
+    values: list[str] | dict[str, list[str]]  # Flat list or category -> labels
+    description: str = ""
+    scope: str = "statement"
+    label_descriptions: Optional[dict[str, str]] = None  # Descriptions for labels
+```

@@ -21,6 +21,7 @@ from ..models import (
     EntityQualifiers,
     CanonicalEntity,
     LabeledStatement,
+    TaxonomyResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,9 +59,20 @@ class ExtractionPipeline:
         Returns:
             PipelineContext with accumulated results from all stages
         """
+        # Merge config options into metadata for plugins
+        combined_metadata = metadata.copy() if metadata else {}
+
+        # Pass extractor options from config to context
+        if self.config.extractor_options:
+            existing_extractor_opts = combined_metadata.get("extractor_options", {})
+            combined_metadata["extractor_options"] = {
+                **self.config.extractor_options,
+                **existing_extractor_opts,  # Allow explicit metadata to override config
+            }
+
         ctx = PipelineContext(
             source_text=text,
-            source_metadata=metadata or {},
+            source_metadata=combined_metadata,
         )
 
         logger.info(f"Starting pipeline processing: {len(text)} chars")
@@ -85,6 +97,10 @@ class ExtractionPipeline:
             # Stage 5: Labeling
             if self.config.is_stage_enabled(5):
                 ctx = self._run_labeling(ctx)
+
+            # Stage 6: Taxonomy classification
+            if self.config.is_stage_enabled(6):
+                ctx = self._run_taxonomy(ctx)
 
         except Exception as e:
             logger.exception("Pipeline processing failed")
@@ -145,10 +161,20 @@ class ExtractionPipeline:
             ctx.add_warning("No extractor plugins registered")
             return ctx
 
+        # Collect classification schemas from labelers for the extractor
+        classification_schemas = self._collect_classification_schemas()
+        if classification_schemas:
+            logger.debug(f"Collected {len(classification_schemas)} classification schemas from labelers")
+
         # Use first enabled extractor (highest priority)
         for extractor in extractors:
             if not self.config.is_plugin_enabled(extractor.name):
                 continue
+
+            # Pass classification schemas to extractor if it supports them
+            if classification_schemas and hasattr(extractor, 'add_classification_schema'):
+                for schema in classification_schemas:
+                    extractor.add_classification_schema(schema)
 
             logger.debug(f"Using extractor: {extractor.name}")
             try:
@@ -164,6 +190,25 @@ class ExtractionPipeline:
 
         ctx.record_timing(stage_name, time.time() - start_time)
         return ctx
+
+    def _collect_classification_schemas(self) -> list:
+        """Collect classification schemas from enabled labelers."""
+        schemas = []
+        labelers = PluginRegistry.get_labelers()
+
+        for labeler in labelers:
+            if not self.config.is_plugin_enabled(labeler.name):
+                continue
+
+            # Check for classification schema (simple multi-choice)
+            if hasattr(labeler, 'classification_schema') and labeler.classification_schema:
+                schemas.append(labeler.classification_schema)
+                logger.debug(
+                    f"Labeler {labeler.name} provides classification schema: "
+                    f"{labeler.classification_schema}"
+                )
+
+        return schemas
 
     def _run_qualification(self, ctx: PipelineContext) -> PipelineContext:
         """Stage 3: Add qualifiers to entities."""
@@ -202,8 +247,10 @@ class ExtractionPipeline:
                         qualifiers = qualifiers.merge_with(plugin_qualifiers)
                         sources.append(qualifier_plugin.name)
                 except Exception as e:
-                    logger.warning(f"Qualifier {qualifier_plugin.name} failed for {entity.text}: {e}")
-                    ctx.add_warning(f"Qualifier {qualifier_plugin.name} failed: {str(e)}")
+                    logger.error(f"Qualifier {qualifier_plugin.name} failed for {entity.text}: {e}")
+                    ctx.add_error(f"Qualifier {qualifier_plugin.name} failed: {str(e)}")
+                    if self.config.fail_fast:
+                        raise
 
             # Create QualifiedEntity
             qualified = QualifiedEntity(
@@ -255,8 +302,10 @@ class ExtractionPipeline:
                         fqn = canon_plugin.format_fqn(qualified, match)
                         break  # Use first successful match
                 except Exception as e:
-                    logger.warning(f"Canonicalizer {canon_plugin.name} failed for {qualified.original_text}: {e}")
-                    ctx.add_warning(f"Canonicalizer {canon_plugin.name} failed: {str(e)}")
+                    logger.error(f"Canonicalizer {canon_plugin.name} failed for {qualified.original_text}: {e}")
+                    ctx.add_error(f"Canonicalizer {canon_plugin.name} failed: {str(e)}")
+                    if self.config.fail_fast:
+                        raise
 
             # Create CanonicalEntity
             canonical = CanonicalEntity.from_qualified(
@@ -332,11 +381,67 @@ class ExtractionPipeline:
                     if label:
                         labeled.add_label(label)
                 except Exception as e:
-                    logger.warning(f"Labeler {labeler.name} failed: {e}")
-                    ctx.add_warning(f"Labeler {labeler.name} failed: {str(e)}")
+                    logger.error(f"Labeler {labeler.name} failed: {e}")
+                    ctx.add_error(f"Labeler {labeler.name} failed: {str(e)}")
+                    if self.config.fail_fast:
+                        raise
 
             ctx.labeled_statements.append(labeled)
 
         logger.info(f"Labeled {len(ctx.labeled_statements)} statements")
+        ctx.record_timing(stage_name, time.time() - start_time)
+        return ctx
+
+    def _run_taxonomy(self, ctx: PipelineContext) -> PipelineContext:
+        """Stage 6: Classify statements against taxonomies."""
+        stage_name = get_stage_name(6)
+        logger.debug(f"Running {stage_name} stage")
+        start_time = time.time()
+
+        if not ctx.labeled_statements:
+            logger.debug("No labeled statements to classify")
+            return ctx
+
+        taxonomy_classifiers = PluginRegistry.get_taxonomy_classifiers()
+        if not taxonomy_classifiers:
+            logger.debug("No taxonomy classifiers registered")
+            return ctx
+
+        total_results = 0
+        for labeled_stmt in ctx.labeled_statements:
+            stmt = labeled_stmt.statement
+            subj_canonical = labeled_stmt.subject_canonical
+            obj_canonical = labeled_stmt.object_canonical
+
+            # Apply all taxonomy classifiers
+            for classifier in taxonomy_classifiers:
+                if not self.config.is_plugin_enabled(classifier.name):
+                    continue
+
+                try:
+                    results = classifier.classify(stmt, subj_canonical, obj_canonical, ctx)
+                    if results:
+                        # Store taxonomy results in context (list of results per key)
+                        key = (stmt.source_text, classifier.taxonomy_name)
+                        if key not in ctx.taxonomy_results:
+                            ctx.taxonomy_results[key] = []
+                        ctx.taxonomy_results[key].extend(results)
+                        total_results += len(results)
+
+                        # Also add to the labeled statement for easy access
+                        labeled_stmt.taxonomy_results.extend(results)
+
+                        for result in results:
+                            logger.debug(
+                                f"Taxonomy {classifier.name}: {result.full_label} "
+                                f"(confidence={result.confidence:.2f})"
+                            )
+                except Exception as e:
+                    logger.error(f"Taxonomy classifier {classifier.name} failed: {e}")
+                    ctx.add_error(f"Taxonomy classifier {classifier.name} failed: {str(e)}")
+                    if self.config.fail_fast:
+                        raise
+
+        logger.info(f"Taxonomy produced {total_results} labels across {len(ctx.taxonomy_results)} statement-taxonomy pairs")
         ctx.record_timing(stage_name, time.time() - start_time)
         return ctx

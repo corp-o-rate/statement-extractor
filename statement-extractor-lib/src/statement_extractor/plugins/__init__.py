@@ -7,6 +7,7 @@ Contains all plugin implementations organized by stage:
 - qualifiers/: Stage 3 - Add qualifiers and identifiers
 - canonicalizers/: Stage 4 - Resolve canonical forms
 - labelers/: Stage 5 - Classify statements
+- taxonomy/: Stage 6 - Taxonomy classification
 """
 
 from .base import (
@@ -17,7 +18,11 @@ from .base import (
     BaseQualifierPlugin,
     BaseCanonicalizerPlugin,
     BaseLabelerPlugin,
+    BaseTaxonomyPlugin,
 )
+
+# Import plugin modules for auto-registration
+from . import splitters, extractors, qualifiers, canonicalizers, labelers, taxonomy
 
 __all__ = [
     "PluginCapability",
@@ -27,4 +32,12 @@ __all__ = [
     "BaseQualifierPlugin",
     "BaseCanonicalizerPlugin",
     "BaseLabelerPlugin",
+    "BaseTaxonomyPlugin",
+    # Plugin modules
+    "splitters",
+    "extractors",
+    "qualifiers",
+    "canonicalizers",
+    "labelers",
+    "taxonomy",
 ]

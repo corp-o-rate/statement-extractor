@@ -59,7 +59,36 @@ for stmt in statements:
     print(f"  confidence: {stmt.confidence_score:.2f}")
 ```
 
-v0.4.1 features: GLiNER2 entity recognition, optional predicate list for relation extraction, entity-based scoring, best triple selection per source.
+**v0.5.0 features**: 6-stage pipeline with entity qualification, canonicalization, labeling, and taxonomy classification. GLiNER2 entity recognition, entity-based scoring, plugin architecture.
+
+### Pipeline Quick Start (v0.5.0)
+
+For full entity resolution with qualification, canonicalization, labeling, and taxonomy classification:
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline
+
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Amazon CEO Andy Jassy announced plans to hire workers.")
+
+# Access fully qualified names (e.g., "Andy Jassy (CEO, Amazon)")
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} --[{stmt.statement.predicate}]--> {stmt.object_fqn}")
+
+    # Access labels (sentiment, etc.)
+    for label in stmt.labels:
+        print(f"  {label.label_type}: {label.label_value}")
+```
+
+CLI usage:
+
+```bash
+# Full pipeline
+corp-extractor pipeline "Amazon CEO Andy Jassy announced..."
+
+# Run specific stages only
+corp-extractor pipeline -f article.txt --stages 1-3
+```
 
 ### Using Predicate Taxonomies
 

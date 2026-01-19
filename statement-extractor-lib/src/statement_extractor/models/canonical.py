@@ -99,26 +99,37 @@ class CanonicalEntity(BaseModel):
         - ORG with canonical: "Apple Inc (AAPL)"
         - PERSON with no qualifiers: "Tim Cook"
         """
-        base_name = canonical_match.canonical_name if canonical_match else qualified.original_text
+        # Use canonical name if available, otherwise fall back to original text
+        if canonical_match and canonical_match.canonical_name:
+            base_name = canonical_match.canonical_name
+        else:
+            base_name = qualified.original_text
 
         qualifiers = qualified.qualifiers
         parts = []
+        seen = set()  # Track seen values to avoid duplicates
+
+        def add_part(value: str) -> None:
+            """Add a part if not already seen (case-insensitive)."""
+            if value and value.lower() not in seen:
+                parts.append(value)
+                seen.add(value.lower())
 
         # Add role for PERSON entities
         if qualifiers.role:
-            parts.append(qualifiers.role)
+            add_part(qualifiers.role)
 
         # Add organization for PERSON entities
         if qualifiers.org:
-            parts.append(qualifiers.org)
+            add_part(qualifiers.org)
 
         # Add ticker for ORG entities
         if "ticker" in qualifiers.identifiers:
-            parts.append(qualifiers.identifiers["ticker"])
+            add_part(qualifiers.identifiers["ticker"])
 
         # Add jurisdiction if relevant
         if qualifiers.jurisdiction and not qualifiers.org:
-            parts.append(qualifiers.jurisdiction)
+            add_part(qualifiers.jurisdiction)
 
         if parts:
             return f"{base_name} ({', '.join(parts)})"

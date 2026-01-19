@@ -3,9 +3,10 @@ Label models for the extraction pipeline.
 
 StatementLabel: A label applied to a statement
 LabeledStatement: Final output from Stage 5 with all labels
+TaxonomyResult: Taxonomy classification from Stage 6
 """
 
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -46,10 +47,10 @@ class StatementLabel(BaseModel):
 
 class LabeledStatement(BaseModel):
     """
-    Final output from Stage 5 (Labeling).
+    Final output from Stage 5 (Labeling) with taxonomy from Stage 6.
 
     Contains the original statement, canonicalized subject and object,
-    and all labels applied by labeler plugins.
+    all labels applied by labeler plugins, and taxonomy classifications.
     """
     statement: PipelineStatement = Field(
         ...,
@@ -66,6 +67,10 @@ class LabeledStatement(BaseModel):
     labels: list[StatementLabel] = Field(
         default_factory=list,
         description="Labels applied to this statement"
+    )
+    taxonomy_results: list["TaxonomyResult"] = Field(
+        default_factory=list,
+        description="Taxonomy classifications from Stage 6"
     )
 
     def get_label(self, label_type: str) -> Optional[StatementLabel]:
@@ -124,7 +129,63 @@ class LabeledStatement(BaseModel):
                 label.label_type: label.label_value
                 for label in self.labels
             },
+            "taxonomy": [
+                {
+                    "category": t.category,
+                    "label": t.label,
+                    "confidence": t.confidence,
+                }
+                for t in self.taxonomy_results
+            ],
         }
 
     class Config:
         frozen = False  # Allow modification during pipeline stages
+
+
+class TaxonomyResult(BaseModel):
+    """
+    Result of taxonomy classification from Stage 6.
+
+    Represents a classification of a statement against a taxonomy,
+    typically with a category (top-level) and label (specific topic).
+    """
+    taxonomy_name: str = Field(
+        ...,
+        description="Name of the taxonomy (e.g., 'esg_topics', 'industry_codes')"
+    )
+    category: str = Field(
+        ...,
+        description="Top-level category (e.g., 'environment', 'governance')"
+    )
+    label: str = Field(
+        ...,
+        description="Specific label within the category (e.g., 'carbon emissions')"
+    )
+    label_id: Optional[int] = Field(
+        None,
+        description="Numeric ID for reproducibility"
+    )
+    confidence: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Classification confidence"
+    )
+    classifier: Optional[str] = Field(
+        None,
+        description="Name of the taxonomy plugin that produced this result"
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata (e.g., runner-up labels, scores)"
+    )
+
+    @property
+    def full_label(self) -> str:
+        """Get the full label in category:label format."""
+        return f"{self.category}:{self.label}"
+
+    def is_high_confidence(self, threshold: float = 0.7) -> bool:
+        """Check if this is a high-confidence classification."""
+        return self.confidence >= threshold

@@ -5,10 +5,11 @@ A web demo for the T5-Gemma 2 statement extraction model from [corp-o-rate.com](
 ## Features
 
 - **Statement Extraction**: Transform unstructured text into structured subject-predicate-object triples
+- **6-Stage Pipeline** *(v0.5.0)*: Plugin-based architecture with entity qualification, canonicalization, labeling, and taxonomy classification
 - **Entity Recognition**: Automatic identification of entity types (ORG, PERSON, GPE, EVENT, etc.)
 - **Relationship Graph**: Interactive D3.js visualization of entity relationships
 - **Coreference Resolution**: Pronouns are resolved to their referenced entities
-- **Multiple Usage Options**: API, Python, TypeScript, or run locally
+- **Multiple Usage Options**: API, Python CLI, TypeScript, or run locally
 
 ## Quick Start
 
@@ -46,7 +47,50 @@ The model is available on HuggingFace: [Corp-o-Rate-Community/statement-extracto
 
 ## Usage
 
-### Python
+### Python Library (Recommended)
+
+Install the Python library for easy CLI and API access:
+
+```bash
+pip install corp-extractor
+```
+
+**CLI Usage:**
+
+```bash
+# Simple extraction (fast)
+corp-extractor split "Apple Inc. announced a new iPhone."
+
+# Full 6-stage pipeline with entity resolution (v0.5.0)
+corp-extractor pipeline "Apple CEO Tim Cook announced..."
+corp-extractor pipeline -f article.txt --stages 1-3
+
+# List available plugins
+corp-extractor plugins list
+```
+
+**Python API:**
+
+```python
+from statement_extractor import extract_statements
+
+# Simple extraction
+result = extract_statements("Apple Inc. announced a new iPhone.")
+for stmt in result:
+    print(f"{stmt.subject.text} -> {stmt.predicate} -> {stmt.object.text}")
+
+# Full pipeline (v0.5.0)
+from statement_extractor.pipeline import ExtractionPipeline
+
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Apple CEO Tim Cook announced...")
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} -> {stmt.statement.predicate} -> {stmt.object_fqn}")
+```
+
+See [statement-extractor-lib/README.md](statement-extractor-lib/README.md) for full pipeline documentation.
+
+### Direct Model Access
 
 ```python
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer

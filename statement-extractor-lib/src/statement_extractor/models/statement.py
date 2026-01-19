@@ -47,6 +47,10 @@ class PipelineStatement(BaseModel):
     """
     subject: ExtractedEntity = Field(..., description="The subject entity")
     predicate: str = Field(..., description="The relationship/predicate text")
+    predicate_category: Optional[str] = Field(
+        None,
+        description="Category/domain of the predicate (e.g., 'ownership_control', 'employment_leadership')"
+    )
     object: ExtractedEntity = Field(..., description="The object entity")
     source_text: str = Field(..., description="The source text this statement was extracted from")
     confidence_score: float = Field(

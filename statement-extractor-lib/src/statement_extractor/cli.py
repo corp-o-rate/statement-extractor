@@ -2,8 +2,8 @@
 Command-line interface for statement extraction.
 
 Usage:
-    corp-extractor "Your text here"
-    corp-extractor -f input.txt
+    corp-extractor split "Your text here"
+    corp-extractor split -f input.txt
     corp-extractor pipeline "Your text here" --stages 1-5
     corp-extractor plugins list
 """
@@ -38,8 +38,22 @@ def _configure_logging(verbose: bool) -> None:
         "statement_extractor.canonicalization",
         "statement_extractor.gliner_extraction",
         "statement_extractor.pipeline",
+        "statement_extractor.plugins",
+        "statement_extractor.plugins.extractors.gliner2",
+        "statement_extractor.plugins.splitters",
+        "statement_extractor.plugins.labelers",
     ]:
         logging.getLogger(logger_name).setLevel(level)
+
+    # Suppress noisy third-party loggers
+    for noisy_logger in [
+        "httpcore.http11",
+        "httpcore.connection",
+        "httpx",
+        "urllib3",
+        "huggingface_hub",
+    ]:
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
 from . import __version__
@@ -51,8 +65,33 @@ from .models import (
 )
 
 
-@click.group(invoke_without_command=True)
-@click.pass_context
+@click.group()
+@click.version_option(version=__version__)
+def main():
+    """
+    Extract structured statements from text.
+
+    \b
+    Commands:
+        split      Extract sub-statements from text (simple, fast)
+        pipeline   Run the full 5-stage extraction pipeline
+        plugins    List or inspect available plugins
+
+    \b
+    Examples:
+        corp-extractor split "Apple announced a new iPhone."
+        corp-extractor split -f article.txt --json
+        corp-extractor pipeline "Apple CEO Tim Cook announced..." --stages 1-3
+        corp-extractor plugins list
+    """
+    pass
+
+
+# =============================================================================
+# Split command (simple extraction)
+# =============================================================================
+
+@main.command("split")
 @click.argument("text", required=False)
 @click.option("-f", "--file", "input_file", type=click.Path(exists=True), help="Read input from file")
 @click.option(
@@ -85,9 +124,7 @@ from .models import (
 # Output options
 @click.option("-v", "--verbose", is_flag=True, help="Show verbose output with confidence scores")
 @click.option("-q", "--quiet", is_flag=True, help="Suppress progress messages")
-@click.version_option(version=__version__)
-def main(
-    ctx,
+def split_cmd(
     text: Optional[str],
     input_file: Optional[str],
     output: str,
@@ -111,22 +148,18 @@ def main(
     quiet: bool,
 ):
     """
-    Extract structured statements from text.
+    Extract sub-statements from text using T5-Gemma model.
 
-    TEXT can be provided as an argument, read from a file with -f, or piped via stdin.
+    This command splits text into structured subject-predicate-object triples.
+    It's fast and simple - use 'pipeline' for full entity resolution.
 
     \b
     Examples:
-        corp-extractor "Apple announced a new iPhone."
-        corp-extractor -f article.txt --json
-        corp-extractor -f article.txt -o json --beams 8
-        cat article.txt | corp-extractor -
-        echo "Tim Cook is CEO of Apple." | corp-extractor - --verbose
-
-    \b
-    Subcommands:
-        pipeline   Run the full 5-stage extraction pipeline
-        plugins    List or inspect available plugins
+        corp-extractor split "Apple announced a new iPhone."
+        corp-extractor split -f article.txt --json
+        corp-extractor split -f article.txt -o json --beams 8
+        cat article.txt | corp-extractor split -
+        echo "Tim Cook is CEO of Apple." | corp-extractor split - --verbose
 
     \b
     Output formats:
@@ -134,10 +167,6 @@ def main(
         json   JSON with full metadata
         xml    Raw XML from model
     """
-    # If a subcommand is being invoked, skip the main logic
-    if ctx.invoked_subcommand is not None:
-        return
-
     # Configure logging based on verbose flag
     _configure_logging(verbose)
 
@@ -150,9 +179,7 @@ def main(
     # Get input text
     input_text = _get_input_text(text, input_file)
     if not input_text:
-        # Show help if no input
-        click.echo(ctx.get_help())
-        return
+        raise click.UsageError("No input provided. Provide text argument or use -f file.txt")
 
     if not quiet:
         click.echo(f"Processing {len(input_text)} characters...", err=True)
@@ -234,8 +261,8 @@ def main(
 @click.option(
     "--stages",
     type=str,
-    default="1-5",
-    help="Stages to run (e.g., '1,2,3' or '1-3' or '1-5')"
+    default="1-6",
+    help="Stages to run (e.g., '1,2,3' or '1-3' or '1-6')"
 )
 @click.option(
     "--skip-stages",
@@ -257,6 +284,11 @@ def main(
     help="Plugins to disable (comma-separated names)"
 )
 @click.option(
+    "--no-default-predicates",
+    is_flag=True,
+    help="Disable default predicate taxonomy (GLiNER2 will only use entity extraction)"
+)
+@click.option(
     "-o", "--output",
     type=click.Choice(["table", "json", "yaml", "triples"], case_sensitive=False),
     default="table",
@@ -271,6 +303,7 @@ def pipeline_cmd(
     skip_stages: Optional[str],
     enabled_plugins: Optional[str],
     disable_plugins: Optional[str],
+    no_default_predicates: bool,
     output: str,
     verbose: bool,
     quiet: bool,
@@ -303,8 +336,9 @@ def pipeline_cmd(
     if not quiet:
         click.echo(f"Processing {len(input_text)} characters through pipeline...", err=True)
 
-    # Import pipeline components
+    # Import pipeline components (also loads plugins)
     from .pipeline import ExtractionPipeline, PipelineConfig
+    _load_all_plugins()
 
     # Parse stages
     enabled_stages = _parse_stages(stages)
@@ -324,11 +358,19 @@ def pipeline_cmd(
     if disable_plugins:
         disabled_plugin_set = {p.strip() for p in disable_plugins.split(",") if p.strip()}
 
+    # Build extractor options
+    extractor_options = {}
+    if no_default_predicates:
+        extractor_options["use_default_predicates"] = False
+        if not quiet:
+            click.echo("Default predicates disabled - using entity extraction only", err=True)
+
     # Create config
     config = PipelineConfig(
         enabled_stages=enabled_stages,
         enabled_plugins=enabled_plugin_set,
         disabled_plugins=disabled_plugin_set,
+        extractor_options=extractor_options,
     )
 
     # Run pipeline
@@ -379,11 +421,15 @@ def _parse_stages(stages_str: str) -> set[int]:
 def _print_pipeline_json(ctx):
     """Print pipeline results as JSON."""
     output = {
-        "statement_count": len(ctx.labeled_statements),
-        "statements": [stmt.as_dict() for stmt in ctx.labeled_statements],
+        "statement_count": ctx.statement_count,
+        "raw_triples": [t.model_dump() for t in ctx.raw_triples],
+        "statements": [s.model_dump() for s in ctx.statements],
+        "labeled_statements": [stmt.as_dict() for stmt in ctx.labeled_statements],
         "timings": ctx.stage_timings,
+        "warnings": ctx.processing_warnings,
+        "errors": ctx.processing_errors,
     }
-    click.echo(json.dumps(output, indent=2))
+    click.echo(json.dumps(output, indent=2, default=str))
 
 
 def _print_pipeline_yaml(ctx):
@@ -391,7 +437,7 @@ def _print_pipeline_yaml(ctx):
     try:
         import yaml
         output = {
-            "statement_count": len(ctx.labeled_statements),
+            "statement_count": ctx.statement_count,
             "statements": [stmt.as_dict() for stmt in ctx.labeled_statements],
             "timings": ctx.stage_timings,
         }
@@ -403,42 +449,88 @@ def _print_pipeline_yaml(ctx):
 
 def _print_pipeline_triples(ctx):
     """Print pipeline results as simple triples."""
-    for stmt in ctx.labeled_statements:
-        click.echo(f"{stmt.subject_fqn}\t{stmt.statement.predicate}\t{stmt.object_fqn}")
+    if ctx.labeled_statements:
+        for stmt in ctx.labeled_statements:
+            click.echo(f"{stmt.subject_fqn}\t{stmt.statement.predicate}\t{stmt.object_fqn}")
+    elif ctx.statements:
+        for stmt in ctx.statements:
+            click.echo(f"{stmt.subject.text}\t{stmt.predicate}\t{stmt.object.text}")
+    elif ctx.raw_triples:
+        for triple in ctx.raw_triples:
+            click.echo(f"{triple.subject_text}\t{triple.predicate_text}\t{triple.object_text}")
 
 
 def _print_pipeline_table(ctx, verbose: bool):
     """Print pipeline results in table format."""
-    if not ctx.labeled_statements:
-        click.echo("No statements extracted.")
-        return
+    # Try labeled statements first, then statements, then raw triples
+    if ctx.labeled_statements:
+        click.echo(f"\nExtracted {len(ctx.labeled_statements)} statement(s):\n")
+        click.echo("-" * 80)
 
-    click.echo(f"\nExtracted {len(ctx.labeled_statements)} statement(s):\n")
-    click.echo("-" * 80)
+        for i, stmt in enumerate(ctx.labeled_statements, 1):
+            click.echo(f"{i}. {stmt.subject_fqn}")
+            click.echo(f"   --[{stmt.statement.predicate}]-->")
+            click.echo(f"   {stmt.object_fqn}")
 
-    for i, stmt in enumerate(ctx.labeled_statements, 1):
-        # Subject FQN
-        subj_fqn = stmt.subject_fqn
-        obj_fqn = stmt.object_fqn
-
-        click.echo(f"{i}. {subj_fqn}")
-        click.echo(f"   --[{stmt.statement.predicate}]-->")
-        click.echo(f"   {obj_fqn}")
-
-        if verbose:
-            # Show labels
+            # Show labels (always in recent versions, not just verbose)
             for label in stmt.labels:
                 if isinstance(label.label_value, float):
                     click.echo(f"   {label.label_type}: {label.label_value:.3f}")
                 else:
                     click.echo(f"   {label.label_type}: {label.label_value}")
 
-            # Show source
-            if stmt.statement.source_text:
+            # Show top taxonomy results (sorted by confidence)
+            if stmt.taxonomy_results:
+                sorted_taxonomy = sorted(stmt.taxonomy_results, key=lambda t: t.confidence, reverse=True)
+                top_taxonomy = sorted_taxonomy[:5]  # Show top 5
+                taxonomy_strs = [f"{t.category}:{t.label} ({t.confidence:.2f})" for t in top_taxonomy]
+                click.echo(f"   topics: {', '.join(taxonomy_strs)}")
+                if len(sorted_taxonomy) > 5:
+                    click.echo(f"   ... and {len(sorted_taxonomy) - 5} more topics")
+
+            if verbose and stmt.statement.source_text:
                 source = stmt.statement.source_text[:60] + "..." if len(stmt.statement.source_text) > 60 else stmt.statement.source_text
                 click.echo(f"   Source: \"{source}\"")
 
+            click.echo("-" * 80)
+
+    elif ctx.statements:
+        click.echo(f"\nExtracted {len(ctx.statements)} statement(s):\n")
         click.echo("-" * 80)
+
+        for i, stmt in enumerate(ctx.statements, 1):
+            subj_type = f" ({stmt.subject.type.value})" if stmt.subject.type.value != "UNKNOWN" else ""
+            obj_type = f" ({stmt.object.type.value})" if stmt.object.type.value != "UNKNOWN" else ""
+
+            click.echo(f"{i}. {stmt.subject.text}{subj_type}")
+            click.echo(f"   --[{stmt.predicate}]-->")
+            click.echo(f"   {stmt.object.text}{obj_type}")
+
+            if verbose and stmt.confidence_score is not None:
+                click.echo(f"   Confidence: {stmt.confidence_score:.2f}")
+
+            click.echo("-" * 80)
+
+    elif ctx.raw_triples:
+        click.echo(f"\nExtracted {len(ctx.raw_triples)} raw triple(s):\n")
+        click.echo("-" * 80)
+
+        for i, triple in enumerate(ctx.raw_triples, 1):
+            click.echo(f"{i}. {triple.subject_text}")
+            click.echo(f"   --[{triple.predicate_text}]-->")
+            click.echo(f"   {triple.object_text}")
+
+            if verbose:
+                click.echo(f"   Confidence: {triple.confidence:.2f}")
+                if triple.source_sentence:
+                    source = triple.source_sentence[:60] + "..." if len(triple.source_sentence) > 60 else triple.source_sentence
+                    click.echo(f"   Source: \"{source}\"")
+
+            click.echo("-" * 80)
+
+    else:
+        click.echo("No statements extracted.")
+        return
 
     # Show timings in verbose mode
     if verbose and ctx.stage_timings:
@@ -537,7 +629,7 @@ def _load_all_plugins():
     """Load all plugins by importing their modules."""
     # Import all plugin modules to trigger registration
     try:
-        from .plugins import splitters, extractors, qualifiers, canonicalizers, labelers
+        from .plugins import splitters, extractors, qualifiers, canonicalizers, labelers, taxonomy
         # The @PluginRegistry decorators will register plugins on import
     except ImportError as e:
         logging.debug(f"Some plugins failed to load: {e}")

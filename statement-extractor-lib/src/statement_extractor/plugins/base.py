@@ -7,6 +7,7 @@ Defines the abstract interfaces for each pipeline stage:
 - BaseQualifierPlugin: Stage 3 - Entity → EntityQualifiers
 - BaseCanonicalizerPlugin: Stage 4 - QualifiedEntity → CanonicalMatch
 - BaseLabelerPlugin: Stage 5 - Statement → StatementLabel
+- BaseTaxonomyPlugin: Stage 6 - Statement → TaxonomyResult
 """
 
 from abc import ABC, abstractmethod
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
         CanonicalMatch,
         CanonicalEntity,
         StatementLabel,
+        TaxonomyResult,
         EntityType,
     )
 
@@ -226,12 +228,95 @@ class BaseCanonicalizerPlugin(BasePlugin):
         return CanonicalEntity._generate_fqn(entity, match)
 
 
+class ClassificationSchema:
+    """
+    Schema for simple multi-choice classification (2-20 choices).
+
+    Handled by GLiNER2 `.classification()` in a single pass.
+
+    Examples:
+        - sentiment: ["positive", "negative", "neutral"]
+        - certainty: ["certain", "uncertain", "speculative"]
+        - temporality: ["past", "present", "future"]
+    """
+
+    def __init__(
+        self,
+        label_type: str,
+        choices: list[str],
+        description: str = "",
+        scope: str = "statement",  # "statement", "subject", "object", "predicate"
+    ):
+        self.label_type = label_type
+        self.choices = choices
+        self.description = description
+        self.scope = scope
+
+    def __repr__(self) -> str:
+        return f"ClassificationSchema({self.label_type!r}, choices={self.choices!r})"
+
+
+class TaxonomySchema:
+    """
+    Schema for large taxonomy labeling (100s of values).
+
+    Too many choices for GLiNER2 classification. Requires MNLI or similar:
+    - MNLI zero-shot with label descriptions
+    - Embedding-based nearest neighbor search
+    - Hierarchical classification (category → subcategory)
+
+    Examples:
+        - industry_code: NAICS/SIC codes (1000+ values)
+        - relation_type: detailed relation ontology (100+ types)
+        - job_title: standardized job taxonomy
+    """
+
+    def __init__(
+        self,
+        label_type: str,
+        values: list[str] | dict[str, list[str]],  # flat list or hierarchical dict
+        description: str = "",
+        scope: str = "statement",  # "statement", "subject", "object", "predicate"
+        label_descriptions: dict[str, str] | None = None,  # descriptions for MNLI
+    ):
+        self.label_type = label_type
+        self.values = values
+        self.description = description
+        self.scope = scope
+        self.label_descriptions = label_descriptions  # e.g., {"NAICS:5112": "Software Publishers"}
+
+    @property
+    def is_hierarchical(self) -> bool:
+        """Check if taxonomy is hierarchical (dict) vs flat (list)."""
+        return isinstance(self.values, dict)
+
+    @property
+    def all_values(self) -> list[str]:
+        """Get all taxonomy values (flattened if hierarchical)."""
+        if isinstance(self.values, list):
+            return self.values
+        # Flatten hierarchical dict
+        result = []
+        for category, subcategories in self.values.items():
+            result.append(category)
+            result.extend(subcategories)
+        return result
+
+    def __repr__(self) -> str:
+        count = len(self.all_values)
+        return f"TaxonomySchema({self.label_type!r}, {count} values)"
+
+
 class BaseLabelerPlugin(BasePlugin):
     """
     Stage 5 plugin: Apply labels to statements.
 
     Adds classification labels (sentiment, relation type, confidence)
     to the final labeled statements.
+
+    Labelers can provide a classification_schema that extractors will use
+    to run classification in a single model pass. The results are stored
+    in the pipeline context for the labeler to retrieve.
     """
 
     @property
@@ -243,6 +328,32 @@ class BaseLabelerPlugin(BasePlugin):
         Examples: 'sentiment', 'relation_type', 'confidence'
         """
         ...
+
+    @property
+    def classification_schema(self) -> ClassificationSchema | None:
+        """
+        Simple multi-choice classification schema (2-20 choices).
+
+        If provided, GLiNER2 extractor will run `.classification()` and store
+        results in context for this labeler to retrieve.
+
+        Returns:
+            ClassificationSchema or None
+        """
+        return None
+
+    @property
+    def taxonomy_schema(self) -> TaxonomySchema | None:
+        """
+        Large taxonomy schema (100s of values).
+
+        If provided, requires MNLI or embedding-based classification.
+        Results stored in context for this labeler to retrieve.
+
+        Returns:
+            TaxonomySchema or None
+        """
+        return None
 
     @abstractmethod
     def label(
@@ -259,9 +370,77 @@ class BaseLabelerPlugin(BasePlugin):
             statement: The statement to label
             subject_canonical: Canonicalized subject entity
             object_canonical: Canonicalized object entity
-            context: Pipeline context
+            context: Pipeline context (check context.classification_results for pre-computed labels)
 
         Returns:
             StatementLabel if applicable, None otherwise
+        """
+        ...
+
+
+class BaseTaxonomyPlugin(BasePlugin):
+    """
+    Stage 6 plugin: Classify statements against a taxonomy.
+
+    Taxonomy classification is separate from labeling because:
+    - It operates on large taxonomies (100s-1000s of labels)
+    - It requires specialized models (MNLI, embeddings)
+    - It's computationally heavier than simple labeling
+
+    Taxonomy plugins produce TaxonomyResult objects that are stored
+    in the pipeline context.
+    """
+
+    @property
+    @abstractmethod
+    def taxonomy_name(self) -> str:
+        """
+        Name of the taxonomy this plugin classifies against.
+
+        Examples: 'esg_topics', 'industry_codes', 'relation_types'
+        """
+        ...
+
+    @property
+    def taxonomy_schema(self) -> TaxonomySchema | None:
+        """
+        The taxonomy schema this plugin uses.
+
+        Returns:
+            TaxonomySchema describing the taxonomy structure
+        """
+        return None
+
+    @property
+    def supported_categories(self) -> list[str]:
+        """
+        List of taxonomy categories this plugin supports.
+
+        Returns empty list if all categories are supported.
+        """
+        return []
+
+    @abstractmethod
+    def classify(
+        self,
+        statement: "PipelineStatement",
+        subject_canonical: "CanonicalEntity",
+        object_canonical: "CanonicalEntity",
+        context: "PipelineContext",
+    ) -> list["TaxonomyResult"]:
+        """
+        Classify a statement against the taxonomy.
+
+        Returns all labels above the confidence threshold. A single statement
+        may have multiple applicable taxonomy labels.
+
+        Args:
+            statement: The statement to classify
+            subject_canonical: Canonicalized subject entity
+            object_canonical: Canonicalized object entity
+            context: Pipeline context
+
+        Returns:
+            List of TaxonomyResult objects (empty if none above threshold)
         """
         ...

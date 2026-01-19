@@ -1,14 +1,14 @@
 """
 SentimentLabeler - Classifies statement sentiment.
 
-Uses simple heuristics or optionally GLiNER2 for sentiment classification.
+Uses GLiNER2 classification when available, falls back to pattern matching.
 """
 
 import logging
 import re
 from typing import Optional
 
-from ..base import BaseLabelerPlugin, PluginCapability
+from ..base import BaseLabelerPlugin, ClassificationSchema, PluginCapability
 from ...pipeline.context import PipelineContext
 from ...pipeline.registry import PluginRegistry
 from ...models import (
@@ -33,9 +33,9 @@ NEGATIVE_PATTERNS = [
     r'\b(closed|shut down|cancelled|terminated|withdrew|abandoned)\b',
 ]
 
-# Neutral predicates
+# Neutral predicates (don't include words that are also in positive/negative lists)
 NEUTRAL_PATTERNS = [
-    r'\b(said|stated|reported|announced|confirmed|disclosed)\b',
+    r'\b(said|stated|reported|confirmed|disclosed)\b',
     r'\b(is|was|are|were|has|have|had)\b',
     r'\b(located|based|headquartered|operates|employs)\b',
 ]
@@ -83,20 +83,11 @@ class SentimentLabeler(BaseLabelerPlugin):
     """
     Labeler that classifies statement sentiment.
 
-    Uses pattern matching for sentiment classification.
+    Provides a ClassificationSchema so GLiNER2 can run classification.
+    Falls back to pattern matching if no pre-computed result available.
     """
 
-    def __init__(
-        self,
-        use_gliner: bool = False,
-    ):
-        """
-        Initialize the sentiment labeler.
-
-        Args:
-            use_gliner: Whether to use GLiNER2 for classification (not implemented yet)
-        """
-        self._use_gliner = use_gliner
+    SENTIMENT_CHOICES = ["positive", "negative", "neutral"]
 
     @property
     def name(self) -> str:
@@ -118,6 +109,16 @@ class SentimentLabeler(BaseLabelerPlugin):
     def label_type(self) -> str:
         return "sentiment"
 
+    @property
+    def classification_schema(self) -> ClassificationSchema:
+        """Provide schema for GLiNER2 to run classification."""
+        return ClassificationSchema(
+            label_type=self.label_type,
+            choices=self.SENTIMENT_CHOICES,
+            description="Classify the sentiment of this statement",
+            scope="statement",
+        )
+
     def label(
         self,
         statement: PipelineStatement,
@@ -128,18 +129,22 @@ class SentimentLabeler(BaseLabelerPlugin):
         """
         Classify sentiment of a statement.
 
-        Args:
-            statement: The statement to label
-            subject_canonical: Canonicalized subject
-            object_canonical: Canonicalized object
-            context: Pipeline context
-
-        Returns:
-            StatementLabel with sentiment classification
+        First checks for pre-computed result from extractor (GLiNER2).
+        Falls back to pattern matching if not available.
         """
-        # Combine predicate and source text for analysis
-        text_to_analyze = f"{statement.predicate} {statement.source_text}"
+        # Check for pre-computed classification from extractor
+        result = context.get_classification(statement.source_text, self.label_type)
+        if result:
+            label_value, confidence = result
+            return StatementLabel(
+                label_type=self.label_type,
+                label_value=label_value,
+                confidence=confidence,
+                labeler=self.name,
+            )
 
+        # Fallback: pattern-based classification
+        text_to_analyze = f"{statement.predicate} {statement.source_text}"
         sentiment, confidence = classify_sentiment(text_to_analyze)
 
         return StatementLabel(

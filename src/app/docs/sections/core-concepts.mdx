@@ -316,56 +316,247 @@ Version 0.4.0 introduces **GLiNER2** (205M parameters) for entity recognition an
 
 GLiNER2 is a unified model that handles:
 - **Named Entity Recognition** - identifying entities with types
-- **Relation Extraction** - extracting relationships when predicates are predefined
+- **Relation Extraction** - using 324 default predicates across 21 categories
+- **Confidence Scoring** - real confidence values via `include_confidence=True`
 - **Entity Scoring** - measuring how "entity-like" subjects and objects are
 
-#### Two Extraction Modes
+#### Default Predicates
 
-**With predicate list**: Use GLiNER2's relation extraction for predefined relation types:
+GLiNER2 uses **324 predicates** organized into 21 categories loaded from `default_predicates.json`. Categories include:
+
+- **ownership_control** - acquires, owns, has_subsidiary, etc.
+- **employment_leadership** - employs, is_ceo_of, manages, etc.
+- **funding_investment** - funds, invests_in, sponsors, etc.
+- **supply_chain** - supplies, manufactures, distributes_for, etc.
+- **legal_regulatory** - regulates, violates, complies_with, etc.
+
+Each predicate includes a description for semantic matching and a confidence threshold.
+
+#### All Matches Returned
+
+GLiNER2 now returns **all matching relations**, not just the best one. This allows downstream filtering and selection based on your use case:
 
 ```python
-from statement_extractor import extract_statements, ExtractionOptions
+from statement_extractor.pipeline import ExtractionPipeline
 
-options = ExtractionOptions(predicates=["works_for", "founded", "acquired"])
-result = extract_statements("John works for Apple Inc.", options)
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Amazon CEO Andy Jassy announced plans to hire workers.")
+
+# All matching relations are returned, sorted by confidence
+for stmt in ctx.statements:
+    print(f"{stmt.subject.text} --[{stmt.predicate}]--> {stmt.object.text}")
+    print(f"  Category: {stmt.predicate_category}")
+    print(f"  Confidence: {stmt.confidence_score:.2f}")
 ```
 
-**Without predicate list**: Use entity extraction to refine boundaries, extract predicate from source text:
+#### Custom Predicates
+
+You can provide custom predicates via a JSON file:
 
 ```python
-result = extract_statements("Apple announced a new iPhone.")
-# GLiNER2 refines entity boundaries, predicate extracted from source
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
+
+config = PipelineConfig(
+    extractor_options={"predicates_file": "/path/to/custom_predicates.json"}
+)
+pipeline = ExtractionPipeline(config)
+```
+
+Or via CLI:
+```bash
+corp-extractor pipeline "..." --predicates-file custom_predicates.json
 ```
 
 #### Entity-Based Scoring
 
-Confidence scores now use GLiNER2 entity recognition instead of POS tagging:
+Confidence scores come directly from GLiNER2 with `include_confidence=True`:
 
 <table>
   <thead>
     <tr>
-      <th>Component</th>
-      <th>Weight</th>
+      <th>Source</th>
       <th>Description</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td>Semantic similarity</td>
-      <td>50%</td>
-      <td>Cosine similarity between source text and reassembled triple</td>
+      <td>Relation confidence</td>
+      <td>GLiNER2 confidence in the relation match</td>
     </tr>
     <tr>
-      <td>Subject entity score</td>
-      <td>25%</td>
-      <td>GLiNER2 entity recognition confidence for subject</td>
-    </tr>
-    <tr>
-      <td>Object entity score</td>
-      <td>25%</td>
-      <td>GLiNER2 entity recognition confidence for object</td>
+      <td>Entity confidence</td>
+      <td>GLiNER2 confidence in entity recognition</td>
     </tr>
   </tbody>
 </table>
 
-Entity scores: 1.0 (high confidence entity), 0.8 (moderate confidence), 0.6 (partial match), 0.2 (not recognized).
+---
+
+### Pipeline Architecture
+
+<a id="pipeline-architecture"></a>
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
+
+Version 0.5.0 introduces a **6-stage plugin-based pipeline** for comprehensive entity resolution, canonicalization, statement enrichment, and taxonomy classification.
+
+#### The 6 Stages
+
+```mermaid
+flowchart LR
+    A[Text] --> B[Stage 1: Splitting]
+    B --> C[Stage 2: Extraction]
+    C --> D[Stage 3: Qualification]
+    D --> E[Stage 4: Canonicalization]
+    E --> F[Stage 5: Labeling]
+    F --> G[Stage 6: Taxonomy]
+    G --> H[Classified Statements]
+```
+
+<table>
+  <thead>
+    <tr>
+      <th>Stage</th>
+      <th>Name</th>
+      <th>Input</th>
+      <th>Output</th>
+      <th>Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td>Splitting</td>
+      <td>Text</td>
+      <td><code>RawTriple[]</code></td>
+      <td>Extract raw subject-predicate-object triples using T5-Gemma2</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>Extraction</td>
+      <td><code>RawTriple[]</code></td>
+      <td><code>PipelineStatement[]</code></td>
+      <td>Refine entities with type recognition using GLiNER2</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>Qualification</td>
+      <td>Entities</td>
+      <td><code>QualifiedEntity[]</code></td>
+      <td>Add context: roles, identifiers (LEI, ticker, etc.)</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>Canonicalization</td>
+      <td><code>QualifiedEntity[]</code></td>
+      <td><code>CanonicalEntity[]</code></td>
+      <td>Resolve to canonical forms, generate FQNs</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td>Labeling</td>
+      <td>Statements</td>
+      <td><code>LabeledStatement[]</code></td>
+      <td>Apply sentiment, relation type, confidence labels</td>
+    </tr>
+    <tr>
+      <td>6</td>
+      <td>Taxonomy</td>
+      <td>Statements</td>
+      <td><code>TaxonomyResult[]</code></td>
+      <td>Classify against large taxonomies (ESG topics, etc.)</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Stage 1: Splitting
+
+The splitting stage transforms raw text into `RawTriple` objects using the T5-Gemma2 model. Each triple contains:
+
+- **subject_text**: The raw subject text
+- **predicate_text**: The raw predicate/relationship
+- **object_text**: The raw object text
+- **source_sentence**: The sentence this triple was extracted from
+- **confidence**: Extraction confidence score
+
+#### Stage 2: Extraction
+
+The extraction stage uses GLiNER2 to extract relations and assign entity types, producing `PipelineStatement` objects with:
+
+- **subject**: `ExtractedEntity` with text, type, span, and confidence
+- **object**: `ExtractedEntity` with text, type, span, and confidence
+- **predicate**: Predicate from GLiNER2's 324 default predicates
+- **predicate_category**: Category the predicate belongs to (e.g., "employment_leadership")
+- **source_text**: Source text for this statement
+- **confidence_score**: Real confidence from GLiNER2
+
+**Note:** Stage 2 returns **all matching relations** from GLiNER2, not just the best one. This allows downstream stages to filter, deduplicate, or select based on specific criteria. Relations are sorted by confidence (descending).
+
+#### Stage 3: Qualification
+
+Qualification plugins add context and external identifiers to entities:
+
+- **PersonQualifier**: Adds role and organization for PERSON entities using Gemma3
+- **GLEIFQualifier**: Looks up Legal Entity Identifier (LEI) for organizations
+- **CompaniesHouseQualifier**: Adds UK company registration numbers
+- **SECEdgarQualifier**: Adds SEC CIK and ticker symbols for US public companies
+
+The output is `QualifiedEntity` with an `EntityQualifiers` object containing:
+- Semantic qualifiers: `role`, `org`, `jurisdiction`
+- External identifiers: `lei`, `ch_number`, `sec_cik`, `ticker`, etc.
+
+#### Stage 4: Canonicalization
+
+Canonicalization resolves entities to their canonical forms:
+
+- **OrganizationCanonicalizer**: Resolves organization name variants
+- **PersonCanonicalizer**: Resolves person name variants
+
+The output is `CanonicalEntity` with:
+- **canonical_match**: Match details (id, name, method, confidence)
+- **fqn**: Fully Qualified Name, e.g., "Tim Cook (CEO, Apple Inc)"
+
+#### Stage 5: Labeling
+
+Labeling plugins annotate statements with additional metadata:
+
+- **SentimentLabeler**: Adds sentiment classification (positive/negative/neutral)
+
+The output is `LabeledStatement` with:
+- Original statement
+- Canonicalized subject and object
+- List of `StatementLabel` objects
+
+#### Stage 6: Taxonomy
+
+Taxonomy classification plugins classify statements against large taxonomies with hundreds of possible values. **Multiple labels may match a single statement** above the confidence threshold.
+
+- **MNLITaxonomyClassifier**: Uses MNLI zero-shot classification for accurate taxonomy labeling
+- **EmbeddingTaxonomyClassifier**: Uses embedding similarity for faster classification
+
+The output is a **list of `TaxonomyResult`** objects, each with:
+- **taxonomy_name**: Name of the taxonomy (e.g., "esg_topics")
+- **category**: Top-level category (e.g., "environment", "governance")
+- **label**: Specific label within the category
+- **confidence**: Classification confidence score
+
+Both classifiers use **hierarchical classification** for efficiency: first identify the top-k categories, then return all labels above the threshold within those categories.
+
+#### Plugin System
+
+Each stage is implemented through plugins registered with `PluginRegistry`. Plugins can be:
+
+- **Enabled/disabled** per invocation
+- **Prioritized** for execution order
+- **Entity-type specific** (e.g., PersonQualifier only runs on PERSON entities)
+
+```python
+from statement_extractor.pipeline import PipelineConfig, ExtractionPipeline
+
+# Run with specific plugins disabled
+config = PipelineConfig(
+    disabled_plugins={"sec_edgar_qualifier", "companies_house_qualifier"}
+)
+pipeline = ExtractionPipeline(config)
+ctx = pipeline.process(text)
+```

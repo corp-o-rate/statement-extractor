@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Global Preferences
+
+### Core Principles
+
+* I use zsh shell.
+* **Fail Fast** - raise exceptions and let them bubble up. Avoid try/catch blocks unless at the top level.
+* Don't add fallbacks or backwards compatibility unless instructed explicitly.
+* Don't change tests to fit the code. If tests fail, **fix the code** not the test.
+* We don't do silent failures - all failures MUST appear in logs or cause the application to fail.
+* Everything should be strongly typed, use Pydantic models not dicts.
+* Use mermaid for markdown docs when diagrams are needed.
+* This is startup code - prefer lean, simple, and to the point over enterprise abstractions.
+* I like logging statements, please log progress where possible.
+* DO NOT REPEAT existing code (DRY) - prefer tweaking existing implementations over adding new code.
+
+### Instruction Following
+
+* **Be explicit and specific**: Clear, thorough implementation expected.
+* **Action-oriented by default**: Proceed with implementation rather than only suggesting.
+* **Concise but informative**: Brief progress summaries, avoid unnecessary verbosity.
+* **Flowing prose over excessive formatting**: Use clear paragraphs. Reserve markdown primarily for `inline code`, code blocks, and simple headings.
+
 ## Project Overview
 
 Statement Extractor is a web demo for the T5-Gemma 2 statement extraction model. It transforms unstructured text into structured subject-predicate-object triples with entity type recognition.
@@ -37,13 +59,18 @@ uv sync
 uv run python upload_model.py
 ```
 
-### Python Library (statement-extractor)
+### Python Library (corp-extractor)
 ```bash
 cd statement-extractor-lib
 uv sync                        # Install dependencies
 uv run pytest                  # Run tests
 uv build                       # Build package
 uv publish                     # Publish to PyPI (requires credentials)
+
+# CLI commands (after install)
+corp-extractor split "text"    # Simple extraction
+corp-extractor pipeline "text" # Full 6-stage pipeline
+corp-extractor plugins list    # List available plugins
 ```
 
 ## Architecture
@@ -73,8 +100,29 @@ The frontend can connect to the model via three backends (configured by environm
 - RunPod requires `--platform linux/amd64` when building Docker on Mac
 - Model uses bfloat16 on GPU, float32 on CPU
 - Generation stops at `</statements>` tag to prevent runaway output
+- **v0.5.0**: Introduces 6-stage plugin-based pipeline architecture
 - **v0.4.0**: Uses GLiNER2 (205M params) for entity recognition and relation extraction instead of spaCy
 - GLiNER2 is CPU-optimized and handles NER, relation extraction, and structured data extraction
+
+### Pipeline Architecture (v0.5.0)
+The library provides a 6-stage extraction pipeline:
+
+| Stage | Name | Description | Key Tech |
+|-------|------|-------------|----------|
+| 1 | Splitting | Text → raw triples | T5-Gemma2 |
+| 2 | Extraction | Raw triples → typed statements | GLiNER2 |
+| 3 | Qualification | Add qualifiers/identifiers | Gemma3, APIs |
+| 4 | Canonicalization | Resolve canonical forms | Fuzzy matching |
+| 5 | Labeling | Add sentiment, relation type | Classification |
+| 6 | Taxonomy | Classify against large taxonomies | MNLI, Embeddings |
+
+**Built-in plugins:**
+- **Splitters**: `t5_gemma_splitter`
+- **Extractors**: `gliner2_extractor`
+- **Qualifiers**: `person_qualifier`, `gleif_qualifier`, `companies_house_qualifier`, `sec_edgar_qualifier`
+- **Canonicalizers**: `organization_canonicalizer`, `person_canonicalizer`
+- **Labelers**: `sentiment_labeler`
+- **Taxonomy**: `mnli_taxonomy_classifier`, `embedding_taxonomy_classifier`
 
 ### GLiNER2 Integration (v0.4.0)
 The library uses GLiNER2 for:
@@ -87,21 +135,40 @@ Two extraction modes:
 - **Without predicates**: Uses entity extraction to refine boundaries + predicate split for verb extraction
 
 ### Python Library API
-```python
-from statement_extractor import extract_statements, extract_statements_as_json
 
-# Returns Pydantic models
+**Simple extraction:**
+```python
+from statement_extractor import extract_statements
+
 result = extract_statements("Apple announced a new iPhone.")
 for stmt in result:
     print(f"{stmt.subject.text} -> {stmt.predicate} -> {stmt.object.text}")
+```
 
-# With predefined predicates (GLiNER2 relation extraction)
-from statement_extractor import ExtractionOptions
-options = ExtractionOptions(predicates=["works_for", "founded", "acquired"])
-result = extract_statements("John works for Apple Inc.", options)
+**Full pipeline (v0.5.0):**
+```python
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
 
-# Other formats
-json_str = extract_statements_as_json("...")
-xml_str = extract_statements_as_xml("...")
-dict_data = extract_statements_as_dict("...")
+# Run full pipeline
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Amazon CEO Andy Jassy announced...")
+
+# Access results
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} -> {stmt.statement.predicate} -> {stmt.object_fqn}")
+
+# With configuration
+config = PipelineConfig(
+    enabled_stages={1, 2, 3},  # Skip canonicalization and labeling
+    disabled_plugins={"sec_edgar_qualifier"},
+)
+pipeline = ExtractionPipeline(config)
+```
+
+**CLI usage:**
+```bash
+corp-extractor split "text"              # Simple extraction
+corp-extractor pipeline "text"           # Full pipeline
+corp-extractor pipeline "text" --stages 1-3
+corp-extractor plugins list              # List plugins
 ```

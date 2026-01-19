@@ -304,6 +304,10 @@ class ExtractionOptions(BaseModel):
         default=None,
         description="Optional list of predefined predicate types for GLiNER2 relation extraction (e.g., ['works_for', 'founded'])"
     )
+    use_default_predicates: bool = Field(
+        default=True,
+        description="Use default predicate taxonomy when no custom predicates provided (enables GLiNER2 relation extraction)"
+    )
 
     # Verbose logging
     verbose: bool = Field(

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         BaseQualifierPlugin,
         BaseCanonicalizerPlugin,
         BaseLabelerPlugin,
+        BaseTaxonomyPlugin,
     )
     from ..models import EntityType
 
@@ -38,6 +39,7 @@ class PluginRegistry:
     _qualifiers: list["BaseQualifierPlugin"] = []
     _canonicalizers: list["BaseCanonicalizerPlugin"] = []
     _labelers: list["BaseLabelerPlugin"] = []
+    _taxonomy_classifiers: list["BaseTaxonomyPlugin"] = []
 
     # Index by entity type for quick lookup
     _qualifiers_by_type: dict["EntityType", list["BaseQualifierPlugin"]] = {}
@@ -54,6 +56,7 @@ class PluginRegistry:
         cls._qualifiers = []
         cls._canonicalizers = []
         cls._labelers = []
+        cls._taxonomy_classifiers = []
         cls._qualifiers_by_type = {}
         cls._canonicalizers_by_type = {}
         cls._all_plugins = {}
@@ -124,6 +127,14 @@ class PluginRegistry:
         cls._all_plugins[plugin.name] = plugin
         logger.debug(f"Registered labeler: {plugin.name} (priority={plugin.priority})")
 
+    @classmethod
+    def register_taxonomy(cls, plugin: "BaseTaxonomyPlugin") -> None:
+        """Register a taxonomy classifier plugin."""
+        cls._taxonomy_classifiers.append(plugin)
+        cls._taxonomy_classifiers.sort(key=lambda p: p.priority)
+        cls._all_plugins[plugin.name] = plugin
+        logger.debug(f"Registered taxonomy: {plugin.name} (priority={plugin.priority})")
+
     # =========================================================================
     # Decorator registration
     # =========================================================================
@@ -156,6 +167,12 @@ class PluginRegistry:
     def labeler(cls, plugin_class: Type[T]) -> Type[T]:
         """Decorator to register a labeler plugin class."""
         cls.register_labeler(plugin_class())
+        return plugin_class
+
+    @classmethod
+    def taxonomy(cls, plugin_class: Type[T]) -> Type[T]:
+        """Decorator to register a taxonomy classifier plugin class."""
+        cls.register_taxonomy(plugin_class())
         return plugin_class
 
     # =========================================================================
@@ -198,6 +215,11 @@ class PluginRegistry:
         return cls._labelers.copy()
 
     @classmethod
+    def get_taxonomy_classifiers(cls) -> list["BaseTaxonomyPlugin"]:
+        """Get all registered taxonomy classifier plugins (sorted by priority)."""
+        return cls._taxonomy_classifiers.copy()
+
+    @classmethod
     def get_plugin(cls, name: str) -> "BasePlugin | None":
         """Get a plugin by name."""
         return cls._all_plugins.get(name)
@@ -220,6 +242,8 @@ class PluginRegistry:
             return cls._canonicalizers.copy()
         elif stage == 5:
             return cls._labelers.copy()
+        elif stage == 6:
+            return cls._taxonomy_classifiers.copy()
         return []
 
     # =========================================================================
@@ -245,6 +269,7 @@ class PluginRegistry:
             (3, "qualification", cls._qualifiers),
             (4, "canonicalization", cls._canonicalizers),
             (5, "labeling", cls._labelers),
+            (6, "taxonomy", cls._taxonomy_classifiers),
         ]
 
         for stage_num, stage_name, plugins in plugins_by_stage:
@@ -264,6 +289,9 @@ class PluginRegistry:
                 # Add label type for labelers
                 if hasattr(plugin, "label_type"):
                     info["label_type"] = plugin.label_type
+                # Add taxonomy name for taxonomy classifiers
+                if hasattr(plugin, "taxonomy_name"):
+                    info["taxonomy_name"] = plugin.taxonomy_name
                 result.append(info)
 
         return result

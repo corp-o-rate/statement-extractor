@@ -8,21 +8,18 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 ## Features
 
+- **6-Stage Pipeline** *(v0.5.0)*: Modular plugin-based architecture for full entity resolution
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
+- **Entity Qualification** *(v0.5.0)*: Adds roles, identifiers (LEI, ticker, company numbers) via external APIs
+- **Canonicalization** *(v0.5.0)*: Resolves entities to canonical forms with fuzzy matching
+- **Statement Labeling** *(v0.5.0)*: Sentiment analysis, relation type classification, confidence scoring
 - **GLiNER2 Integration** *(v0.4.0)*: Uses GLiNER2 (205M params) for entity recognition and relation extraction
-- **Predefined Predicates** *(v0.4.0)*: Optional `--predicates` list for GLiNER2 relation extraction mode
-- **Entity-based Scoring** *(v0.4.0)*: Confidence combines semantic similarity (50%) + entity recognition scores (25% each)
-- **Multi-Candidate Extraction**: Generates 2 candidates per statement (hybrid, GLiNER2-only)
-- **Best Triple Selection**: Keeps only highest-scoring triple per source (use `--all-triples` to keep all)
-- **Extraction Method Tracking**: Each statement includes `extraction_method` field (hybrid, gliner, model)
+- **Predefined Predicates**: Optional `--predicates` list for GLiNER2 relation extraction mode
 - **Beam Merging**: Combines top beams for better coverage instead of picking one
 - **Embedding-based Dedup**: Uses semantic similarity to detect near-duplicate predicates
 - **Predicate Taxonomies**: Normalize predicates to canonical forms via embeddings
-- **Contextualized Matching**: Compares full "Subject Predicate Object" against source text for better accuracy
-- **Entity Type Merging**: Automatically merges UNKNOWN entity types with specific types during deduplication
-- **Reversal Detection**: Detects and corrects subject-object reversals using embedding comparison
-- **Command Line Interface**: Full-featured CLI for terminal usage
+- **Command Line Interface**: Full-featured CLI with `split`, `pipeline`, and `plugins` commands
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
 
 ## Installation
@@ -96,63 +93,74 @@ uvx corp-extractor "Apple announced a new iPhone."
 
 ### Usage Examples
 
+The CLI provides three main commands: `split`, `pipeline`, and `plugins`.
+
 ```bash
-# Extract from text argument
-corp-extractor "Apple Inc. announced the iPhone 15 at their September event."
+# Simple extraction (Stage 1 only, fast)
+corp-extractor split "Apple Inc. announced the iPhone 15."
+corp-extractor split -f article.txt --json
 
-# Extract from file
-corp-extractor -f article.txt
+# Full 6-stage pipeline (entity resolution, canonicalization, labeling, taxonomy)
+corp-extractor pipeline "Amazon CEO Andy Jassy announced plans to hire workers."
+corp-extractor pipeline -f article.txt --stages 1-3
+corp-extractor pipeline "..." --disable-plugins sec_edgar
 
-# Pipe from stdin
-cat article.txt | corp-extractor -
-
-# Output as JSON
-corp-extractor "Tim Cook is CEO of Apple." --json
-
-# Output as XML
-corp-extractor -f article.txt --xml
-
-# Verbose output with confidence scores
-corp-extractor -f article.txt --verbose
-
-# Use more beams for better quality
-corp-extractor -f article.txt --beams 8
-
-# Use custom predicate taxonomy
-corp-extractor -f article.txt --taxonomy predicates.txt
-
-# Use GPU explicitly
-corp-extractor -f article.txt --device cuda
+# Plugin management
+corp-extractor plugins list
+corp-extractor plugins list --stage 3
+corp-extractor plugins info gleif_qualifier
 ```
 
-### CLI Options
+### Split Command (Simple Extraction)
+
+```bash
+corp-extractor split "Tim Cook is CEO of Apple." --json
+corp-extractor split -f article.txt --beams 8 --verbose
+cat article.txt | corp-extractor split -
+```
+
+### Pipeline Command (Full Entity Resolution)
+
+```bash
+# Run all 5 stages
+corp-extractor pipeline "Apple CEO Tim Cook announced..."
+
+# Run specific stages
+corp-extractor pipeline "..." --stages 1-3         # Stages 1, 2, 3
+corp-extractor pipeline "..." --stages 1,2,5       # Stages 1, 2, 5
+corp-extractor pipeline "..." --skip-stages 4,5    # Skip stages 4 and 5
+
+# Plugin selection
+corp-extractor pipeline "..." --plugins gleif,companies_house
+corp-extractor pipeline "..." --disable-plugins sec_edgar
+```
+
+### CLI Reference
 
 ```
-Usage: corp-extractor [OPTIONS] [TEXT]
+Usage: corp-extractor [COMMAND] [OPTIONS]
 
-Options:
+Commands:
+  split      Simple extraction (T5-Gemma only)
+  pipeline   Full 5-stage pipeline with entity resolution
+  plugins    List or inspect available plugins
+
+Split Options:
   -f, --file PATH              Read input from file
   -o, --output [table|json|xml] Output format (default: table)
-  --json                       Output as JSON (shortcut)
-  --xml                        Output as XML (shortcut)
+  --json / --xml               Output format shortcuts
   -b, --beams INTEGER          Number of beams (default: 4)
-  --diversity FLOAT            Diversity penalty (default: 1.0)
-  --max-tokens INTEGER         Max tokens to generate (default: 2048)
-  --no-dedup                   Disable deduplication
-  --no-embeddings              Disable embedding-based dedup (faster)
-  --no-merge                   Disable beam merging
-  --no-gliner                  Disable GLiNER2 extraction (use raw model output)
-  --predicates TEXT            Comma-separated predicate types for GLiNER2 relation extraction
-  --all-triples                Keep all candidate triples (default: best per source)
-  --dedup-threshold FLOAT      Deduplication threshold (default: 0.65)
-  --min-confidence FLOAT       Min confidence filter (default: 0)
-  --taxonomy PATH              Load predicate taxonomy from file
-  --taxonomy-threshold FLOAT   Taxonomy matching threshold (default: 0.5)
+  --no-gliner                  Disable GLiNER2 extraction
+  --predicates TEXT            Comma-separated predicates for relation extraction
   --device [auto|cuda|mps|cpu] Device to use (default: auto)
   -v, --verbose                Show confidence scores and metadata
-  -q, --quiet                  Suppress progress messages
-  --version                    Show version
-  --help                       Show this message
+
+Pipeline Options:
+  --stages TEXT                Stages to run (e.g., '1-3' or '1,2,5')
+  --skip-stages TEXT           Stages to skip (e.g., '4,5')
+  --plugins TEXT               Enable only these plugins (comma-separated)
+  --disable-plugins TEXT       Disable these plugins (comma-separated)
+  -o, --output [table|json|yaml|triples]  Output format
 ```
 
 ## New in v0.2.0: Quality Scoring & Beam Merging
@@ -246,6 +254,85 @@ for stmt in fixed_statements:
 
 During deduplication, reversed duplicates (e.g., "A -> P -> B" and "B -> P -> A") are now detected and merged, with the correct orientation determined by source text similarity.
 
+## New in v0.5.0: Pipeline Architecture
+
+v0.5.0 introduces a **6-stage plugin-based pipeline** for comprehensive entity resolution, statement enrichment, and taxonomy classification.
+
+### Pipeline Stages
+
+| Stage | Name | Input | Output | Key Tech |
+|-------|------|-------|--------|----------|
+| 1 | Splitting | Text | `RawTriple[]` | T5-Gemma2 |
+| 2 | Extraction | `RawTriple[]` | `PipelineStatement[]` | GLiNER2 |
+| 3 | Qualification | Entities | `QualifiedEntity[]` | Gemma3, APIs |
+| 4 | Canonicalization | `QualifiedEntity[]` | `CanonicalEntity[]` | Fuzzy matching |
+| 5 | Labeling | Statements | `LabeledStatement[]` | Sentiment, etc. |
+| 6 | Taxonomy | Statements | `TaxonomyResult[]` | MNLI, Embeddings |
+
+### Pipeline Python API
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
+
+# Run full pipeline
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Amazon CEO Andy Jassy announced plans to hire workers.")
+
+# Access results at each stage
+print(f"Raw triples: {len(ctx.raw_triples)}")
+print(f"Statements: {len(ctx.statements)}")
+print(f"Labeled: {len(ctx.labeled_statements)}")
+
+# Output with fully qualified names
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} --[{stmt.statement.predicate}]--> {stmt.object_fqn}")
+    # e.g., "Andy Jassy (CEO, Amazon) --[announced]--> plans to hire workers"
+```
+
+### Pipeline Configuration
+
+```python
+from statement_extractor.pipeline import PipelineConfig, ExtractionPipeline
+
+# Run only specific stages
+config = PipelineConfig(
+    enabled_stages={1, 2, 3},  # Skip canonicalization and labeling
+    disabled_plugins={"sec_edgar_qualifier"},  # Disable specific plugins
+)
+pipeline = ExtractionPipeline(config)
+ctx = pipeline.process(text)
+
+# Alternative: create config from stage string
+config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
+```
+
+### Built-in Plugins
+
+**Splitters (Stage 1):**
+- `t5_gemma_splitter` - T5-Gemma2 statement extraction
+
+**Extractors (Stage 2):**
+- `gliner2_extractor` - GLiNER2 entity recognition and relation extraction
+
+**Qualifiers (Stage 3):**
+- `person_qualifier` - PERSON → role, org (uses Gemma3)
+- `gleif_qualifier` - ORG → LEI, jurisdiction (GLEIF API)
+- `companies_house_qualifier` - ORG → UK company number
+- `sec_edgar_qualifier` - ORG → SEC CIK, ticker
+
+**Canonicalizers (Stage 4):**
+- `organization_canonicalizer` - ORG canonical names
+- `person_canonicalizer` - PERSON name variants
+
+**Labelers (Stage 5):**
+- `sentiment_labeler` - Statement sentiment analysis
+
+**Taxonomy Classifiers (Stage 6):**
+- `mnli_taxonomy_classifier` - MNLI zero-shot classification against ESG taxonomy
+- `embedding_taxonomy_classifier` - Embedding similarity-based taxonomy classification
+
+Taxonomy classifiers return **multiple labels** per statement above the confidence threshold.
+
 ## New in v0.4.0: GLiNER2 Integration
 
 v0.4.0 replaces spaCy with **GLiNER2** (205M params) for entity recognition and relation extraction. GLiNER2 is a unified model that handles NER, text classification, structured data extraction, and relation extraction with CPU-optimized inference.
@@ -258,12 +345,31 @@ The T5-Gemma model excels at:
 
 GLiNER2 now handles:
 - **Entity recognition** - refining subject/object boundaries
-- **Relation extraction** - when predefined predicates are provided
+- **Relation extraction** - using 324 default predicates across 21 categories
 - **Entity scoring** - scoring how "entity-like" subjects/objects are
+- **Confidence scoring** - real confidence values via `include_confidence=True`
 
-### Two Extraction Modes
+### Default Predicates
 
-**Mode 1: With Predicate List** (GLiNER2 relation extraction)
+GLiNER2 uses **324 predicates** organized into 21 categories (ownership, employment, funding, etc.). These are loaded from `default_predicates.json` and include descriptions and confidence thresholds.
+
+**Key features:**
+- **All matches returned** - Every matching relation is returned, not just the best one
+- **Category-based extraction** - Iterates through categories to stay under GLiNER2's ~25 label limit
+- **Custom predicate files** - Provide your own JSON file with custom predicates
+
+### Extraction Modes
+
+**Mode 1: Default Predicates** (recommended)
+```python
+from statement_extractor import extract_statements
+
+# Uses 324 built-in predicates automatically
+result = extract_statements("John works for Apple Inc. in Cupertino.")
+# Returns ALL matching relations
+```
+
+**Mode 2: Custom Predicate List**
 ```python
 from statement_extractor import extract_statements, ExtractionOptions
 
@@ -276,11 +382,20 @@ Or via CLI:
 corp-extractor "John works for Apple Inc." --predicates "works_for,founded,acquired"
 ```
 
-**Mode 2: Without Predicate List** (entity-refined extraction)
+**Mode 3: Custom Predicate File**
 ```python
-result = extract_statements("Apple announced a new iPhone.")
-# Uses GLiNER2 for entity extraction to refine boundaries
-# Extracts predicate from source text using T5-Gemma's hint
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
+
+config = PipelineConfig(
+    extractor_options={"predicates_file": "/path/to/custom_predicates.json"}
+)
+pipeline = ExtractionPipeline(config)
+ctx = pipeline.process("John works for Apple Inc.")
+```
+
+Or via CLI:
+```bash
+corp-extractor pipeline "John works for Apple Inc." --predicates-file custom_predicates.json
 ```
 
 ### Two Candidate Extraction Methods

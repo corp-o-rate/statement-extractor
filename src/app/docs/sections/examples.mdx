@@ -406,3 +406,348 @@ Extracted 4 high-confidence statements:
        -- is primary cloud provider for -->
        Anthropic (ORG)
 ```
+
+---
+
+### Pipeline Examples
+
+<span id="pipeline-examples" />
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
+
+#### Full Pipeline with Corporate Text
+
+Process corporate announcements with full entity resolution:
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
+
+pipeline = ExtractionPipeline()
+
+text = """
+Amazon CEO Andy Jassy announced plans to hire 10,000 workers in the UK.
+The expansion will focus on Amazon Web Services operations in London.
+"""
+
+ctx = pipeline.process(text)
+
+print(f"Extracted {ctx.statement_count} statements\n")
+
+for stmt in ctx.labeled_statements:
+    # FQN includes role and organization
+    print(f"Subject: {stmt.subject_fqn}")
+    print(f"Predicate: {stmt.statement.predicate}")
+    print(f"Object: {stmt.object_fqn}")
+
+    # Access labels
+    for label in stmt.labels:
+        print(f"  {label.label_type}: {label.label_value}")
+
+    # Access qualifiers
+    subject_quals = stmt.subject_canonical.qualified_entity.qualifiers
+    if subject_quals.role:
+        print(f"  Role: {subject_quals.role}")
+    if subject_quals.org:
+        print(f"  Organization: {subject_quals.org}")
+
+    print("-" * 40)
+```
+
+Output:
+
+```
+Extracted 2 statements
+
+Subject: Andy Jassy (CEO, Amazon)
+Predicate: announced
+Object: plans to hire 10,000 workers in the UK
+  sentiment: positive
+  Role: CEO
+  Organization: Amazon
+----------------------------------------
+Subject: Amazon (AMZN)
+Predicate: expanding operations in
+Object: London (UK)
+  sentiment: positive
+----------------------------------------
+```
+
+---
+
+#### Running Specific Stages
+
+Skip qualification and canonicalization for faster processing:
+
+```python
+from statement_extractor.pipeline import PipelineConfig, ExtractionPipeline
+
+# Run only stages 1 and 2 (splitting + extraction)
+config = PipelineConfig(enabled_stages={1, 2})
+pipeline = ExtractionPipeline(config)
+
+ctx = pipeline.process("Tim Cook is CEO of Apple Inc.")
+
+# Access Stage 2 output (PipelineStatement)
+for stmt in ctx.statements:
+    print(f"{stmt.subject.text} ({stmt.subject.type.value})")
+    print(f"  --[{stmt.predicate}]-->")
+    print(f"  {stmt.object.text} ({stmt.object.type.value})")
+    print(f"  Confidence: {stmt.confidence_score:.2f}")
+```
+
+---
+
+#### Using Specific Plugins
+
+Enable only internal plugins (no external API calls):
+
+```python
+from statement_extractor.pipeline import PipelineConfig, ExtractionPipeline
+
+# Disable external API plugins
+config = PipelineConfig(
+    disabled_plugins={
+        "gleif_qualifier",
+        "companies_house_qualifier",
+        "sec_edgar_qualifier",
+    }
+)
+
+pipeline = ExtractionPipeline(config)
+ctx = pipeline.process("OpenAI CEO Sam Altman announced GPT-5.")
+
+# Will use person_qualifier (local LLM) but skip external lookups
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} -> {stmt.statement.predicate} -> {stmt.object_fqn}")
+```
+
+---
+
+#### Custom Predicates File
+
+Use a custom predicates JSON file instead of the 324 default predicates:
+
+```python
+from statement_extractor.pipeline import PipelineConfig, ExtractionPipeline
+
+# Use custom predicates file
+config = PipelineConfig(
+    extractor_options={
+        "predicates_file": "/path/to/my_predicates.json"
+    }
+)
+
+pipeline = ExtractionPipeline(config)
+ctx = pipeline.process("John works for Apple Inc.")
+
+# All matching relations are returned
+for stmt in ctx.statements:
+    print(f"{stmt.subject.text} --[{stmt.predicate}]--> {stmt.object.text}")
+    print(f"  Category: {stmt.predicate_category}")
+    print(f"  Confidence: {stmt.confidence_score:.2f}")
+```
+
+Custom predicates file format:
+
+```json
+{
+  "employment": {
+    "works_for": {
+      "description": "Employment relationship where person works for organization",
+      "threshold": 0.75
+    },
+    "manages": {
+      "description": "Management relationship where person manages entity",
+      "threshold": 0.7
+    }
+  },
+  "ownership": {
+    "owns": {
+      "description": "Ownership relationship",
+      "threshold": 0.7
+    },
+    "acquired": {
+      "description": "Acquisition of one entity by another",
+      "threshold": 0.75
+    }
+  }
+}
+```
+
+Each category should have fewer than 25 predicates to stay within GLiNER2's training limit for optimal performance.
+
+---
+
+#### Accessing Stage Outputs
+
+Access results from each pipeline stage:
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline
+
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Microsoft CEO Satya Nadella announced Azure growth.")
+
+# Stage 1: Raw triples
+print("=== Stage 1: Raw Triples ===")
+for triple in ctx.raw_triples:
+    print(f"  {triple.subject_text} -> {triple.predicate_text} -> {triple.object_text}")
+
+# Stage 2: Statements with types
+print("\n=== Stage 2: Statements ===")
+for stmt in ctx.statements:
+    print(f"  {stmt.subject.text} ({stmt.subject.type.value}) -> {stmt.predicate}")
+
+# Stage 3: Qualified entities
+print("\n=== Stage 3: Qualified Entities ===")
+for ref, qualified in ctx.qualified_entities.items():
+    quals = qualified.qualifiers
+    print(f"  {qualified.original_text}")
+    if quals.role:
+        print(f"    Role: {quals.role}")
+    if quals.org:
+        print(f"    Org: {quals.org}")
+    for id_type, id_value in quals.identifiers.items():
+        print(f"    {id_type}: {id_value}")
+
+# Stage 4: Canonical entities
+print("\n=== Stage 4: Canonical Entities ===")
+for ref, canonical in ctx.canonical_entities.items():
+    print(f"  {canonical.fqn}")
+    if canonical.canonical_match:
+        print(f"    Method: {canonical.canonical_match.match_method}")
+        print(f"    Confidence: {canonical.canonical_match.match_confidence:.2f}")
+
+# Stage 5: Labeled statements
+print("\n=== Stage 5: Labeled Statements ===")
+for stmt in ctx.labeled_statements:
+    print(f"  {stmt.subject_fqn} -> {stmt.statement.predicate} -> {stmt.object_fqn}")
+    for label in stmt.labels:
+        print(f"    {label.label_type}: {label.label_value}")
+
+# Stage 6: Taxonomy results (multiple labels per statement)
+print("\n=== Stage 6: Taxonomy Results ===")
+for (source_text, taxonomy_name), results in ctx.taxonomy_results.items():
+    print(f"  Statement: {source_text[:40]}...")
+    for result in results:
+        print(f"    {result.full_label} (confidence: {result.confidence:.2f})")
+
+# Timings
+print("\n=== Stage Timings ===")
+for stage, duration in ctx.stage_timings.items():
+    print(f"  {stage}: {duration:.3f}s")
+```
+
+---
+
+#### Batch Pipeline Processing
+
+Process multiple documents efficiently:
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
+
+# Use minimal stages for speed
+config = PipelineConfig.minimal()  # Stages 1-2 only
+pipeline = ExtractionPipeline(config)
+
+documents = [
+    "Apple announced a new MacBook Pro.",
+    "Google acquired Fitbit for $2.1 billion.",
+    "Tesla CEO Elon Musk unveiled the Cybertruck.",
+]
+
+all_statements = []
+
+for doc in documents:
+    ctx = pipeline.process(doc)
+    for stmt in ctx.statements:
+        all_statements.append({
+            "subject": stmt.subject.text,
+            "subject_type": stmt.subject.type.value,
+            "predicate": stmt.predicate,
+            "object": stmt.object.text,
+            "object_type": stmt.object.type.value,
+            "confidence": stmt.confidence_score,
+            "source": doc,
+        })
+
+print(f"Extracted {len(all_statements)} statements from {len(documents)} documents")
+```
+
+---
+
+#### Taxonomy Classification
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">Stage 6</span>
+
+Classify statements against large taxonomies. Multiple labels may match a single statement above the confidence threshold:
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline
+
+pipeline = ExtractionPipeline()
+
+text = """
+Apple announced a commitment to carbon neutrality by 2030.
+The company also reported reducing packaging waste by 75%.
+"""
+
+ctx = pipeline.process(text)
+
+# Access taxonomy classifications (multiple labels per statement)
+for (source_text, taxonomy_name), results in ctx.taxonomy_results.items():
+    print(f"Statement: {source_text[:50]}...")
+    print(f"  Taxonomy: {taxonomy_name}")
+    print(f"  Labels:")
+    for result in results:
+        print(f"    - {result.full_label} (confidence: {result.confidence:.2f})")
+    print()
+```
+
+Output:
+
+```
+Statement: Apple announced a commitment to carbon neutrality...
+  Taxonomy: esg_topics
+  Labels:
+    - environment:carbon_emissions (confidence: 0.87)
+    - environment_benefit:emissions_reduction (confidence: 0.72)
+    - governance:sustainability_commitments (confidence: 0.45)
+
+Statement: The company also reported reducing packaging waste...
+  Taxonomy: esg_topics
+  Labels:
+    - environment:waste_management (confidence: 0.92)
+    - environment_benefit:waste_reduction (confidence: 0.85)
+```
+
+---
+
+#### Pipeline with Error Handling
+
+Handle errors and warnings gracefully:
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig
+
+config = PipelineConfig(fail_fast=False)  # Continue on errors
+pipeline = ExtractionPipeline(config)
+
+ctx = pipeline.process("Some text that might cause issues...")
+
+# Check for errors
+if ctx.has_errors:
+    print("Errors occurred:")
+    for error in ctx.processing_errors:
+        print(f"  - {error}")
+
+# Check for warnings
+if ctx.processing_warnings:
+    print("Warnings:")
+    for warning in ctx.processing_warnings:
+        print(f"  - {warning}")
+
+# Process results that succeeded
+print(f"\nSuccessfully extracted {ctx.statement_count} statements")
+```

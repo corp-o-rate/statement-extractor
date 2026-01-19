@@ -46,7 +46,7 @@ from .entity import ExtractedEntity
 from .statement import RawTriple, PipelineStatement
 from .qualifiers import EntityQualifiers, QualifiedEntity
 from .canonical import CanonicalMatch, CanonicalEntity
-from .labels import StatementLabel, LabeledStatement
+from .labels import StatementLabel, LabeledStatement, TaxonomyResult
 
 __all__ = [
     # Re-exported from original models.py (backward compatibility)
@@ -70,4 +70,5 @@ __all__ = [
     "CanonicalEntity",
     "StatementLabel",
     "LabeledStatement",
+    "TaxonomyResult",
 ]

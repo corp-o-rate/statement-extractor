@@ -72,10 +72,13 @@ class T5GemmaSplitter(BaseSplitterPlugin):
         """Lazy-load the StatementExtractor."""
         if self._extractor is None:
             from ...extractor import StatementExtractor
-            self._extractor = StatementExtractor(
-                model_id=self._model_id,
-                device=self._device,
-            )
+            # Only pass model_id and device if they were explicitly set
+            kwargs = {}
+            if self._model_id is not None:
+                kwargs["model_id"] = self._model_id
+            if self._device is not None:
+                kwargs["device"] = self._device
+            self._extractor = StatementExtractor(**kwargs)
         return self._extractor
 
     def split(

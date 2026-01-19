@@ -87,31 +87,31 @@ def get_name_parts(name: str) -> tuple[str, str]:
     return "", ""
 
 
-def names_match(name1: str, name2: str) -> tuple[bool, float]:
+def names_match(name1: str, name2: str) -> tuple[bool, float, bool]:
     """
     Check if two names match, considering variants.
 
-    Returns (matches, confidence).
+    Returns (matches, confidence, is_variant).
     """
     first1, last1 = get_name_parts(name1)
     first2, last2 = get_name_parts(name2)
 
     # Last names must match (if both present)
     if last1 and last2 and last1 != last2:
-        return False, 0.0
+        return False, 0.0, False
 
     # Check first name match
     if first1 == first2:
-        return True, 1.0
+        return True, 1.0, False
 
     # Check variants
     variants1 = NAME_VARIANTS.get(first1, [])
     variants2 = NAME_VARIANTS.get(first2, [])
 
     if first2 in variants1 or first1 in variants2:
-        return True, 0.9
+        return True, 0.9, True
 
-    return False, 0.0
+    return False, 0.0, False
 
 
 @PluginRegistry.canonicalizer
@@ -173,6 +173,8 @@ class PersonCanonicalizer(BaseCanonicalizerPlugin):
         best_match = None
         best_confidence = 0.0
 
+        best_is_variant = False
+
         for other_ref, other_entity in context.qualified_entities.items():
             if other_ref == entity.entity_ref:
                 continue
@@ -181,7 +183,7 @@ class PersonCanonicalizer(BaseCanonicalizerPlugin):
                 continue
 
             # Check name match
-            matches, confidence = names_match(entity.original_text, other_entity.original_text)
+            matches, confidence, is_variant = names_match(entity.original_text, other_entity.original_text)
             if not matches:
                 continue
 
@@ -201,12 +203,13 @@ class PersonCanonicalizer(BaseCanonicalizerPlugin):
             if confidence > best_confidence:
                 best_confidence = confidence
                 best_match = other_entity
+                best_is_variant = is_variant
 
         if best_match and best_confidence >= 0.8:
             return CanonicalMatch(
                 canonical_id=None,
                 canonical_name=best_match.original_text,
-                match_method="name_variant" if best_confidence < 1.0 else "name_exact",
+                match_method="name_variant" if best_is_variant else "name_exact",
                 match_confidence=best_confidence,
                 match_details={"matched_entity": best_match.entity_ref},
             )

@@ -16,10 +16,10 @@ class PipelineConfig(BaseModel):
     Controls which stages are enabled, which plugins to use,
     and stage-specific options.
     """
-    # Stage selection (1=Splitting, 2=Extraction, 3=Qualification, 4=Canonicalization, 5=Labeling)
+    # Stage selection (1=Splitting, 2=Extraction, 3=Qualification, 4=Canonicalization, 5=Labeling, 6=Taxonomy)
     enabled_stages: set[int] = Field(
-        default={1, 2, 3, 4, 5},
-        description="Set of enabled stage numbers (1-5)"
+        default={1, 2, 3, 4, 5, 6},
+        description="Set of enabled stage numbers (1-6)"
     )
 
     # Plugin selection
@@ -28,7 +28,9 @@ class PipelineConfig(BaseModel):
         description="Set of enabled plugin names (None = all enabled)"
     )
     disabled_plugins: set[str] = Field(
-        default_factory=set,
+        default_factory=lambda: {
+            "mnli_taxonomy_classifier",  # Disabled by default - use embedding_taxonomy_classifier instead (faster)
+        },
         description="Set of disabled plugin names"
     )
 
@@ -53,10 +55,14 @@ class PipelineConfig(BaseModel):
         default_factory=dict,
         description="Options passed to labeler plugins"
     )
+    taxonomy_options: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Options passed to taxonomy plugins"
+    )
 
     # General options
     fail_fast: bool = Field(
-        default=False,
+        default=True,
         description="Stop processing on first error (otherwise continue and collect errors)"
     )
     parallel_processing: bool = Field(
@@ -119,6 +125,7 @@ STAGE_NAMES = {
     3: "qualification",
     4: "canonicalization",
     5: "labeling",
+    6: "taxonomy",
 }
 
 

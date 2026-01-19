@@ -21,8 +21,12 @@ RUN pip install --no-cache-dir \
     pydantic \
     sentence-transformers \
     gliner2 \
+    huggingface_hub \
     "transformers @ git+https://github.com/huggingface/transformers.git"
 
+# Install llama-cpp-python with CUDA support for GGUF models
+ENV CMAKE_ARGS="-DGGML_CUDA=on"
+RUN pip install --no-cache-dir llama-cpp-python
 
 # Pre-download embedding model (downloads on CPU during build, will use GPU at runtime)
 RUN python -c "from sentence_transformers import SentenceTransformer; \
@@ -34,8 +38,13 @@ RUN python -c "from gliner2 import GLiNER2; \
     model = GLiNER2.from_pretrained('fastino/gliner2-base-v1'); \
     print('GLiNER2 model downloaded')"
 
+# Pre-download Gemma3 GGUF model for person qualification
+RUN python -c "from huggingface_hub import hf_hub_download; \
+    path = hf_hub_download(repo_id='google/gemma-3-12b-it-qat-q4_0-gguf', filename='gemma-3-12b-it-q4_0.gguf'); \
+    print(f'Gemma3 GGUF model downloaded to {path}')"
+
 # Install corp-extractor library
-RUN pip install --no-cache-dir --no-deps corp-extractor==0.4.1
+RUN pip install --no-cache-dir --no-deps corp-extractor==0.5.0
 
 # Download models at build time for faster cold starts
 RUN python -c "from statement_extractor import StatementExtractor; \
