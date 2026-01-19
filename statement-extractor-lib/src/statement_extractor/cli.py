@@ -4,9 +4,11 @@ Command-line interface for statement extraction.
 Usage:
     corp-extractor "Your text here"
     corp-extractor -f input.txt
-    cat input.txt | corp-extractor -
+    corp-extractor pipeline "Your text here" --stages 1-5
+    corp-extractor plugins list
 """
 
+import json
 import logging
 import sys
 from typing import Optional
@@ -35,8 +37,10 @@ def _configure_logging(verbose: bool) -> None:
         "statement_extractor.predicate_comparer",
         "statement_extractor.canonicalization",
         "statement_extractor.gliner_extraction",
+        "statement_extractor.pipeline",
     ]:
         logging.getLogger(logger_name).setLevel(level)
+
 
 from . import __version__
 from .models import (
@@ -47,7 +51,8 @@ from .models import (
 )
 
 
-@click.command()
+@click.group(invoke_without_command=True)
+@click.pass_context
 @click.argument("text", required=False)
 @click.option("-f", "--file", "input_file", type=click.Path(exists=True), help="Read input from file")
 @click.option(
@@ -82,6 +87,7 @@ from .models import (
 @click.option("-q", "--quiet", is_flag=True, help="Suppress progress messages")
 @click.version_option(version=__version__)
 def main(
+    ctx,
     text: Optional[str],
     input_file: Optional[str],
     output: str,
@@ -118,11 +124,20 @@ def main(
         echo "Tim Cook is CEO of Apple." | corp-extractor - --verbose
 
     \b
+    Subcommands:
+        pipeline   Run the full 5-stage extraction pipeline
+        plugins    List or inspect available plugins
+
+    \b
     Output formats:
         table  Human-readable table (default)
         json   JSON with full metadata
         xml    Raw XML from model
     """
+    # If a subcommand is being invoked, skip the main logic
+    if ctx.invoked_subcommand is not None:
+        return
+
     # Configure logging based on verbose flag
     _configure_logging(verbose)
 
@@ -135,10 +150,9 @@ def main(
     # Get input text
     input_text = _get_input_text(text, input_file)
     if not input_text:
-        raise click.UsageError(
-            "No input provided. Use: statement-extractor \"text\", "
-            "statement-extractor -f file.txt, or pipe via stdin."
-        )
+        # Show help if no input
+        click.echo(ctx.get_help())
+        return
 
     if not quiet:
         click.echo(f"Processing {len(input_text)} characters...", err=True)
@@ -209,6 +223,329 @@ def main(
         logging.exception("Error extracting statements:")
         raise click.ClickException(f"Extraction failed: {e}")
 
+
+# =============================================================================
+# Pipeline command
+# =============================================================================
+
+@main.command("pipeline")
+@click.argument("text", required=False)
+@click.option("-f", "--file", "input_file", type=click.Path(exists=True), help="Read input from file")
+@click.option(
+    "--stages",
+    type=str,
+    default="1-5",
+    help="Stages to run (e.g., '1,2,3' or '1-3' or '1-5')"
+)
+@click.option(
+    "--skip-stages",
+    type=str,
+    default=None,
+    help="Stages to skip (e.g., '4,5')"
+)
+@click.option(
+    "--plugins",
+    "enabled_plugins",
+    type=str,
+    default=None,
+    help="Plugins to enable (comma-separated names)"
+)
+@click.option(
+    "--disable-plugins",
+    type=str,
+    default=None,
+    help="Plugins to disable (comma-separated names)"
+)
+@click.option(
+    "-o", "--output",
+    type=click.Choice(["table", "json", "yaml", "triples"], case_sensitive=False),
+    default="table",
+    help="Output format (default: table)"
+)
+@click.option("-v", "--verbose", is_flag=True, help="Show verbose output")
+@click.option("-q", "--quiet", is_flag=True, help="Suppress progress messages")
+def pipeline_cmd(
+    text: Optional[str],
+    input_file: Optional[str],
+    stages: str,
+    skip_stages: Optional[str],
+    enabled_plugins: Optional[str],
+    disable_plugins: Optional[str],
+    output: str,
+    verbose: bool,
+    quiet: bool,
+):
+    """
+    Run the full 5-stage extraction pipeline.
+
+    \b
+    Stages:
+        1. Splitting      - Text → Raw triples (T5-Gemma)
+        2. Extraction     - Raw triples → Typed statements (GLiNER2)
+        3. Qualification  - Add qualifiers and identifiers
+        4. Canonicalization - Resolve to canonical forms
+        5. Labeling       - Apply sentiment, relation type, confidence
+
+    \b
+    Examples:
+        corp-extractor pipeline "Apple CEO Tim Cook announced..."
+        corp-extractor pipeline -f article.txt --stages 1-3
+        corp-extractor pipeline "..." --plugins gleif,companies_house
+        corp-extractor pipeline "..." --disable-plugins sec_edgar
+    """
+    _configure_logging(verbose)
+
+    # Get input text
+    input_text = _get_input_text(text, input_file)
+    if not input_text:
+        raise click.UsageError("No input provided. Provide text argument or use -f file.txt")
+
+    if not quiet:
+        click.echo(f"Processing {len(input_text)} characters through pipeline...", err=True)
+
+    # Import pipeline components
+    from .pipeline import ExtractionPipeline, PipelineConfig
+
+    # Parse stages
+    enabled_stages = _parse_stages(stages)
+    if skip_stages:
+        skip_set = _parse_stages(skip_stages)
+        enabled_stages = enabled_stages - skip_set
+
+    if not quiet:
+        click.echo(f"Running stages: {sorted(enabled_stages)}", err=True)
+
+    # Parse plugin selection
+    enabled_plugin_set = None
+    if enabled_plugins:
+        enabled_plugin_set = {p.strip() for p in enabled_plugins.split(",") if p.strip()}
+
+    disabled_plugin_set = set()
+    if disable_plugins:
+        disabled_plugin_set = {p.strip() for p in disable_plugins.split(",") if p.strip()}
+
+    # Create config
+    config = PipelineConfig(
+        enabled_stages=enabled_stages,
+        enabled_plugins=enabled_plugin_set,
+        disabled_plugins=disabled_plugin_set,
+    )
+
+    # Run pipeline
+    try:
+        pipeline = ExtractionPipeline(config)
+        ctx = pipeline.process(input_text)
+
+        # Output results
+        if output == "json":
+            _print_pipeline_json(ctx)
+        elif output == "yaml":
+            _print_pipeline_yaml(ctx)
+        elif output == "triples":
+            _print_pipeline_triples(ctx)
+        else:
+            _print_pipeline_table(ctx, verbose)
+
+        # Report errors/warnings
+        if ctx.processing_errors and not quiet:
+            click.echo(f"\nErrors: {len(ctx.processing_errors)}", err=True)
+            for error in ctx.processing_errors:
+                click.echo(f"  - {error}", err=True)
+
+        if ctx.processing_warnings and verbose:
+            click.echo(f"\nWarnings: {len(ctx.processing_warnings)}", err=True)
+            for warning in ctx.processing_warnings:
+                click.echo(f"  - {warning}", err=True)
+
+    except Exception as e:
+        logging.exception("Pipeline error:")
+        raise click.ClickException(f"Pipeline failed: {e}")
+
+
+def _parse_stages(stages_str: str) -> set[int]:
+    """Parse stage string like '1,2,3' or '1-3' into a set of ints."""
+    result = set()
+    for part in stages_str.split(","):
+        part = part.strip()
+        if "-" in part:
+            start, end = part.split("-", 1)
+            for i in range(int(start), int(end) + 1):
+                result.add(i)
+        else:
+            result.add(int(part))
+    return result
+
+
+def _print_pipeline_json(ctx):
+    """Print pipeline results as JSON."""
+    output = {
+        "statement_count": len(ctx.labeled_statements),
+        "statements": [stmt.as_dict() for stmt in ctx.labeled_statements],
+        "timings": ctx.stage_timings,
+    }
+    click.echo(json.dumps(output, indent=2))
+
+
+def _print_pipeline_yaml(ctx):
+    """Print pipeline results as YAML."""
+    try:
+        import yaml
+        output = {
+            "statement_count": len(ctx.labeled_statements),
+            "statements": [stmt.as_dict() for stmt in ctx.labeled_statements],
+            "timings": ctx.stage_timings,
+        }
+        click.echo(yaml.dump(output, default_flow_style=False))
+    except ImportError:
+        click.echo("YAML output requires PyYAML: pip install pyyaml", err=True)
+        _print_pipeline_json(ctx)
+
+
+def _print_pipeline_triples(ctx):
+    """Print pipeline results as simple triples."""
+    for stmt in ctx.labeled_statements:
+        click.echo(f"{stmt.subject_fqn}\t{stmt.statement.predicate}\t{stmt.object_fqn}")
+
+
+def _print_pipeline_table(ctx, verbose: bool):
+    """Print pipeline results in table format."""
+    if not ctx.labeled_statements:
+        click.echo("No statements extracted.")
+        return
+
+    click.echo(f"\nExtracted {len(ctx.labeled_statements)} statement(s):\n")
+    click.echo("-" * 80)
+
+    for i, stmt in enumerate(ctx.labeled_statements, 1):
+        # Subject FQN
+        subj_fqn = stmt.subject_fqn
+        obj_fqn = stmt.object_fqn
+
+        click.echo(f"{i}. {subj_fqn}")
+        click.echo(f"   --[{stmt.statement.predicate}]-->")
+        click.echo(f"   {obj_fqn}")
+
+        if verbose:
+            # Show labels
+            for label in stmt.labels:
+                if isinstance(label.label_value, float):
+                    click.echo(f"   {label.label_type}: {label.label_value:.3f}")
+                else:
+                    click.echo(f"   {label.label_type}: {label.label_value}")
+
+            # Show source
+            if stmt.statement.source_text:
+                source = stmt.statement.source_text[:60] + "..." if len(stmt.statement.source_text) > 60 else stmt.statement.source_text
+                click.echo(f"   Source: \"{source}\"")
+
+        click.echo("-" * 80)
+
+    # Show timings in verbose mode
+    if verbose and ctx.stage_timings:
+        click.echo("\nStage timings:")
+        for stage, duration in ctx.stage_timings.items():
+            click.echo(f"  {stage}: {duration:.3f}s")
+
+
+# =============================================================================
+# Plugins command
+# =============================================================================
+
+@main.command("plugins")
+@click.argument("action", type=click.Choice(["list", "info"]))
+@click.argument("plugin_name", required=False)
+@click.option("--stage", type=int, help="Filter by stage number (1-5)")
+def plugins_cmd(action: str, plugin_name: Optional[str], stage: Optional[int]):
+    """
+    List or inspect available plugins.
+
+    \b
+    Actions:
+        list   List all available plugins
+        info   Show details about a specific plugin
+
+    \b
+    Examples:
+        corp-extractor plugins list
+        corp-extractor plugins list --stage 3
+        corp-extractor plugins info gleif_qualifier
+    """
+    # Import and load plugins
+    _load_all_plugins()
+
+    from .pipeline.registry import PluginRegistry
+
+    if action == "list":
+        plugins = PluginRegistry.list_plugins(stage=stage)
+        if not plugins:
+            click.echo("No plugins registered.")
+            return
+
+        # Group by stage
+        by_stage: dict[int, list] = {}
+        for plugin in plugins:
+            stage_num = plugin["stage"]
+            if stage_num not in by_stage:
+                by_stage[stage_num] = []
+            by_stage[stage_num].append(plugin)
+
+        for stage_num in sorted(by_stage.keys()):
+            stage_plugins = by_stage[stage_num]
+            stage_name = stage_plugins[0]["stage_name"]
+            click.echo(f"\nStage {stage_num}: {stage_name.title()}")
+            click.echo("-" * 40)
+
+            for p in stage_plugins:
+                entity_types = p.get("entity_types", [])
+                types_str = f" ({', '.join(entity_types)})" if entity_types else ""
+                click.echo(f"  {p['name']}{types_str}  [priority: {p['priority']}]")
+
+    elif action == "info":
+        if not plugin_name:
+            raise click.UsageError("Plugin name required for 'info' action")
+
+        plugin = PluginRegistry.get_plugin(plugin_name)
+        if not plugin:
+            raise click.ClickException(f"Plugin not found: {plugin_name}")
+
+        click.echo(f"\nPlugin: {plugin.name}")
+        click.echo(f"Priority: {plugin.priority}")
+        click.echo(f"Capabilities: {plugin.capabilities.name if plugin.capabilities else 'NONE'}")
+
+        if plugin.description:
+            click.echo(f"Description: {plugin.description}")
+
+        if hasattr(plugin, "supported_entity_types"):
+            types = [t.value for t in plugin.supported_entity_types]
+            click.echo(f"Entity types: {', '.join(types)}")
+
+        if hasattr(plugin, "label_type"):
+            click.echo(f"Label type: {plugin.label_type}")
+
+        if hasattr(plugin, "supported_identifier_types"):
+            ids = plugin.supported_identifier_types
+            if ids:
+                click.echo(f"Supported identifiers: {', '.join(ids)}")
+
+        if hasattr(plugin, "provided_identifier_types"):
+            ids = plugin.provided_identifier_types
+            if ids:
+                click.echo(f"Provided identifiers: {', '.join(ids)}")
+
+
+def _load_all_plugins():
+    """Load all plugins by importing their modules."""
+    # Import all plugin modules to trigger registration
+    try:
+        from .plugins import splitters, extractors, qualifiers, canonicalizers, labelers
+        # The @PluginRegistry decorators will register plugins on import
+    except ImportError as e:
+        logging.debug(f"Some plugins failed to load: {e}")
+
+
+# =============================================================================
+# Helper functions
+# =============================================================================
 
 def _get_input_text(text: Optional[str], input_file: Optional[str]) -> Optional[str]:
     """Get input text from argument, file, or stdin."""
