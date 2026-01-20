@@ -201,33 +201,23 @@ class DocumentPipeline:
 
         all_triples = []
 
-        # Use batch processing if available
-        if PluginCapability.BATCH_PROCESSING in splitter.capabilities:
-            logger.info(f"Using batch splitting with {splitter.name}")
-            batch_results = splitter.split_batch(chunk_texts, dummy_ctx)
+        # Require batch processing capability
+        if PluginCapability.BATCH_PROCESSING not in splitter.capabilities:
+            raise RuntimeError(
+                f"Splitter plugin '{splitter.name}' does not support batch processing. "
+                "Document pipeline requires BATCH_PROCESSING capability for efficient GPU utilization."
+            )
 
-            # Annotate triples with document/chunk info
-            for chunk, triples in zip(ctx.chunks, batch_results):
-                for triple in triples:
-                    triple.document_id = ctx.document.document_id
-                    triple.chunk_index = chunk.chunk_index
-                    triple.page_number = chunk.primary_page
-                    all_triples.append(triple)
-        else:
-            # Fall back to sequential processing
-            logger.info(f"Using sequential splitting with {splitter.name}")
-            for chunk in ctx.chunks:
-                chunk_ctx = PipelineContext(
-                    source_text=chunk.text,
-                    source_metadata=self.config.pipeline_config.model_dump() if self.config.pipeline_config else {},
-                )
-                triples = splitter.split(chunk.text, chunk_ctx)
+        logger.info(f"Using batch splitting with {splitter.name}")
+        batch_results = splitter.split_batch(chunk_texts, dummy_ctx)
 
-                for triple in triples:
-                    triple.document_id = ctx.document.document_id
-                    triple.chunk_index = chunk.chunk_index
-                    triple.page_number = chunk.primary_page
-                    all_triples.append(triple)
+        # Annotate triples with document/chunk info
+        for chunk, triples in zip(ctx.chunks, batch_results):
+            for triple in triples:
+                triple.document_id = ctx.document.document_id
+                triple.chunk_index = chunk.chunk_index
+                triple.page_number = chunk.primary_page
+                all_triples.append(triple)
 
         ctx.raw_triples = all_triples
         ctx.pre_dedup_count = len(all_triples)

@@ -104,8 +104,8 @@ def extract_text_from_html(html: str) -> tuple[str, Optional[str]]:
     if not content:
         content = soup.body or soup
 
-    # Extract text with paragraph preservation
-    text = _extract_text_with_structure(content)
+    # Extract text using BeautifulSoup's get_text with newline separator
+    text = content.get_text(separator="\n", strip=True)
 
     # Clean up whitespace
     text = _clean_whitespace(text)
@@ -113,42 +113,6 @@ def extract_text_from_html(html: str) -> tuple[str, Optional[str]]:
     logger.debug(f"Extracted {len(text)} chars from HTML (title: {title})")
 
     return text, title
-
-
-def _extract_text_with_structure(element) -> str:
-    """
-    Extract text while preserving paragraph structure.
-
-    Args:
-        element: BeautifulSoup element
-
-    Returns:
-        Extracted text with paragraph breaks
-    """
-    parts = []
-
-    # Block-level elements that should create paragraph breaks
-    block_elements = {
-        "p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
-        "li", "tr", "br", "section", "article", "blockquote",
-    }
-
-    for child in element.descendants:
-        if hasattr(child, "name"):
-            # It's a tag
-            if child.name in block_elements:
-                # Add newline before block elements
-                if parts and parts[-1] != "\n":
-                    parts.append("\n")
-            elif child.name == "br":
-                parts.append("\n")
-        elif hasattr(child, "string") and child.string:
-            # It's a text node
-            text = child.string.strip()
-            if text:
-                parts.append(text + " ")
-
-    return "".join(parts)
 
 
 def _clean_whitespace(text: str) -> str:

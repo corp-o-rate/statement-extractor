@@ -423,48 +423,32 @@ class ExtractionPipeline:
                 continue
 
             try:
-                # Use batch processing if available
-                if PluginCapability.BATCH_PROCESSING in classifier.capabilities:
-                    logger.debug(f"Using batch classification for {classifier.name} ({len(batch_items)} items)")
-                    batch_results = classifier.classify_batch(batch_items, ctx)
+                # Require batch processing capability
+                if PluginCapability.BATCH_PROCESSING not in classifier.capabilities:
+                    raise RuntimeError(
+                        f"Taxonomy classifier '{classifier.name}' does not support batch processing. "
+                        "Pipeline requires BATCH_PROCESSING capability for efficient GPU utilization."
+                    )
 
-                    # Apply results to each labeled statement
-                    for labeled_stmt, results in zip(ctx.labeled_statements, batch_results):
-                        if results:
-                            stmt = labeled_stmt.statement
-                            key = (stmt.source_text, classifier.taxonomy_name)
-                            if key not in ctx.taxonomy_results:
-                                ctx.taxonomy_results[key] = []
-                            ctx.taxonomy_results[key].extend(results)
-                            total_results += len(results)
-                            labeled_stmt.taxonomy_results.extend(results)
+                logger.debug(f"Using batch classification for {classifier.name} ({len(batch_items)} items)")
+                batch_results = classifier.classify_batch(batch_items, ctx)
 
-                            for result in results:
-                                logger.debug(
-                                    f"Taxonomy {classifier.name}: {result.full_label} "
-                                    f"(confidence={result.confidence:.2f})"
-                                )
-                else:
-                    # Fall back to sequential processing
-                    for labeled_stmt in ctx.labeled_statements:
+                # Apply results to each labeled statement
+                for labeled_stmt, results in zip(ctx.labeled_statements, batch_results):
+                    if results:
                         stmt = labeled_stmt.statement
-                        subj_canonical = labeled_stmt.subject_canonical
-                        obj_canonical = labeled_stmt.object_canonical
+                        key = (stmt.source_text, classifier.taxonomy_name)
+                        if key not in ctx.taxonomy_results:
+                            ctx.taxonomy_results[key] = []
+                        ctx.taxonomy_results[key].extend(results)
+                        total_results += len(results)
+                        labeled_stmt.taxonomy_results.extend(results)
 
-                        results = classifier.classify(stmt, subj_canonical, obj_canonical, ctx)
-                        if results:
-                            key = (stmt.source_text, classifier.taxonomy_name)
-                            if key not in ctx.taxonomy_results:
-                                ctx.taxonomy_results[key] = []
-                            ctx.taxonomy_results[key].extend(results)
-                            total_results += len(results)
-                            labeled_stmt.taxonomy_results.extend(results)
-
-                            for result in results:
-                                logger.debug(
-                                    f"Taxonomy {classifier.name}: {result.full_label} "
-                                    f"(confidence={result.confidence:.2f})"
-                                )
+                        for result in results:
+                            logger.debug(
+                                f"Taxonomy {classifier.name}: {result.full_label} "
+                                f"(confidence={result.confidence:.2f})"
+                            )
 
             except Exception as e:
                 logger.error(f"Taxonomy classifier {classifier.name} failed: {e}")

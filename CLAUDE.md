@@ -119,10 +119,12 @@ The library provides a 6-stage extraction pipeline:
 **Built-in plugins:**
 - **Splitters**: `t5_gemma_splitter`
 - **Extractors**: `gliner2_extractor`
-- **Qualifiers**: `person_qualifier`, `gleif_qualifier`, `companies_house_qualifier`, `sec_edgar_qualifier`
+- **Qualifiers**: `person_qualifier`, `embedding_company_qualifier` (replaces deprecated API-based qualifiers)
 - **Canonicalizers**: `organization_canonicalizer`, `person_canonicalizer`
 - **Labelers**: `sentiment_labeler`
-- **Taxonomy**: `mnli_taxonomy_classifier`, `embedding_taxonomy_classifier`
+- **Taxonomy**: `embedding_taxonomy_classifier` (default), `mnli_taxonomy_classifier`
+- **PDF**: `pypdf_loader` - PDF parsing with PyMuPDF
+- **Scrapers**: `http_scraper` - URL/web page scraping
 
 ### GLiNER2 Integration (v0.4.0)
 The library uses GLiNER2 for:
@@ -171,4 +173,15 @@ corp-extractor split "text"              # Simple extraction
 corp-extractor pipeline "text"           # Full pipeline
 corp-extractor pipeline "text" --stages 1-3
 corp-extractor plugins list              # List plugins
+
+# Document processing (v0.7.0)
+corp-extractor document process article.txt
+corp-extractor document process https://example.com/article
+corp-extractor document process report.pdf --use-ocr
+
+# Company database
+corp-extractor db import-sec --download  # Bulk SEC data (~100K+ filers)
+corp-extractor db upload                 # Upload with lite/compressed variants
+corp-extractor db download               # Download lite version (default)
+corp-extractor db download --full        # Download full version
 ```

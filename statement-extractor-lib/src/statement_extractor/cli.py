@@ -1263,7 +1263,7 @@ def document_cmd():
 
 
 @document_cmd.command("process")
-@click.argument("input_path", type=click.Path(exists=True))
+@click.argument("input_source")  # Can be file path or URL
 @click.option("--title", type=str, help="Document title (for citations)")
 @click.option("--author", "authors", type=str, multiple=True, help="Document author(s)")
 @click.option("--year", type=int, help="Publication year")
@@ -1271,6 +1271,7 @@ def document_cmd():
 @click.option("--overlap", type=int, default=100, help="Token overlap between chunks (default: 100)")
 @click.option("--no-summary", is_flag=True, help="Skip document summarization")
 @click.option("--no-dedup", is_flag=True, help="Skip deduplication across chunks")
+@click.option("--use-ocr", is_flag=True, help="Force OCR for PDF parsing")
 @click.option(
     "--stages",
     type=str,
@@ -1286,7 +1287,7 @@ def document_cmd():
 @click.option("-v", "--verbose", is_flag=True, help="Show verbose output")
 @click.option("-q", "--quiet", is_flag=True, help="Suppress progress messages")
 def document_process(
-    input_path: str,
+    input_source: str,
     title: Optional[str],
     authors: tuple[str, ...],
     year: Optional[int],
@@ -1294,35 +1295,27 @@ def document_process(
     overlap: int,
     no_summary: bool,
     no_dedup: bool,
+    use_ocr: bool,
     stages: str,
     output: str,
     verbose: bool,
     quiet: bool,
 ):
     """
-    Process a document through the extraction pipeline with chunking.
+    Process a document or URL through the extraction pipeline with chunking.
 
-    Supports text files. PDFs are read as plain text (page structure
-    is inferred from form feeds or explicit markers).
+    Supports text files, URLs (web pages and PDFs).
 
     \b
     Examples:
         corp-extractor document process article.txt
         corp-extractor document process report.txt --title "Annual Report" --year 2024
+        corp-extractor document process https://example.com/article
+        corp-extractor document process https://example.com/report.pdf --use-ocr
         corp-extractor document process doc.txt --no-summary --stages 1-3
         corp-extractor document process doc.txt -o json
     """
     _configure_logging(verbose)
-
-    # Read input file
-    with open(input_path, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    if not text.strip():
-        raise click.ClickException("Input file is empty")
-
-    if not quiet:
-        click.echo(f"Processing document: {input_path} ({len(text)} chars)", err=True)
 
     # Import document pipeline
     from .document import DocumentPipeline, DocumentPipelineConfig, Document
@@ -1351,21 +1344,56 @@ def document_process(
         pipeline_config=pipeline_config,
     )
 
-    # Create document with metadata
-    from pathlib import Path
-    doc_title = title or Path(input_path).stem
-    document = Document.from_text(
-        text=text,
-        title=doc_title,
-        source_type="text",
-        authors=list(authors),
-        year=year,
-    )
+    # Create pipeline
+    pipeline = DocumentPipeline(doc_config)
+
+    # Detect if input is a URL
+    is_url = input_source.startswith(("http://", "https://"))
 
     # Process
     try:
-        pipeline = DocumentPipeline(doc_config)
-        ctx = pipeline.process(document)
+        if is_url:
+            # Process URL
+            from .document import URLLoaderConfig
+
+            if not quiet:
+                click.echo(f"Fetching URL: {input_source}", err=True)
+
+            loader_config = URLLoaderConfig(use_ocr=use_ocr)
+            ctx = pipeline.process_url_sync(input_source, loader_config)
+
+            if not quiet:
+                click.echo(f"Processed: {ctx.document.metadata.title or 'Untitled'}", err=True)
+
+        else:
+            # Process file
+            from pathlib import Path
+            import os
+
+            if not os.path.exists(input_source):
+                raise click.ClickException(f"File not found: {input_source}")
+
+            # Read input file
+            with open(input_source, "r", encoding="utf-8") as f:
+                text = f.read()
+
+            if not text.strip():
+                raise click.ClickException("Input file is empty")
+
+            if not quiet:
+                click.echo(f"Processing document: {input_source} ({len(text)} chars)", err=True)
+
+            # Create document with metadata
+            doc_title = title or Path(input_source).stem
+            document = Document.from_text(
+                text=text,
+                title=doc_title,
+                source_type="text",
+                authors=list(authors),
+                year=year,
+            )
+
+            ctx = pipeline.process(document)
 
         # Output results
         if output == "json":

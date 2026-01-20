@@ -233,9 +233,11 @@ class TestPipelineConfig:
 
         config = PipelineConfig.default()
 
-        assert config.enabled_stages == {1, 2, 3, 4, 5}
+        # 6-stage pipeline with taxonomy classification
+        assert config.enabled_stages == {1, 2, 3, 4, 5, 6}
         assert config.enabled_plugins is None
-        assert len(config.disabled_plugins) == 0
+        # MNLI classifier disabled by default (use embedding_taxonomy_classifier instead)
+        assert "mnli_taxonomy_classifier" in config.disabled_plugins
 
     def test_minimal_config(self):
         """Test minimal configuration."""

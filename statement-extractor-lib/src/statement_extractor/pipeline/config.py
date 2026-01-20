@@ -74,13 +74,6 @@ class PipelineConfig(BaseModel):
         description="Maximum number of statements to process (None = unlimited)"
     )
 
-    # Batch processing options
-    batch_size: int = Field(
-        default=8,
-        ge=1,
-        description="Batch size for processing multiple items through GPU models"
-    )
-
     def is_stage_enabled(self, stage: int) -> bool:
         """Check if a stage is enabled."""
         return stage in self.enabled_stages

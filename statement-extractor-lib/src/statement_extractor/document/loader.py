@@ -201,13 +201,17 @@ class URLLoader:
         logger.info(f"Extracted {len(parse_result.pages)} pages from PDF")
 
         # Create Document from pages
-        return Document.from_pages(
-            pages=parse_result.pages,
-            url=result.final_url,
-            title=parse_result.metadata.get("title"),
-            source_type="pdf",
-            authors=[parse_result.metadata.get("author")] if parse_result.metadata.get("author") else None,
-        )
+        kwargs = {
+            "pages": parse_result.pages,
+            "title": parse_result.metadata.get("title"),
+            "source_type": "pdf",
+            "url": result.final_url,
+        }
+        author = parse_result.metadata.get("author")
+        if author:
+            kwargs["authors"] = [author]
+
+        return Document.from_pages(**kwargs)
 
     def _process_html(self, result: ScraperResult) -> Document:
         """
@@ -241,14 +245,17 @@ class URLLoader:
 
         logger.info(f"Extracted {len(text)} chars from HTML (title: {title})")
 
-        # Create Document
-        return Document.from_text(
-            text=text,
-            url=result.final_url,
-            title=title,
-            source_type="webpage",
-            authors=[author] if author else None,
-        )
+        # Create Document using from_pages since from_text forces source_type="text"
+        kwargs = {
+            "pages": [text],
+            "title": title,
+            "source_type": "webpage",
+            "url": result.final_url,
+        }
+        if author:
+            kwargs["authors"] = [author]
+
+        return Document.from_pages(**kwargs)
 
 
 async def load_url(
