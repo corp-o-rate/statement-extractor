@@ -1,17 +1,20 @@
 """
 SECEdgarQualifierPlugin - Qualifies US ORG entities with SEC data.
 
+DEPRECATED: Use EmbeddingCompanyQualifier instead, which uses a local
+embedding database with pre-loaded SEC Edgar data for faster, offline matching.
+
 Uses the SEC EDGAR API to:
 - Look up CIK (Central Index Key) by company name
 - Retrieve ticker symbol, exchange, filing history
 """
 
 import logging
+import warnings
 from typing import Optional
 
 from ..base import BaseQualifierPlugin, PluginCapability
 from ...pipeline.context import PipelineContext
-from ...pipeline.registry import PluginRegistry
 from ...models import ExtractedEntity, EntityQualifiers, EntityType
 
 logger = logging.getLogger(__name__)
@@ -21,11 +24,12 @@ SEC_COMPANY_SEARCH = "https://efts.sec.gov/LATEST/search-index"
 SEC_COMPANY_TICKERS = "https://www.sec.gov/files/company_tickers.json"
 
 
-@PluginRegistry.qualifier
+# DEPRECATED: Not auto-registered. Use EmbeddingCompanyQualifier instead.
 class SECEdgarQualifierPlugin(BaseQualifierPlugin):
     """
-    Qualifier plugin for US ORG entities using SEC EDGAR.
+    DEPRECATED: Use EmbeddingCompanyQualifier instead.
 
+    Qualifier plugin for US ORG entities using SEC EDGAR.
     Provides CIK and ticker symbol for publicly traded US companies.
     """
 
@@ -37,10 +41,17 @@ class SECEdgarQualifierPlugin(BaseQualifierPlugin):
         """
         Initialize the SEC EDGAR qualifier.
 
+        DEPRECATED: Use EmbeddingCompanyQualifier instead.
+
         Args:
             timeout: API request timeout in seconds
             cache_results: Whether to cache API results
         """
+        warnings.warn(
+            "SECEdgarQualifierPlugin is deprecated. Use EmbeddingCompanyQualifier instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._timeout = timeout
         self._cache_results = cache_results
         self._cache: dict[str, Optional[dict]] = {}

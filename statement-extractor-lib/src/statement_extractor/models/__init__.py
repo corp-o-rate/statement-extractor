@@ -47,6 +47,13 @@ from .statement import RawTriple, PipelineStatement
 from .qualifiers import EntityQualifiers, QualifiedEntity
 from .canonical import CanonicalMatch, CanonicalEntity
 from .labels import StatementLabel, LabeledStatement, TaxonomyResult
+from .document import (
+    Document,
+    DocumentMetadata,
+    DocumentPage,
+    TextChunk,
+    ChunkingConfig,
+)
 
 __all__ = [
     # Re-exported from original models.py (backward compatibility)
@@ -71,4 +78,10 @@ __all__ = [
     "StatementLabel",
     "LabeledStatement",
     "TaxonomyResult",
+    # Document models
+    "Document",
+    "DocumentMetadata",
+    "DocumentPage",
+    "TextChunk",
+    "ChunkingConfig",
 ]

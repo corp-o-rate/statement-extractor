@@ -180,6 +180,16 @@ class GLiNER2Extractor(BaseExtractorPlugin):
     def description(self) -> str:
         return "GLiNER2 model for entity and relation extraction"
 
+    @property
+    def model_vram_gb(self) -> float:
+        """GLiNER2 model weights ~0.8GB."""
+        return 0.8
+
+    @property
+    def per_item_vram_gb(self) -> float:
+        """Each triple during batch processing ~0.1GB."""
+        return 0.1
+
     def _get_model(self):
         """Lazy-load the GLiNER2 model."""
         if self._model is None:

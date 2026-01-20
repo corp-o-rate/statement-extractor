@@ -17,6 +17,8 @@ if TYPE_CHECKING:
         BaseCanonicalizerPlugin,
         BaseLabelerPlugin,
         BaseTaxonomyPlugin,
+        BaseScraperPlugin,
+        BasePDFParserPlugin,
     )
     from ..models import EntityType
 
@@ -41,6 +43,10 @@ class PluginRegistry:
     _labelers: list["BaseLabelerPlugin"] = []
     _taxonomy_classifiers: list["BaseTaxonomyPlugin"] = []
 
+    # Content acquisition plugins
+    _scrapers: list["BaseScraperPlugin"] = []
+    _pdf_parsers: list["BasePDFParserPlugin"] = []
+
     # Index by entity type for quick lookup
     _qualifiers_by_type: dict["EntityType", list["BaseQualifierPlugin"]] = {}
     _canonicalizers_by_type: dict["EntityType", list["BaseCanonicalizerPlugin"]] = {}
@@ -57,6 +63,8 @@ class PluginRegistry:
         cls._canonicalizers = []
         cls._labelers = []
         cls._taxonomy_classifiers = []
+        cls._scrapers = []
+        cls._pdf_parsers = []
         cls._qualifiers_by_type = {}
         cls._canonicalizers_by_type = {}
         cls._all_plugins = {}
@@ -135,6 +143,22 @@ class PluginRegistry:
         cls._all_plugins[plugin.name] = plugin
         logger.debug(f"Registered taxonomy: {plugin.name} (priority={plugin.priority})")
 
+    @classmethod
+    def register_scraper(cls, plugin: "BaseScraperPlugin") -> None:
+        """Register a scraper plugin."""
+        cls._scrapers.append(plugin)
+        cls._scrapers.sort(key=lambda p: p.priority)
+        cls._all_plugins[plugin.name] = plugin
+        logger.debug(f"Registered scraper: {plugin.name} (priority={plugin.priority})")
+
+    @classmethod
+    def register_pdf_parser(cls, plugin: "BasePDFParserPlugin") -> None:
+        """Register a PDF parser plugin."""
+        cls._pdf_parsers.append(plugin)
+        cls._pdf_parsers.sort(key=lambda p: p.priority)
+        cls._all_plugins[plugin.name] = plugin
+        logger.debug(f"Registered PDF parser: {plugin.name} (priority={plugin.priority})")
+
     # =========================================================================
     # Decorator registration
     # =========================================================================
@@ -173,6 +197,18 @@ class PluginRegistry:
     def taxonomy(cls, plugin_class: Type[T]) -> Type[T]:
         """Decorator to register a taxonomy classifier plugin class."""
         cls.register_taxonomy(plugin_class())
+        return plugin_class
+
+    @classmethod
+    def scraper(cls, plugin_class: Type[T]) -> Type[T]:
+        """Decorator to register a scraper plugin class."""
+        cls.register_scraper(plugin_class())
+        return plugin_class
+
+    @classmethod
+    def pdf_parser(cls, plugin_class: Type[T]) -> Type[T]:
+        """Decorator to register a PDF parser plugin class."""
+        cls.register_pdf_parser(plugin_class())
         return plugin_class
 
     # =========================================================================
@@ -218,6 +254,16 @@ class PluginRegistry:
     def get_taxonomy_classifiers(cls) -> list["BaseTaxonomyPlugin"]:
         """Get all registered taxonomy classifier plugins (sorted by priority)."""
         return cls._taxonomy_classifiers.copy()
+
+    @classmethod
+    def get_scrapers(cls) -> list["BaseScraperPlugin"]:
+        """Get all registered scraper plugins (sorted by priority)."""
+        return cls._scrapers.copy()
+
+    @classmethod
+    def get_pdf_parsers(cls) -> list["BasePDFParserPlugin"]:
+        """Get all registered PDF parser plugins (sorted by priority)."""
+        return cls._pdf_parsers.copy()
 
     @classmethod
     def get_plugin(cls, name: str) -> "BasePlugin | None":
@@ -270,6 +316,9 @@ class PluginRegistry:
             (4, "canonicalization", cls._canonicalizers),
             (5, "labeling", cls._labelers),
             (6, "taxonomy", cls._taxonomy_classifiers),
+            # Content acquisition plugins (stage 0)
+            (0, "scraper", cls._scrapers),
+            (-1, "pdf_parser", cls._pdf_parsers),
         ]
 
         for stage_num, stage_name, plugins in plugins_by_stage:

@@ -1,6 +1,9 @@
 """
 CompaniesHouseQualifierPlugin - Qualifies UK ORG entities.
 
+DEPRECATED: Use EmbeddingCompanyQualifier instead, which uses a local
+embedding database with pre-loaded Companies House data for faster, offline matching.
+
 Uses the UK Companies House API to:
 - Look up company number by name
 - Retrieve company details, jurisdiction, officers
@@ -8,11 +11,11 @@ Uses the UK Companies House API to:
 
 import logging
 import os
+import warnings
 from typing import Optional
 
 from ..base import BaseQualifierPlugin, PluginCapability
 from ...pipeline.context import PipelineContext
-from ...pipeline.registry import PluginRegistry
 from ...models import ExtractedEntity, EntityQualifiers, EntityType
 
 logger = logging.getLogger(__name__)
@@ -21,11 +24,12 @@ logger = logging.getLogger(__name__)
 CH_API_BASE = "https://api.company-information.service.gov.uk"
 
 
-@PluginRegistry.qualifier
+# DEPRECATED: Not auto-registered. Use EmbeddingCompanyQualifier instead.
 class CompaniesHouseQualifierPlugin(BaseQualifierPlugin):
     """
-    Qualifier plugin for UK ORG entities using Companies House API.
+    DEPRECATED: Use EmbeddingCompanyQualifier instead.
 
+    Qualifier plugin for UK ORG entities using Companies House API.
     Requires COMPANIES_HOUSE_API_KEY environment variable.
     """
 
@@ -38,11 +42,18 @@ class CompaniesHouseQualifierPlugin(BaseQualifierPlugin):
         """
         Initialize the Companies House qualifier.
 
+        DEPRECATED: Use EmbeddingCompanyQualifier instead.
+
         Args:
             api_key: Companies House API key (or use COMPANIES_HOUSE_API_KEY env var)
             timeout: API request timeout in seconds
             cache_results: Whether to cache API results
         """
+        warnings.warn(
+            "CompaniesHouseQualifierPlugin is deprecated. Use EmbeddingCompanyQualifier instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._api_key = api_key or os.environ.get("COMPANIES_HOUSE_API_KEY")
         self._timeout = timeout
         self._cache_results = cache_results

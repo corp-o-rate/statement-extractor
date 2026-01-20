@@ -29,6 +29,19 @@ class RawTriple(BaseModel):
         le=1.0,
         description="Extraction confidence from the splitter"
     )
+    # Document tracking fields
+    document_id: Optional[str] = Field(
+        None,
+        description="ID of the source document (for document pipeline)"
+    )
+    page_number: Optional[int] = Field(
+        None,
+        description="Page number where this triple was extracted (1-indexed)"
+    )
+    chunk_index: Optional[int] = Field(
+        None,
+        description="Index of the chunk this triple was extracted from (0-indexed)"
+    )
 
     def __str__(self) -> str:
         return f"{self.subject_text} --[{self.predicate_text}]--> {self.object_text}"
@@ -62,6 +75,19 @@ class PipelineStatement(BaseModel):
     extraction_method: Optional[str] = Field(
         None,
         description="Method used to extract this statement (e.g., 'hybrid', 'gliner', 'model')"
+    )
+    # Document tracking fields
+    document_id: Optional[str] = Field(
+        None,
+        description="ID of the source document (for document pipeline)"
+    )
+    page_number: Optional[int] = Field(
+        None,
+        description="Page number where this statement was extracted (1-indexed)"
+    )
+    chunk_index: Optional[int] = Field(
+        None,
+        description="Index of the chunk this statement was extracted from (0-indexed)"
     )
 
     def __str__(self) -> str:

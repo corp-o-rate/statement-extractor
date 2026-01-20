@@ -8,11 +8,17 @@ Defines the abstract interfaces for each pipeline stage:
 - BaseCanonicalizerPlugin: Stage 4 - QualifiedEntity → CanonicalMatch
 - BaseLabelerPlugin: Stage 5 - Statement → StatementLabel
 - BaseTaxonomyPlugin: Stage 6 - Statement → TaxonomyResult
+
+Content acquisition plugins (for URL processing):
+- BaseScraperPlugin: Fetch content from URLs
+- BasePDFParserPlugin: Extract text from PDFs
 """
 
 from abc import ABC, abstractmethod
-from enum import Flag, auto
-from typing import TYPE_CHECKING
+from enum import Enum, Flag, auto
+from typing import TYPE_CHECKING, Any, Optional
+
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from ..pipeline.context import PipelineContext
@@ -38,6 +44,56 @@ class PluginCapability(Flag):
     EXTERNAL_API = auto()       # Uses external API (may have rate limits)
     LLM_REQUIRED = auto()       # Requires an LLM model
     CACHING = auto()            # Supports result caching
+
+
+def get_available_vram_gb() -> float:
+    """
+    Get available GPU VRAM in GB.
+
+    Returns 0.0 if no GPU is available or VRAM cannot be determined.
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = torch.cuda.current_device()
+            total = torch.cuda.get_device_properties(device).total_memory
+            allocated = torch.cuda.memory_allocated(device)
+            available = (total - allocated) / (1024 ** 3)  # Convert to GB
+            return available
+        elif torch.backends.mps.is_available():
+            # MPS doesn't expose VRAM info; estimate based on typical Apple Silicon
+            # Return a conservative estimate
+            return 8.0
+    except ImportError:
+        pass
+    return 0.0
+
+
+def calculate_batch_size(
+    per_item_vram_gb: float,
+    overhead_gb: float = 2.0,
+    min_batch: int = 1,
+    max_batch: int = 32,
+) -> int:
+    """
+    Calculate optimal batch size based on available VRAM.
+
+    Args:
+        per_item_vram_gb: VRAM required per item in GB
+        overhead_gb: Reserved VRAM for model weights and system overhead
+        min_batch: Minimum batch size
+        max_batch: Maximum batch size cap
+
+    Returns:
+        Optimal batch size for the current GPU
+    """
+    available = get_available_vram_gb()
+    if available <= 0 or per_item_vram_gb <= 0:
+        return min_batch
+
+    usable = max(0, available - overhead_gb)
+    batch_size = int(usable / per_item_vram_gb)
+    return max(min_batch, min(batch_size, max_batch))
 
 
 class BasePlugin(ABC):
@@ -74,6 +130,50 @@ class BasePlugin(ABC):
         """Human-readable description of this plugin."""
         return ""
 
+    @property
+    def model_vram_gb(self) -> float:
+        """
+        Estimated VRAM required for model weights in GB.
+
+        Override this if the plugin loads a GPU model. This is used to
+        reserve memory overhead when calculating batch sizes.
+
+        Default is 0.0 (no GPU model).
+        """
+        return 0.0
+
+    @property
+    def per_item_vram_gb(self) -> float:
+        """
+        Estimated VRAM required per item during batch processing in GB.
+
+        Override this for plugins with BATCH_PROCESSING capability.
+        Used to calculate optimal batch size: batch = (available - overhead) / per_item
+
+        Default is 0.1 GB (100MB) as a conservative estimate.
+        """
+        return 0.1
+
+    def get_optimal_batch_size(self, max_batch: int = 32) -> int:
+        """
+        Calculate optimal batch size based on available VRAM and plugin requirements.
+
+        Args:
+            max_batch: Maximum batch size cap
+
+        Returns:
+            Optimal batch size for current GPU state
+        """
+        if not (PluginCapability.BATCH_PROCESSING in self.capabilities):
+            return 1
+
+        return calculate_batch_size(
+            per_item_vram_gb=self.per_item_vram_gb,
+            overhead_gb=self.model_vram_gb + 1.0,  # Add 1GB system overhead
+            min_batch=1,
+            max_batch=max_batch,
+        )
+
 
 class BaseSplitterPlugin(BasePlugin):
     """
@@ -100,6 +200,27 @@ class BaseSplitterPlugin(BasePlugin):
             List of RawTriple objects
         """
         ...
+
+    def split_batch(
+        self,
+        texts: list[str],
+        context: "PipelineContext",
+    ) -> list[list["RawTriple"]]:
+        """
+        Split multiple texts into atomic triples in a single batch.
+
+        Default implementation calls split() for each text sequentially.
+        Plugins with BATCH_PROCESSING capability should override this
+        for efficient GPU batching using get_optimal_batch_size().
+
+        Args:
+            texts: List of input texts to split
+            context: Pipeline context for accessing metadata and config
+
+        Returns:
+            List of RawTriple lists, one per input text
+        """
+        return [self.split(text, context) for text in texts]
 
 
 class BaseExtractorPlugin(BasePlugin):
@@ -444,3 +565,193 @@ class BaseTaxonomyPlugin(BasePlugin):
             List of TaxonomyResult objects (empty if none above threshold)
         """
         ...
+
+    def classify_batch(
+        self,
+        items: list[tuple["PipelineStatement", "CanonicalEntity", "CanonicalEntity"]],
+        context: "PipelineContext",
+    ) -> list[list["TaxonomyResult"]]:
+        """
+        Classify multiple statements against the taxonomy in a single batch.
+
+        Default implementation calls classify() for each statement sequentially.
+        Plugins with BATCH_PROCESSING capability should override this
+        for efficient GPU batching using get_optimal_batch_size().
+
+        Args:
+            items: List of (statement, subject_canonical, object_canonical) tuples
+            context: Pipeline context
+
+        Returns:
+            List of TaxonomyResult lists, one per input statement
+        """
+        return [
+            self.classify(stmt, subj, obj, context)
+            for stmt, subj, obj in items
+        ]
+
+
+# =============================================================================
+# Content Acquisition Plugins (for URL processing)
+# =============================================================================
+
+
+class ContentType(str, Enum):
+    """Content type detected from URL or HTTP response."""
+    HTML = "html"
+    PDF = "pdf"
+    BINARY = "binary"
+    UNKNOWN = "unknown"
+
+
+class ScraperResult(BaseModel):
+    """Result from a scraper plugin."""
+    url: str = Field(description="Original URL requested")
+    final_url: str = Field(description="Final URL after redirects")
+    content: bytes = Field(description="Raw content bytes")
+    content_type: ContentType = Field(description="Detected content type")
+    headers: dict[str, str] = Field(default_factory=dict, description="Response headers")
+    error: Optional[str] = Field(default=None, description="Error message if fetch failed")
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    @property
+    def ok(self) -> bool:
+        """Check if the fetch was successful."""
+        return self.error is None and len(self.content) > 0
+
+
+class PDFParseResult(BaseModel):
+    """Result from a PDF parser plugin."""
+    pages: list[str] = Field(description="Extracted text for each page")
+    page_count: int = Field(description="Total number of pages in PDF")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="PDF metadata (title, author, etc)")
+    error: Optional[str] = Field(default=None, description="Error message if parsing failed")
+
+    @property
+    def ok(self) -> bool:
+        """Check if parsing was successful."""
+        return self.error is None
+
+    @property
+    def full_text(self) -> str:
+        """Get concatenated text from all pages."""
+        return "\n\n".join(self.pages)
+
+
+class BaseScraperPlugin(BasePlugin):
+    """
+    Plugin for fetching content from URLs.
+
+    Scrapers handle HTTP requests, redirects, retries, and content type detection.
+    They return raw bytes that can be processed by appropriate parsers (HTML, PDF, etc).
+
+    Example implementation:
+        @PluginRegistry.scraper
+        class MyScraperPlugin(BaseScraperPlugin):
+            @property
+            def name(self) -> str:
+                return "my_scraper"
+
+            async def fetch(self, url: str, timeout: float = 30.0) -> ScraperResult:
+                # Implement fetching logic
+                ...
+    """
+
+    @property
+    def capabilities(self) -> PluginCapability:
+        """Scrapers support async processing by default."""
+        return PluginCapability.ASYNC_PROCESSING | PluginCapability.EXTERNAL_API
+
+    @abstractmethod
+    async def fetch(self, url: str, timeout: float = 30.0) -> ScraperResult:
+        """
+        Fetch content from a URL.
+
+        Args:
+            url: The URL to fetch
+            timeout: Request timeout in seconds
+
+        Returns:
+            ScraperResult with content, content type, and any errors
+        """
+        ...
+
+    async def head(self, url: str, timeout: float = 10.0) -> ScraperResult:
+        """
+        Check content type without downloading the full body.
+
+        Default implementation does a full fetch. Override for efficiency.
+
+        Args:
+            url: The URL to check
+            timeout: Request timeout in seconds
+
+        Returns:
+            ScraperResult with content_type populated (content may be empty)
+        """
+        return await self.fetch(url, timeout)
+
+    def is_supported_url(self, url: str) -> bool:
+        """
+        Check if this scraper can handle the URL.
+
+        Override to restrict to specific URL patterns or domains.
+
+        Args:
+            url: The URL to check
+
+        Returns:
+            True if this scraper can handle the URL
+        """
+        return True
+
+
+class BasePDFParserPlugin(BasePlugin):
+    """
+    Plugin for extracting text from PDF files.
+
+    PDF parsers take raw PDF bytes and extract text content page by page.
+    They may support OCR for image-heavy PDFs.
+
+    Example implementation:
+        @PluginRegistry.pdf_parser
+        class MyPDFParserPlugin(BasePDFParserPlugin):
+            @property
+            def name(self) -> str:
+                return "my_pdf_parser"
+
+            def parse(self, pdf_bytes: bytes, ...) -> PDFParseResult:
+                # Implement parsing logic
+                ...
+    """
+
+    @abstractmethod
+    def parse(
+        self,
+        pdf_bytes: bytes,
+        max_pages: int = 500,
+        use_ocr: bool = False,
+    ) -> PDFParseResult:
+        """
+        Extract text from PDF bytes.
+
+        Args:
+            pdf_bytes: Raw PDF file content
+            max_pages: Maximum number of pages to process
+            use_ocr: Force OCR even for text-extractable PDFs
+
+        Returns:
+            PDFParseResult with extracted text for each page
+        """
+        ...
+
+    @property
+    def supports_ocr(self) -> bool:
+        """
+        Whether this parser supports OCR for image-heavy PDFs.
+
+        Returns:
+            True if OCR is available
+        """
+        return False

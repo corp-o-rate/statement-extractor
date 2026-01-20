@@ -1,12 +1,16 @@
 """
 SEC Edgar data importer for the company database.
 
-Imports company data from SEC's company_tickers.json file
+Imports company data from SEC's bulk submissions.zip file
 into the embedding database for company name matching.
+
+The submissions.zip contains JSON files for ALL SEC filers (~100K+),
+not just companies with ticker symbols (~10K).
 """
 
 import json
 import logging
+import zipfile
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -14,45 +18,93 @@ from ..models import CompanyRecord
 
 logger = logging.getLogger(__name__)
 
-# SEC Edgar company tickers URL
+# SEC Edgar bulk data URLs
+SEC_SUBMISSIONS_URL = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip"
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+
+# User agent for SEC requests (required)
+SEC_USER_AGENT = "corp-extractor/1.0 (contact@corp-o-rate.com)"
 
 
 class SecEdgarImporter:
     """
     Importer for SEC Edgar company data.
 
-    Uses the public company_tickers.json file from SEC.
+    Uses the bulk submissions.zip file which contains all SEC filers,
+    not just companies with ticker symbols.
     """
 
     def __init__(self):
         """Initialize the SEC Edgar importer."""
-        pass
+        self._ticker_lookup: Optional[dict[str, str]] = None
 
-    def import_from_url(self, limit: Optional[int] = None) -> Iterator[CompanyRecord]:
+    def import_from_url(
+        self,
+        limit: Optional[int] = None,
+        download_dir: Optional[Path] = None,
+    ) -> Iterator[CompanyRecord]:
         """
-        Import records directly from SEC Edgar URL.
+        Import records by downloading SEC bulk submissions.zip.
 
         Args:
+            limit: Optional limit on number of records
+            download_dir: Directory to download zip file to
+
+        Yields:
+            CompanyRecord for each company
+        """
+        # Download submissions.zip
+        zip_path = self.download_submissions_zip(download_dir)
+        yield from self.import_from_zip(zip_path, limit)
+
+    def import_from_zip(
+        self,
+        zip_path: str | Path,
+        limit: Optional[int] = None,
+    ) -> Iterator[CompanyRecord]:
+        """
+        Import records from a local submissions.zip file.
+
+        Args:
+            zip_path: Path to submissions.zip
             limit: Optional limit on number of records
 
         Yields:
             CompanyRecord for each company
         """
-        import urllib.request
+        zip_path = Path(zip_path)
+        if not zip_path.exists():
+            raise FileNotFoundError(f"SEC submissions.zip not found: {zip_path}")
 
-        logger.info(f"Downloading SEC Edgar data from {SEC_TICKERS_URL}")
+        logger.info(f"Importing SEC Edgar data from {zip_path}")
 
-        # SEC requires a User-Agent header
-        req = urllib.request.Request(
-            SEC_TICKERS_URL,
-            headers={"User-Agent": "corp-extractor/1.0 (neil@corp-o-rate.com)"}
-        )
+        # Load ticker lookup for enrichment
+        self._load_ticker_lookup()
 
-        with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        count = 0
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            # Get list of JSON files (CIK*.json)
+            json_files = [n for n in zf.namelist() if n.startswith("CIK") and n.endswith(".json")]
+            logger.info(f"Found {len(json_files)} submission files in archive")
 
-        yield from self._parse_tickers_data(data, limit)
+            for filename in json_files:
+                if limit and count >= limit:
+                    break
+
+                try:
+                    with zf.open(filename) as f:
+                        data = json.load(f)
+                        record = self._parse_submission(data)
+                        if record:
+                            count += 1
+                            yield record
+
+                            if count % 10000 == 0:
+                                logger.info(f"Imported {count} SEC Edgar records")
+                except Exception as e:
+                    logger.debug(f"Failed to parse {filename}: {e}")
+
+        logger.info(f"Completed SEC Edgar import: {count} records")
 
     def import_from_file(
         self,
@@ -60,10 +112,10 @@ class SecEdgarImporter:
         limit: Optional[int] = None,
     ) -> Iterator[CompanyRecord]:
         """
-        Import records from a local SEC tickers JSON file.
+        Import records from a local file (zip or legacy tickers JSON).
 
         Args:
-            file_path: Path to company_tickers.json
+            file_path: Path to submissions.zip or company_tickers.json
             limit: Optional limit on number of records
 
         Yields:
@@ -71,84 +123,143 @@ class SecEdgarImporter:
         """
         file_path = Path(file_path)
 
-        if not file_path.exists():
-            raise FileNotFoundError(f"SEC Edgar file not found: {file_path}")
+        if file_path.suffix == ".zip":
+            yield from self.import_from_zip(file_path, limit)
+        elif file_path.suffix == ".json":
+            # Legacy support for company_tickers.json
+            yield from self._import_from_tickers_json(file_path, limit)
+        else:
+            raise ValueError(f"Unsupported file type: {file_path.suffix}")
 
-        logger.info(f"Importing SEC Edgar data from {file_path}")
+    def _import_from_tickers_json(
+        self,
+        file_path: Path,
+        limit: Optional[int],
+    ) -> Iterator[CompanyRecord]:
+        """Legacy import from company_tickers.json."""
+        logger.info(f"Importing from legacy tickers file: {file_path}")
 
         with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        yield from self._parse_tickers_data(data, limit)
-
-    def _parse_tickers_data(
-        self,
-        data: dict[str, Any],
-        limit: Optional[int],
-    ) -> Iterator[CompanyRecord]:
-        """
-        Parse SEC tickers JSON data.
-
-        Format: {"0": {"cik_str": "320193", "ticker": "AAPL", "title": "Apple Inc."}, ...}
-        """
         count = 0
-
-        for key, entry in data.items():
+        for entry in data.values():
             if limit and count >= limit:
                 break
 
-            record = self._parse_entry(entry)
-            if record:
-                count += 1
-                yield record
-
-                if count % 1000 == 0:
-                    logger.info(f"Imported {count} SEC Edgar records")
-
-        logger.info(f"Completed SEC Edgar import: {count} records")
-
-    def _parse_entry(self, entry: dict[str, Any]) -> Optional[CompanyRecord]:
-        """Parse a single SEC ticker entry."""
-        try:
             cik = entry.get("cik_str")
             ticker = entry.get("ticker", "")
             title = entry.get("title", "")
 
             if not cik or not title:
-                return None
+                continue
 
-            # Normalize CIK to 10 digits with leading zeros
             cik_str = str(cik).zfill(10)
+            record_data = {"cik": cik_str, "ticker": ticker, "title": title}
 
-            # Use full title as name (preserve legal suffixes like Inc., Corp., etc.)
-            name = title.strip()
-
-            # Build record
-            record_data = {
-                "cik": cik_str,
-                "ticker": ticker,
-                "title": title,
-            }
-
-            return CompanyRecord(
-                name=name,
-                embedding_name=name,
+            yield CompanyRecord(
+                name=title.strip(),
+                embedding_name=title.strip(),
                 legal_name=title,
                 source="sec_edgar",
                 source_id=cik_str,
                 record=record_data,
             )
+            count += 1
+
+        logger.info(f"Completed legacy SEC import: {count} records")
+
+    def _load_ticker_lookup(self) -> None:
+        """Load ticker symbols for CIK enrichment."""
+        if self._ticker_lookup is not None:
+            return
+
+        self._ticker_lookup = {}
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                SEC_TICKERS_URL,
+                headers={"User-Agent": SEC_USER_AGENT},
+            )
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+            for entry in data.values():
+                cik = str(entry.get("cik_str", "")).zfill(10)
+                ticker = entry.get("ticker", "")
+                if cik and ticker:
+                    self._ticker_lookup[cik] = ticker
+
+            logger.info(f"Loaded {len(self._ticker_lookup)} ticker symbols")
+        except Exception as e:
+            logger.warning(f"Failed to load ticker lookup: {e}")
+
+    def _parse_submission(self, data: dict[str, Any]) -> Optional[CompanyRecord]:
+        """Parse a submission JSON file into a CompanyRecord."""
+        try:
+            cik = str(data.get("cik", "")).zfill(10)
+            name = data.get("name", "").strip()
+
+            if not cik or not name:
+                return None
+
+            # Get additional fields
+            sic = data.get("sic", "")
+            sic_description = data.get("sicDescription", "")
+            entity_type = data.get("entityType", "")
+            state = data.get("stateOfIncorporation", "")
+            fiscal_year_end = data.get("fiscalYearEnd", "")
+
+            # Get addresses
+            addresses = data.get("addresses", {})
+            business_addr = addresses.get("business", {})
+
+            # Get ticker from lookup
+            ticker = self._ticker_lookup.get(cik, "") if self._ticker_lookup else ""
+
+            # Get exchange info from filings if available
+            exchanges = data.get("exchanges", [])
+            exchange = exchanges[0] if exchanges else ""
+
+            # Build record
+            record_data = {
+                "cik": cik,
+                "name": name,
+                "sic": sic,
+                "sic_description": sic_description,
+                "entity_type": entity_type,
+                "state_of_incorporation": state,
+                "fiscal_year_end": fiscal_year_end,
+                "ticker": ticker,
+                "exchange": exchange,
+                "business_address": {
+                    "street": business_addr.get("street1", ""),
+                    "city": business_addr.get("city", ""),
+                    "state": business_addr.get("stateOrCountry", ""),
+                    "zip": business_addr.get("zipCode", ""),
+                },
+            }
+
+            return CompanyRecord(
+                name=name,
+                embedding_name=name,
+                legal_name=name,
+                source="sec_edgar",
+                source_id=cik,
+                record=record_data,
+            )
 
         except Exception as e:
-            logger.debug(f"Failed to parse SEC entry: {e}")
+            logger.debug(f"Failed to parse submission: {e}")
             return None
 
-    def download_latest(self, output_path: Optional[Path] = None) -> Path:
+    def download_submissions_zip(self, output_dir: Optional[Path] = None) -> Path:
         """
-        Download the latest SEC tickers file.
+        Download the SEC bulk submissions.zip file.
 
         Args:
-            output_path: Where to save the file
+            output_dir: Directory to save the file
 
         Returns:
             Path to downloaded file
@@ -156,21 +267,54 @@ class SecEdgarImporter:
         import tempfile
         import urllib.request
 
-        if output_path is None:
+        if output_dir is None:
             output_dir = Path(tempfile.gettempdir()) / "sec_edgar"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / "company_tickers.json"
 
-        logger.info(f"Downloading SEC Edgar data from {SEC_TICKERS_URL}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "submissions.zip"
 
-        # SEC requires a User-Agent header
+        logger.info(f"Downloading SEC submissions.zip (~500MB)...")
+        logger.info(f"URL: {SEC_SUBMISSIONS_URL}")
+
         req = urllib.request.Request(
-            SEC_TICKERS_URL,
-            headers={"User-Agent": "corp-extractor/1.0 (contact@corp-o-rate.com)"}
+            SEC_SUBMISSIONS_URL,
+            headers={"User-Agent": SEC_USER_AGENT},
         )
-        with urllib.request.urlopen(req) as response:
-            with open(output_path, "wb") as f:
-                f.write(response.read())
 
-        logger.info(f"Downloaded SEC Edgar data to {output_path}")
+        with urllib.request.urlopen(req) as response:
+            total_size = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            chunk_size = 1024 * 1024  # 1MB chunks
+
+            with open(output_path, "wb") as f:
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        pct = (downloaded / total_size) * 100
+                        logger.info(f"Downloaded {downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB ({pct:.1f}%)")
+
+        logger.info(f"Downloaded SEC submissions.zip to {output_path}")
         return output_path
+
+    def download_latest(self, output_path: Optional[Path] = None) -> Path:
+        """
+        Download the latest SEC bulk data.
+
+        Args:
+            output_path: Where to save the file (directory or file path)
+
+        Returns:
+            Path to downloaded file
+        """
+        if output_path is None:
+            return self.download_submissions_zip()
+
+        output_path = Path(output_path)
+        if output_path.is_dir():
+            return self.download_submissions_zip(output_path)
+        else:
+            return self.download_submissions_zip(output_path.parent)

@@ -52,13 +52,19 @@ RUN python -c "from huggingface_hub import hf_hub_download; \
     path = hf_hub_download(repo_id='google/gemma-3-12b-it-qat-q4_0-gguf', filename='gemma-3-12b-it-q4_0.gguf'); \
     print(f'Gemma3 GGUF model downloaded to {path}')"
 
-# Install corp-extractor library
-RUN pip install --no-cache-dir --no-deps corp-extractor==0.5.0
+# Install corp-extractor library with database support
+RUN pip install --no-cache-dir --no-deps corp-extractor==0.6.0
+RUN pip install --no-cache-dir sqlite-vec
 
 # Download models at build time for faster cold starts
 RUN python -c "from statement_extractor import StatementExtractor; \
     extractor = StatementExtractor(); \
     print(f'T5-Gemma2 model loaded on {extractor.device}')"
+
+# Pre-download company embedding database from HuggingFace (lite version for smaller image)
+RUN python -c "from statement_extractor.database.hub import download_database; \
+    path = download_database(filename='companies-lite.db'); \
+    print(f'Company database (lite) downloaded to {path}')"
 
 # Copy handler
 COPY handler.py /app/handler.py

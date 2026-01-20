@@ -62,11 +62,21 @@ class T5GemmaSplitter(BaseSplitterPlugin):
 
     @property
     def capabilities(self) -> PluginCapability:
-        return PluginCapability.LLM_REQUIRED
+        return PluginCapability.LLM_REQUIRED | PluginCapability.BATCH_PROCESSING
 
     @property
     def description(self) -> str:
         return "T5-Gemma2 model for extracting triples using Diverse Beam Search"
+
+    @property
+    def model_vram_gb(self) -> float:
+        """T5-Gemma2 model weights ~2GB in bfloat16."""
+        return 2.0
+
+    @property
+    def per_item_vram_gb(self) -> float:
+        """Each text item during batch processing ~0.5GB for KV cache and activations."""
+        return 0.5
 
     def _get_extractor(self):
         """Lazy-load the StatementExtractor."""
@@ -125,6 +135,136 @@ class T5GemmaSplitter(BaseSplitterPlugin):
 
         logger.info(f"T5GemmaSplitter produced {len(raw_triples)} raw triples")
         return raw_triples
+
+    def split_batch(
+        self,
+        texts: list[str],
+        context: PipelineContext,
+    ) -> list[list[RawTriple]]:
+        """
+        Split multiple texts into atomic triples using batch processing.
+
+        Processes all texts through the T5-Gemma2 model in batches
+        sized for optimal GPU utilization.
+
+        Args:
+            texts: List of input texts to split
+            context: Pipeline context
+
+        Returns:
+            List of RawTriple lists, one per input text
+        """
+        if not texts:
+            return []
+
+        batch_size = self.get_optimal_batch_size()
+        logger.info(f"T5GemmaSplitter batch processing {len(texts)} texts with batch_size={batch_size}")
+
+        # Get options from context
+        splitter_options = context.source_metadata.get("splitter_options", {})
+        num_beams = splitter_options.get("num_beams", self._num_beams)
+        diversity_penalty = splitter_options.get("diversity_penalty", self._diversity_penalty)
+        max_new_tokens = splitter_options.get("max_new_tokens", self._max_new_tokens)
+
+        # Create extraction options
+        from ...models import ExtractionOptions as LegacyExtractionOptions
+        options = LegacyExtractionOptions(
+            num_beams=num_beams,
+            diversity_penalty=diversity_penalty,
+            max_new_tokens=max_new_tokens,
+            use_gliner_extraction=False,
+            embedding_dedup=False,
+            deduplicate=False,
+        )
+
+        extractor = self._get_extractor()
+        all_results: list[list[RawTriple]] = []
+
+        # Process in batches
+        for i in range(0, len(texts), batch_size):
+            batch_texts = texts[i:i + batch_size]
+            logger.debug(f"Processing batch {i // batch_size + 1}: {len(batch_texts)} texts")
+
+            batch_results = self._process_batch(batch_texts, extractor, options)
+            all_results.extend(batch_results)
+
+        total_triples = sum(len(r) for r in all_results)
+        logger.info(f"T5GemmaSplitter batch produced {total_triples} total triples from {len(texts)} texts")
+        return all_results
+
+    def _process_batch(
+        self,
+        texts: list[str],
+        extractor,
+        options,
+    ) -> list[list[RawTriple]]:
+        """
+        Process a batch of texts through the model.
+
+        Uses the model's batch generation capability for efficient GPU utilization.
+        """
+        import torch
+
+        # Wrap texts in page tags
+        wrapped_texts = [f"<page>{t}</page>" if not t.startswith("<page>") else t for t in texts]
+
+        # Tokenize batch
+        tokenizer = extractor.tokenizer
+        model = extractor.model
+
+        inputs = tokenizer(
+            wrapped_texts,
+            return_tensors="pt",
+            max_length=4096,
+            truncation=True,
+            padding=True,
+        ).to(extractor.device)
+
+        # Create stopping criteria
+        from ...extractor import StopOnSequence
+        from transformers import StoppingCriteriaList
+
+        input_length = inputs["input_ids"].shape[1]
+        stop_criteria = StopOnSequence(
+            tokenizer=tokenizer,
+            stop_sequence="</statements>",
+            input_length=input_length,
+        )
+
+        # Generate for all texts in batch
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=options.max_new_tokens,
+                max_length=None,
+                num_beams=options.num_beams,
+                num_beam_groups=options.num_beams,
+                num_return_sequences=1,  # One sequence per input for batch
+                diversity_penalty=options.diversity_penalty,
+                do_sample=False,
+                top_p=None,
+                top_k=None,
+                trust_remote_code=True,
+                custom_generate="transformers-community/group-beam-search",
+                stopping_criteria=StoppingCriteriaList([stop_criteria]),
+            )
+
+        # Decode and parse each output
+        results: list[list[RawTriple]] = []
+        end_tag = "</statements>"
+
+        for output in outputs:
+            decoded = tokenizer.decode(output, skip_special_tokens=True)
+
+            # Truncate at </statements>
+            if end_tag in decoded:
+                end_pos = decoded.find(end_tag) + len(end_tag)
+                decoded = decoded[:end_pos]
+
+            triples = self._parse_xml_to_raw_triples(decoded)
+            results.append(triples)
+
+        return results
 
     def _parse_xml_to_raw_triples(self, xml_output: str) -> list[RawTriple]:
         """Parse XML output into RawTriple objects."""

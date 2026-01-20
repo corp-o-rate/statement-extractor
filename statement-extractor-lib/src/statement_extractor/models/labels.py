@@ -72,6 +72,19 @@ class LabeledStatement(BaseModel):
         default_factory=list,
         description="Taxonomy classifications from Stage 6"
     )
+    # Document tracking fields
+    document_id: Optional[str] = Field(
+        None,
+        description="ID of the source document (for document pipeline)"
+    )
+    page_number: Optional[int] = Field(
+        None,
+        description="Page number where this statement was extracted (1-indexed)"
+    )
+    citation: Optional[str] = Field(
+        None,
+        description="Formatted citation string (e.g., 'Title - Author, 2024, p. 5')"
+    )
 
     def get_label(self, label_type: str) -> Optional[StatementLabel]:
         """Get a label by type, or None if not found."""
@@ -137,6 +150,9 @@ class LabeledStatement(BaseModel):
                 }
                 for t in self.taxonomy_results
             ],
+            "document_id": self.document_id,
+            "page_number": self.page_number,
+            "citation": self.citation,
         }
 
     class Config:

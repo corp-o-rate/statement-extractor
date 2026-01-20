@@ -19,10 +19,18 @@ from .base import (
     BaseCanonicalizerPlugin,
     BaseLabelerPlugin,
     BaseTaxonomyPlugin,
+    # Content acquisition plugins
+    ContentType,
+    ScraperResult,
+    PDFParseResult,
+    BaseScraperPlugin,
+    BasePDFParserPlugin,
 )
 
 # Import plugin modules for auto-registration
 from . import splitters, extractors, qualifiers, canonicalizers, labelers, taxonomy
+# Content acquisition plugins
+from . import scrapers, pdf
 
 __all__ = [
     "PluginCapability",
@@ -33,6 +41,12 @@ __all__ = [
     "BaseCanonicalizerPlugin",
     "BaseLabelerPlugin",
     "BaseTaxonomyPlugin",
+    # Content acquisition plugins
+    "ContentType",
+    "ScraperResult",
+    "PDFParseResult",
+    "BaseScraperPlugin",
+    "BasePDFParserPlugin",
     # Plugin modules
     "splitters",
     "extractors",
@@ -40,4 +54,6 @@ __all__ = [
     "canonicalizers",
     "labelers",
     "taxonomy",
+    "scrapers",
+    "pdf",
 ]

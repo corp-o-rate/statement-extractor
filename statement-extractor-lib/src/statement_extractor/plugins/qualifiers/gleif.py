@@ -1,18 +1,21 @@
 """
 GLEIFQualifierPlugin - Qualifies ORG entities with LEI and related data.
 
+DEPRECATED: Use EmbeddingCompanyQualifier instead, which uses a local
+embedding database with pre-loaded GLEIF data for faster, offline matching.
+
 Uses the GLEIF (Global Legal Entity Identifier Foundation) API to:
 - Look up LEI by organization name
 - Retrieve legal name, jurisdiction, parent company info
 """
 
 import logging
+import warnings
 from typing import Optional
 from urllib.parse import quote
 
 from ..base import BaseQualifierPlugin, PluginCapability
 from ...pipeline.context import PipelineContext
-from ...pipeline.registry import PluginRegistry
 from ...models import ExtractedEntity, EntityQualifiers, EntityType
 
 logger = logging.getLogger(__name__)
@@ -21,11 +24,12 @@ logger = logging.getLogger(__name__)
 GLEIF_API_BASE = "https://api.gleif.org/api/v1"
 
 
-@PluginRegistry.qualifier
+# DEPRECATED: Not auto-registered. Use EmbeddingCompanyQualifier instead.
 class GLEIFQualifierPlugin(BaseQualifierPlugin):
     """
-    Qualifier plugin for ORG entities using GLEIF API.
+    DEPRECATED: Use EmbeddingCompanyQualifier instead.
 
+    Qualifier plugin for ORG entities using GLEIF API.
     Looks up Legal Entity Identifiers (LEI) and related corporate data.
     """
 
@@ -37,10 +41,17 @@ class GLEIFQualifierPlugin(BaseQualifierPlugin):
         """
         Initialize the GLEIF qualifier.
 
+        DEPRECATED: Use EmbeddingCompanyQualifier instead.
+
         Args:
             timeout: API request timeout in seconds
             cache_results: Whether to cache API results
         """
+        warnings.warn(
+            "GLEIFQualifierPlugin is deprecated. Use EmbeddingCompanyQualifier instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._timeout = timeout
         self._cache_results = cache_results
         self._cache: dict[str, Optional[dict]] = {}

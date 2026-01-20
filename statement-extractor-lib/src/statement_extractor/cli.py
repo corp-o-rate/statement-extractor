@@ -11,6 +11,7 @@ Usage:
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -74,14 +75,17 @@ def main():
     \b
     Commands:
         split      Extract sub-statements from text (simple, fast)
-        pipeline   Run the full 5-stage extraction pipeline
+        pipeline   Run the full 6-stage extraction pipeline
+        document   Process documents with chunking and citations
         plugins    List or inspect available plugins
+        db         Manage company embedding database
 
     \b
     Examples:
         corp-extractor split "Apple announced a new iPhone."
         corp-extractor split -f article.txt --json
         corp-extractor pipeline "Apple CEO Tim Cook announced..." --stages 1-3
+        corp-extractor document process report.txt --title "Annual Report"
         corp-extractor plugins list
     """
     pass
@@ -646,19 +650,24 @@ def db_cmd():
 
     \b
     Commands:
-        import-gleif    Import GLEIF LEI data
-        import-sec      Import SEC Edgar company data
-        status          Show database status
-        search          Search for a company
-        download        Download database from HuggingFace
-        upload          Upload database to HuggingFace
+        import-gleif           Import GLEIF LEI data (~3M records)
+        import-sec             Import SEC Edgar bulk data (~100K+ filers)
+        import-companies-house Import UK Companies House (~5M records)
+        import-wikidata        Import Wikidata companies
+        status                 Show database status
+        search                 Search for a company
+        download               Download database from HuggingFace
+        upload                 Upload database with lite/compressed variants
+        create-lite            Create lite version (no record data)
+        compress               Compress database with gzip
 
     \b
     Examples:
-        corp-extractor db import-gleif /path/to/lei-records.json
-        corp-extractor db import-sec
+        corp-extractor db import-sec --download
+        corp-extractor db import-gleif --download --limit 100000
         corp-extractor db status
         corp-extractor db search "Apple Inc"
+        corp-extractor db upload companies.db
     """
     pass
 
@@ -774,28 +783,33 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
 
 
 @db_cmd.command("import-sec")
-@click.option("--file", "file_path", type=click.Path(exists=True), help="Local SEC tickers JSON file")
+@click.option("--download", is_flag=True, help="Download bulk submissions.zip (~500MB, ~100K+ filers)")
+@click.option("--file", "file_path", type=click.Path(exists=True), help="Local file (submissions.zip or company_tickers.json)")
 @click.option("--db", "db_path", type=click.Path(), help="Database path")
 @click.option("--limit", type=int, help="Limit number of records")
-@click.option("--batch-size", type=int, default=1000, help="Batch size")
+@click.option("--batch-size", type=int, default=10000, help="Batch size (default: 10000)")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def db_import_sec(file_path: Optional[str], db_path: Optional[str], limit: Optional[int], batch_size: int, verbose: bool):
+def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[str], limit: Optional[int], batch_size: int, verbose: bool):
     """
     Import SEC Edgar company data into the company database.
 
-    Downloads from SEC website if no file provided.
+    By default, downloads the bulk submissions.zip file which contains
+    ALL SEC filers (~100K+), not just companies with ticker symbols (~10K).
 
     \b
     Examples:
-        corp-extractor db import-sec
-        corp-extractor db import-sec --file /path/to/company_tickers.json
+        corp-extractor db import-sec --download
+        corp-extractor db import-sec --download --limit 50000
+        corp-extractor db import-sec --file /path/to/submissions.zip
+        corp-extractor db import-sec --file /path/to/company_tickers.json  # legacy
     """
     _configure_logging(verbose)
 
     from .database import CompanyDatabase, CompanyEmbedder
     from .database.importers import SecEdgarImporter
 
-    click.echo("Importing SEC Edgar data...", err=True)
+    if not download and not file_path:
+        raise click.UsageError("Either --download or --file is required")
 
     # Initialize components
     embedder = CompanyEmbedder()
@@ -804,8 +818,10 @@ def db_import_sec(file_path: Optional[str], db_path: Optional[str], limit: Optio
 
     # Get records
     if file_path:
+        click.echo(f"Importing SEC Edgar data from {file_path}...", err=True)
         record_iter = importer.import_from_file(file_path, limit=limit)
     else:
+        click.echo("Downloading SEC submissions.zip (~500MB)...", err=True)
         record_iter = importer.import_from_url(limit=limit)
 
     # Import records in batches
@@ -1071,54 +1087,460 @@ def db_search(query: str, db_path: Optional[str], top_k: int, source: Optional[s
 
 
 @db_cmd.command("download")
-@click.option("--repo", type=str, default="corp-o-rate/company-embeddings", help="HuggingFace repo ID")
+@click.option("--repo", type=str, default="Corp-o-Rate-Community/company-embeddings", help="HuggingFace repo ID")
 @click.option("--db", "db_path", type=click.Path(), help="Output path for database")
+@click.option("--full", is_flag=True, help="Download full version (larger, includes record metadata)")
+@click.option("--no-compress", is_flag=True, help="Download uncompressed version (slower)")
 @click.option("--force", is_flag=True, help="Force re-download")
-def db_download(repo: str, db_path: Optional[str], force: bool):
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_download(repo: str, db_path: Optional[str], full: bool, no_compress: bool, force: bool, verbose: bool):
     """
     Download company database from HuggingFace Hub.
+
+    By default downloads the lite version (smaller, without record metadata).
+    Use --full for the complete database with all source record data.
 
     \b
     Examples:
         corp-extractor db download
+        corp-extractor db download --full
         corp-extractor db download --repo my-org/my-company-db
     """
-    from .database import download_database
-    from pathlib import Path
+    _configure_logging(verbose)
+    from .database.hub import download_database
 
-    click.echo(f"Downloading database from {repo}...", err=True)
+    filename = "companies.db" if full else "companies-lite.db"
+    click.echo(f"Downloading {'full ' if full else 'lite '}database from {repo}...", err=True)
 
     try:
-        path = download_database(repo_id=repo, force_download=force)
+        path = download_database(
+            repo_id=repo,
+            filename=filename,
+            force_download=force,
+            prefer_compressed=not no_compress,
+        )
         click.echo(f"Database downloaded to: {path}")
     except Exception as e:
         raise click.ClickException(f"Download failed: {e}")
 
 
 @db_cmd.command("upload")
-@click.argument("db_path", type=click.Path(exists=True))
-@click.option("--repo", type=str, default="corp-o-rate/company-embeddings", help="HuggingFace repo ID")
+@click.argument("db_path", type=click.Path(exists=True), required=False)
+@click.option("--repo", type=str, default="Corp-o-Rate-Community/company-embeddings", help="HuggingFace repo ID")
 @click.option("--message", type=str, default="Update company database", help="Commit message")
-def db_upload(db_path: str, repo: str, message: str):
+@click.option("--no-lite", is_flag=True, help="Skip creating lite version (without record data)")
+@click.option("--no-compress", is_flag=True, help="Skip creating compressed versions")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_upload(db_path: Optional[str], repo: str, message: str, no_lite: bool, no_compress: bool, verbose: bool):
     """
-    Upload company database to HuggingFace Hub.
+    Upload company database to HuggingFace Hub with variants.
+
+    If no path is provided, uploads from the default cache location.
+
+    By default uploads:
+    - companies.db (full database)
+    - companies-lite.db (without record data, smaller)
+    - companies.db.gz (compressed full)
+    - companies-lite.db.gz (compressed lite)
 
     Requires HF_TOKEN environment variable to be set.
 
     \b
     Examples:
-        corp-extractor db upload companies.db
-        corp-extractor db upload companies.db --repo my-org/my-company-db
+        corp-extractor db upload
+        corp-extractor db upload /path/to/companies.db
+        corp-extractor db upload --no-lite --no-compress
+        corp-extractor db upload --repo my-org/my-company-db
     """
-    from .database import upload_database
+    _configure_logging(verbose)
+    from .database.hub import upload_database_with_variants, DEFAULT_CACHE_DIR, DEFAULT_DB_FULL_FILENAME
 
-    click.echo(f"Uploading database to {repo}...", err=True)
+    # Use default cache location if no path provided
+    if db_path is None:
+        db_path = str(DEFAULT_CACHE_DIR / DEFAULT_DB_FULL_FILENAME)
+        if not Path(db_path).exists():
+            raise click.ClickException(
+                f"Database not found at default location: {db_path}\n"
+                "Build the database first with import commands, or specify a path."
+            )
+
+    click.echo(f"Uploading {db_path} to {repo}...", err=True)
+    if not no_lite:
+        click.echo("  - Creating lite version (without record data)", err=True)
+    if not no_compress:
+        click.echo("  - Creating compressed versions", err=True)
 
     try:
-        url = upload_database(db_path=db_path, repo_id=repo, commit_message=message)
-        click.echo(f"Database uploaded successfully: {url}")
+        results = upload_database_with_variants(
+            db_path=db_path,
+            repo_id=repo,
+            commit_message=message,
+            include_lite=not no_lite,
+            include_compressed=not no_compress,
+        )
+        click.echo(f"\nUploaded {len(results)} file(s) successfully:")
+        for filename, url in results.items():
+            click.echo(f"  - {filename}")
     except Exception as e:
         raise click.ClickException(f"Upload failed: {e}")
+
+
+@db_cmd.command("create-lite")
+@click.argument("db_path", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), help="Output path (default: adds -lite suffix)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_create_lite(db_path: str, output: Optional[str], verbose: bool):
+    """
+    Create a lite version of the database without record data.
+
+    The lite version strips the `record` column (full source data),
+    keeping only core fields and embeddings. This significantly
+    reduces file size while maintaining search functionality.
+
+    \b
+    Examples:
+        corp-extractor db create-lite companies.db
+        corp-extractor db create-lite companies.db -o companies-lite.db
+    """
+    _configure_logging(verbose)
+    from .database.hub import create_lite_database
+
+    click.echo(f"Creating lite database from {db_path}...", err=True)
+
+    try:
+        lite_path = create_lite_database(db_path, output)
+        click.echo(f"Lite database created: {lite_path}")
+    except Exception as e:
+        raise click.ClickException(f"Failed to create lite database: {e}")
+
+
+@db_cmd.command("compress")
+@click.argument("db_path", type=click.Path(exists=True))
+@click.option("-o", "--output", type=click.Path(), help="Output path (default: adds .gz suffix)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_compress(db_path: str, output: Optional[str], verbose: bool):
+    """
+    Compress a database file using gzip.
+
+    \b
+    Examples:
+        corp-extractor db compress companies.db
+        corp-extractor db compress companies.db -o companies.db.gz
+    """
+    _configure_logging(verbose)
+    from .database.hub import compress_database
+
+    click.echo(f"Compressing {db_path}...", err=True)
+
+    try:
+        compressed_path = compress_database(db_path, output)
+        click.echo(f"Compressed database created: {compressed_path}")
+    except Exception as e:
+        raise click.ClickException(f"Compression failed: {e}")
+
+
+# =============================================================================
+# Document commands
+# =============================================================================
+
+@main.group("document")
+def document_cmd():
+    """
+    Process documents with chunking, deduplication, and citations.
+
+    \b
+    Commands:
+        process    Process a document through the full pipeline
+        chunk      Preview chunking without extraction
+
+    \b
+    Examples:
+        corp-extractor document process article.txt
+        corp-extractor document process report.pdf --no-summary
+        corp-extractor document chunk article.txt --max-tokens 500
+    """
+    pass
+
+
+@document_cmd.command("process")
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option("--title", type=str, help="Document title (for citations)")
+@click.option("--author", "authors", type=str, multiple=True, help="Document author(s)")
+@click.option("--year", type=int, help="Publication year")
+@click.option("--max-tokens", type=int, default=1000, help="Target tokens per chunk (default: 1000)")
+@click.option("--overlap", type=int, default=100, help="Token overlap between chunks (default: 100)")
+@click.option("--no-summary", is_flag=True, help="Skip document summarization")
+@click.option("--no-dedup", is_flag=True, help="Skip deduplication across chunks")
+@click.option(
+    "--stages",
+    type=str,
+    default="1-6",
+    help="Pipeline stages to run (e.g., '1-3' or '1,2,5')"
+)
+@click.option(
+    "-o", "--output",
+    type=click.Choice(["table", "json", "triples"], case_sensitive=False),
+    default="table",
+    help="Output format (default: table)"
+)
+@click.option("-v", "--verbose", is_flag=True, help="Show verbose output")
+@click.option("-q", "--quiet", is_flag=True, help="Suppress progress messages")
+def document_process(
+    input_path: str,
+    title: Optional[str],
+    authors: tuple[str, ...],
+    year: Optional[int],
+    max_tokens: int,
+    overlap: int,
+    no_summary: bool,
+    no_dedup: bool,
+    stages: str,
+    output: str,
+    verbose: bool,
+    quiet: bool,
+):
+    """
+    Process a document through the extraction pipeline with chunking.
+
+    Supports text files. PDFs are read as plain text (page structure
+    is inferred from form feeds or explicit markers).
+
+    \b
+    Examples:
+        corp-extractor document process article.txt
+        corp-extractor document process report.txt --title "Annual Report" --year 2024
+        corp-extractor document process doc.txt --no-summary --stages 1-3
+        corp-extractor document process doc.txt -o json
+    """
+    _configure_logging(verbose)
+
+    # Read input file
+    with open(input_path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    if not text.strip():
+        raise click.ClickException("Input file is empty")
+
+    if not quiet:
+        click.echo(f"Processing document: {input_path} ({len(text)} chars)", err=True)
+
+    # Import document pipeline
+    from .document import DocumentPipeline, DocumentPipelineConfig, Document
+    from .models.document import ChunkingConfig
+    from .pipeline import PipelineConfig
+    _load_all_plugins()
+
+    # Parse stages
+    enabled_stages = _parse_stages(stages)
+
+    # Build configs
+    chunking_config = ChunkingConfig(
+        target_tokens=max_tokens,
+        max_tokens=max_tokens * 2,
+        overlap_tokens=overlap,
+    )
+
+    pipeline_config = PipelineConfig(
+        enabled_stages=enabled_stages,
+    )
+
+    doc_config = DocumentPipelineConfig(
+        chunking=chunking_config,
+        generate_summary=not no_summary,
+        deduplicate_across_chunks=not no_dedup,
+        pipeline_config=pipeline_config,
+    )
+
+    # Create document with metadata
+    from pathlib import Path
+    doc_title = title or Path(input_path).stem
+    document = Document.from_text(
+        text=text,
+        title=doc_title,
+        source_type="text",
+        authors=list(authors),
+        year=year,
+    )
+
+    # Process
+    try:
+        pipeline = DocumentPipeline(doc_config)
+        ctx = pipeline.process(document)
+
+        # Output results
+        if output == "json":
+            _print_document_json(ctx)
+        elif output == "triples":
+            _print_document_triples(ctx)
+        else:
+            _print_document_table(ctx, verbose)
+
+        # Report stats
+        if not quiet:
+            click.echo(f"\nChunks: {ctx.chunk_count}", err=True)
+            click.echo(f"Statements: {ctx.statement_count}", err=True)
+            if ctx.duplicates_removed > 0:
+                click.echo(f"Duplicates removed: {ctx.duplicates_removed}", err=True)
+
+            if ctx.processing_errors:
+                click.echo(f"\nErrors: {len(ctx.processing_errors)}", err=True)
+                for error in ctx.processing_errors:
+                    click.echo(f"  - {error}", err=True)
+
+    except Exception as e:
+        logging.exception("Document processing error:")
+        raise click.ClickException(f"Processing failed: {e}")
+
+
+@document_cmd.command("chunk")
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option("--max-tokens", type=int, default=1000, help="Target tokens per chunk (default: 1000)")
+@click.option("--overlap", type=int, default=100, help="Token overlap between chunks (default: 100)")
+@click.option("-o", "--output", type=click.Choice(["table", "json"]), default="table", help="Output format")
+@click.option("-v", "--verbose", is_flag=True, help="Show verbose output")
+def document_chunk(
+    input_path: str,
+    max_tokens: int,
+    overlap: int,
+    output: str,
+    verbose: bool,
+):
+    """
+    Preview document chunking without running extraction.
+
+    Shows how a document would be split into chunks for processing.
+
+    \b
+    Examples:
+        corp-extractor document chunk article.txt
+        corp-extractor document chunk article.txt --max-tokens 500
+        corp-extractor document chunk article.txt -o json
+    """
+    _configure_logging(verbose)
+
+    # Read input file
+    with open(input_path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    if not text.strip():
+        raise click.ClickException("Input file is empty")
+
+    click.echo(f"Chunking document: {input_path} ({len(text)} chars)", err=True)
+
+    from .document import DocumentChunker, Document
+    from .models.document import ChunkingConfig
+
+    config = ChunkingConfig(
+        target_tokens=max_tokens,
+        max_tokens=max_tokens * 2,
+        overlap_tokens=overlap,
+    )
+
+    from pathlib import Path
+    document = Document.from_text(text, title=Path(input_path).stem)
+    chunker = DocumentChunker(config)
+    chunks = chunker.chunk_document(document)
+
+    if output == "json":
+        import json
+        chunk_data = [
+            {
+                "index": c.chunk_index,
+                "tokens": c.token_count,
+                "chars": len(c.text),
+                "pages": c.page_numbers,
+                "overlap": c.overlap_chars,
+                "preview": c.text[:100] + "..." if len(c.text) > 100 else c.text,
+            }
+            for c in chunks
+        ]
+        click.echo(json.dumps({"chunks": chunk_data, "total": len(chunks)}, indent=2))
+    else:
+        click.echo(f"\nCreated {len(chunks)} chunk(s):\n")
+        click.echo("-" * 80)
+
+        for chunk in chunks:
+            click.echo(f"Chunk {chunk.chunk_index + 1}:")
+            click.echo(f"  Tokens: {chunk.token_count}")
+            click.echo(f"  Characters: {len(chunk.text)}")
+            if chunk.page_numbers:
+                click.echo(f"  Pages: {chunk.page_numbers}")
+            if chunk.overlap_chars > 0:
+                click.echo(f"  Overlap: {chunk.overlap_chars} chars")
+
+            preview = chunk.text[:200].replace("\n", " ")
+            if len(chunk.text) > 200:
+                preview += "..."
+            click.echo(f"  Preview: {preview}")
+            click.echo("-" * 80)
+
+
+def _print_document_json(ctx):
+    """Print document context as JSON."""
+    import json
+    click.echo(json.dumps(ctx.as_dict(), indent=2, default=str))
+
+
+def _print_document_triples(ctx):
+    """Print document statements as triples."""
+    for stmt in ctx.labeled_statements:
+        parts = [stmt.subject_fqn, stmt.statement.predicate, stmt.object_fqn]
+        if stmt.page_number:
+            parts.append(f"p.{stmt.page_number}")
+        click.echo("\t".join(parts))
+
+
+def _print_document_table(ctx, verbose: bool):
+    """Print document context in table format."""
+    # Show summary if available
+    if ctx.document.summary:
+        click.echo("\nDocument Summary:")
+        click.echo("-" * 40)
+        click.echo(ctx.document.summary)
+        click.echo("-" * 40)
+
+    if not ctx.labeled_statements:
+        click.echo("\nNo statements extracted.")
+        return
+
+    click.echo(f"\nExtracted {len(ctx.labeled_statements)} statement(s):\n")
+    click.echo("-" * 80)
+
+    for i, stmt in enumerate(ctx.labeled_statements, 1):
+        click.echo(f"{i}. {stmt.subject_fqn}")
+        click.echo(f"   --[{stmt.statement.predicate}]-->")
+        click.echo(f"   {stmt.object_fqn}")
+
+        # Show citation
+        if stmt.citation:
+            click.echo(f"   Citation: {stmt.citation}")
+        elif stmt.page_number:
+            click.echo(f"   Page: {stmt.page_number}")
+
+        # Show labels
+        for label in stmt.labels:
+            if isinstance(label.label_value, float):
+                click.echo(f"   {label.label_type}: {label.label_value:.3f}")
+            else:
+                click.echo(f"   {label.label_type}: {label.label_value}")
+
+        # Show taxonomy (top 3)
+        if stmt.taxonomy_results:
+            sorted_taxonomy = sorted(stmt.taxonomy_results, key=lambda t: t.confidence, reverse=True)[:3]
+            taxonomy_strs = [f"{t.category}:{t.label}" for t in sorted_taxonomy]
+            click.echo(f"   Topics: {', '.join(taxonomy_strs)}")
+
+        if verbose and stmt.statement.source_text:
+            source = stmt.statement.source_text[:60] + "..." if len(stmt.statement.source_text) > 60 else stmt.statement.source_text
+            click.echo(f"   Source: \"{source}\"")
+
+        click.echo("-" * 80)
+
+    # Show timings in verbose mode
+    if verbose and ctx.stage_timings:
+        click.echo("\nStage timings:")
+        for stage, duration in ctx.stage_timings.items():
+            click.echo(f"  {stage}: {duration:.3f}s")
 
 
 # =============================================================================
