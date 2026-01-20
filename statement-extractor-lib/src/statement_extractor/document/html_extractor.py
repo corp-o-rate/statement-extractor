@@ -75,15 +75,31 @@ def extract_text_from_html(html: str) -> tuple[str, Optional[str]]:
         "promo",
     ]
 
+    # Collect elements to remove first, then decompose
+    # (decomposing while iterating can cause issues)
+    elements_to_remove = []
+
     for element in soup.find_all(class_=True):
-        classes = " ".join(element.get("class", []))
-        if any(pattern in classes.lower() for pattern in non_content_patterns):
-            element.decompose()
+        if element.attrs is None:
+            continue
+        classes = element.get("class", [])
+        if classes:
+            class_str = " ".join(classes).lower()
+            if any(pattern in class_str for pattern in non_content_patterns):
+                elements_to_remove.append(element)
 
     for element in soup.find_all(id=True):
+        if element.attrs is None:
+            continue
         element_id = element.get("id", "")
-        if any(pattern in element_id.lower() for pattern in non_content_patterns):
+        if element_id and any(pattern in element_id.lower() for pattern in non_content_patterns):
+            elements_to_remove.append(element)
+
+    for element in elements_to_remove:
+        try:
             element.decompose()
+        except Exception:
+            pass  # Element may already be decomposed
 
     # Get title
     title = None

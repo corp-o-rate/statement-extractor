@@ -43,16 +43,27 @@ def _configure_logging(verbose: bool) -> None:
         "statement_extractor.plugins.extractors.gliner2",
         "statement_extractor.plugins.splitters",
         "statement_extractor.plugins.labelers",
+        "statement_extractor.plugins.scrapers",
+        "statement_extractor.plugins.scrapers.http",
+        "statement_extractor.plugins.pdf",
+        "statement_extractor.plugins.pdf.pypdf",
+        "statement_extractor.document",
+        "statement_extractor.document.loader",
+        "statement_extractor.document.html_extractor",
+        "statement_extractor.document.pipeline",
+        "statement_extractor.document.chunker",
     ]:
         logging.getLogger(logger_name).setLevel(level)
 
     # Suppress noisy third-party loggers
     for noisy_logger in [
+        "httpcore",
         "httpcore.http11",
         "httpcore.connection",
         "httpx",
         "urllib3",
         "huggingface_hub",
+        "asyncio",
     ]:
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 

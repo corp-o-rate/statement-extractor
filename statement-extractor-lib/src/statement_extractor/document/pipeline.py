@@ -244,12 +244,14 @@ class DocumentPipeline:
         start_time = time.time()
 
         # Create a pipeline config for stages 2-6
+        # Exclude enabled_stages from base config to avoid duplicate keyword argument
+        base_config = {}
+        if self.config.pipeline_config:
+            base_config = self.config.pipeline_config.model_dump(exclude={"enabled_stages"})
         stages_config = PipelineConfig(
             enabled_stages={2, 3, 4, 5, 6},
-            **(self.config.pipeline_config.model_dump()
-               if self.config.pipeline_config else {})
+            **base_config
         )
-        stages_config.enabled_stages = {2, 3, 4, 5, 6}
 
         # Create a combined context with all raw triples
         from ..pipeline.context import PipelineContext

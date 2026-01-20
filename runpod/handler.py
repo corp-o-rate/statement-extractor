@@ -2,6 +2,7 @@
 RunPod Serverless Handler for Statement Extractor
 
 This handler uses the corp-extractor library to extract structured statements from text.
+Supports both direct text input and URL processing.
 """
 
 import asyncio
@@ -21,6 +22,13 @@ from statement_extractor import (
     ScoringConfig,
     StatementExtractor,
 )
+from statement_extractor.document import (
+    DocumentPipeline,
+    DocumentPipelineConfig,
+    URLLoaderConfig,
+)
+from statement_extractor.models.document import ChunkingConfig
+from statement_extractor.pipeline import PipelineConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -90,6 +98,7 @@ CANONICAL_PREDICATES = [
 
 # Global state
 extractor: Optional[StatementExtractor] = None
+document_pipeline: Optional[DocumentPipeline] = None
 result_cache: OrderedDict[str, str] = OrderedDict()
 cache_size_bytes = 0
 inference_lock: Optional[asyncio.Lock] = None
@@ -177,15 +186,123 @@ def extract_sync(
         return extractor.extract_as_json(text, options)
 
 
+def process_url_sync(
+    url: str,
+    use_ocr: bool = False,
+    max_tokens: int = 1000,
+    overlap_tokens: int = 100,
+) -> dict:
+    """
+    Process a URL using the document pipeline.
+
+    Returns a dict with statements and metadata.
+    """
+    global document_pipeline
+
+    # Initialize document pipeline if needed
+    if document_pipeline is None:
+        logger.info("Initializing document pipeline...")
+        pipeline_config = PipelineConfig(
+            # Disable MNLI classifier for speed, use embedding classifier
+            disabled_plugins={"mnli_taxonomy_classifier"},
+        )
+        doc_config = DocumentPipelineConfig(
+            chunking=ChunkingConfig(
+                target_tokens=max_tokens,
+                overlap_tokens=overlap_tokens,
+            ),
+            generate_summary=True,
+            deduplicate_across_chunks=True,
+            pipeline_config=pipeline_config,
+        )
+        document_pipeline = DocumentPipeline(doc_config)
+        logger.info("Document pipeline initialized")
+
+    # Process the URL
+    logger.info(f"Processing URL: {url}")
+    loader_config = URLLoaderConfig(use_ocr=use_ocr)
+
+    # Use asyncio to run the async method
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        ctx = loop.run_until_complete(
+            document_pipeline.process_url(url, loader_config)
+        )
+    finally:
+        loop.close()
+
+    # Convert results to serializable format
+    statements = []
+    for stmt in ctx.labeled_statements:
+        stmt_dict = {
+            "subject": {
+                "text": stmt.subject.entity.text if stmt.subject else "",
+                "type": stmt.subject.entity.type.value if stmt.subject and stmt.subject.entity.type else "UNKNOWN",
+            },
+            "predicate": stmt.statement.predicate if stmt.statement else "",
+            "object": {
+                "text": stmt.object.entity.text if stmt.object else "",
+                "type": stmt.object.entity.type.value if stmt.object and stmt.object.entity.type else "UNKNOWN",
+            },
+            "text": stmt.statement.source_text if stmt.statement else "",
+        }
+        # Add labels if present
+        if stmt.labels:
+            stmt_dict["labels"] = {
+                label.label_type: label.label_value
+                for label in stmt.labels
+            }
+        # Add taxonomy results if present
+        if stmt.taxonomy_results:
+            stmt_dict["taxonomy"] = [
+                {
+                    "taxonomy": tr.taxonomy_name,
+                    "category": tr.category,
+                    "label": tr.label,
+                    "confidence": tr.confidence,
+                }
+                for tr in stmt.taxonomy_results
+            ]
+        statements.append(stmt_dict)
+
+    result = {
+        "statements": statements,
+        "metadata": {
+            "title": ctx.document.metadata.title if ctx.document and ctx.document.metadata else None,
+            "url": url,
+            "chunk_count": ctx.chunk_count,
+            "statement_count": ctx.statement_count,
+            "duplicates_removed": ctx.duplicates_removed,
+        },
+    }
+
+    # Add summary if available
+    if ctx.summary:
+        result["summary"] = ctx.summary
+
+    return result
+
+
 async def handler(job):
     """
     Async RunPod serverless handler function.
 
-    Expected input format:
+    Expected input format for text:
     {
         "input": {
             "text": "Your text here",
             "format": "json"  // optional: "json" (default) or "xml"
+        }
+    }
+
+    Expected input format for URL:
+    {
+        "input": {
+            "url": "https://example.com/article",
+            "useOcr": false,  // optional: use OCR for PDF
+            "maxTokens": 1000,  // optional: tokens per chunk
+            "overlapTokens": 100  // optional: overlap between chunks
         }
     }
     """
@@ -200,12 +317,17 @@ async def handler(job):
 
     job_input = job.get("input", {})
 
+    # Check if this is a URL request
+    url = job_input.get("url")
+    if url:
+        return await handle_url_request(job_input, url)
+
     # Get text from input
     text = job_input.get("text") or job_input.get("prompt", "")
 
     if not text:
-        logger.error("No text provided")
-        return {"error": "No text provided. Send {\"input\": {\"text\": \"your text here\"}}"}
+        logger.error("No text or URL provided")
+        return {"error": "No text or URL provided. Send {\"input\": {\"text\": \"...\"}} or {\"input\": {\"url\": \"...\"}}"}
 
     # Get output format
     output_format = job_input.get("format", OUTPUT_FORMAT).lower()
@@ -257,6 +379,53 @@ async def handler(job):
 
     except Exception as e:
         logger.exception("Error during extraction")
+        return {"error": str(e)}
+
+
+async def handle_url_request(job_input: dict, url: str):
+    """Handle URL processing request."""
+    global inference_lock
+
+    # Get options
+    use_ocr = job_input.get("useOcr", False)
+    max_tokens = int(job_input.get("maxTokens", 1000))
+    overlap_tokens = int(job_input.get("overlapTokens", 100))
+
+    logger.info(f"Processing URL: {url}, OCR: {use_ocr}, maxTokens: {max_tokens}")
+
+    # Check cache
+    cache_key = get_cache_key(url, "url", use_ocr, max_tokens / 10000)
+    if cache_key in result_cache:
+        result_cache.move_to_end(cache_key)
+        logger.info(f"Cache hit for URL: {cache_key[:16]}...")
+        result = json.loads(result_cache[cache_key])
+        result["cached"] = True
+        return result
+
+    try:
+        start_time = time.time()
+
+        # Run URL processing with lock
+        async with inference_lock:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                process_url_sync,
+                url,
+                use_ocr,
+                max_tokens,
+                overlap_tokens,
+            )
+
+        elapsed = time.time() - start_time
+        logger.info(f"URL processing complete in {elapsed:.2f}s, statements: {len(result.get('statements', []))}")
+
+        # Cache the result
+        cache_result(cache_key, json.dumps(result))
+
+        return result
+
+    except Exception as e:
+        logger.exception(f"Error processing URL: {url}")
         return {"error": str(e)}
 
 

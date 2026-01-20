@@ -30,10 +30,21 @@ uv run corp-extractor plugins list           # List registered plugins
 # Company database commands
 uv run corp-extractor db status              # Show database stats
 uv run corp-extractor db search "Microsoft"  # Search for company
-uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF
-uv run corp-extractor db import-sec          # Import SEC Edgar
+uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF (~3M records)
+uv run corp-extractor db import-sec --download                  # Import SEC bulk (~100K+ filers)
 uv run corp-extractor db import-companies-house --download --limit 10000  # Import UK companies
 uv run corp-extractor db import-wikidata --limit 5000  # Import Wikidata
+uv run corp-extractor db upload              # Upload with lite/compressed variants
+uv run corp-extractor db download            # Download lite version (default)
+uv run corp-extractor db download --full     # Download full version
+uv run corp-extractor db create-lite companies.db  # Create lite version locally
+uv run corp-extractor db compress companies.db     # Compress with gzip
+
+# Document processing commands
+uv run corp-extractor document process article.txt
+uv run corp-extractor document process https://example.com/article
+uv run corp-extractor document process report.pdf --use-ocr
+uv run corp-extractor document chunk article.txt --max-tokens 500
 ```
 
 ## Architecture
@@ -89,12 +100,33 @@ The `database/` module provides company embedding storage and search:
 - `database/models.py` - `CompanyRecord`, `CompanyMatch`, `DatabaseStats` Pydantic models
 - `database/store.py` - `CompanyDatabase` SQLite+sqlite-vec storage
 - `database/embeddings.py` - `CompanyEmbedder` using google/embeddinggemma-300m
-- `database/hub.py` - HuggingFace Hub upload/download
+- `database/hub.py` - HuggingFace Hub upload/download with lite/compressed variants
 - `database/importers/` - Data source importers:
-  - `gleif.py` - GLEIF LEI data (XML/JSON)
-  - `sec_edgar.py` - SEC company tickers
-  - `companies_house.py` - UK Companies House bulk data
+  - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records)
+  - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers, not just tickers)
+  - `companies_house.py` - UK Companies House bulk data (~5M records)
   - `wikidata.py` - Wikidata SPARQL queries
+
+**Database variants:**
+- `companies.db` - Full database with complete record metadata
+- `companies-lite.db` - Lite version without record data (default download, smaller)
+- `.gz` compressed versions for efficient transfer
+
+### Document Processing Module
+
+The `document/` module provides document-level extraction:
+
+- `document/chunker.py` - Token-based text chunking with overlap
+- `document/context.py` - `DocumentContext` for tracking extraction state
+- `document/deduplicator.py` - Cross-chunk statement deduplication
+- `document/html_extractor.py` - HTML content extraction (Readability-style)
+- `document/loader.py` - URL and file loading with content type detection
+- `document/pipeline.py` - `DocumentPipeline` orchestrator
+- `document/summarizer.py` - Document summarization
+
+**PDF and Scraper Plugins:**
+- `plugins/pdf/pypdf.py` - PDF parsing with PyMuPDF (optional OCR with pytesseract)
+- `plugins/scrapers/http.py` - HTTP/URL scraping with httpx
 
 ### Data Models Flow
 

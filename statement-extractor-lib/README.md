@@ -9,9 +9,11 @@ Extract structured subject-predicate-object statements from unstructured text us
 ## Features
 
 - **6-Stage Pipeline** *(v0.5.0)*: Modular plugin-based architecture for full entity resolution
+- **Document Processing** *(v0.7.0)*: Process documents, URLs, and PDFs with chunking and deduplication
+- **Company Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (~100K+ SEC, ~3M GLEIF, ~5M UK companies)
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
-- **Entity Qualification** *(v0.5.0)*: Adds roles, identifiers (LEI, ticker, company numbers) via external APIs
+- **Entity Qualification** *(v0.5.0)*: Adds roles, identifiers (LEI, ticker, company numbers) via embedding database
 - **Canonicalization** *(v0.5.0)*: Resolves entities to canonical forms with fuzzy matching
 - **Statement Labeling** *(v0.5.0)*: Sentiment analysis, relation type classification, confidence scoring
 - **GLiNER2 Integration** *(v0.4.0)*: Uses GLiNER2 (205M params) for entity recognition and relation extraction
@@ -19,7 +21,7 @@ Extract structured subject-predicate-object statements from unstructured text us
 - **Beam Merging**: Combines top beams for better coverage instead of picking one
 - **Embedding-based Dedup**: Uses semantic similarity to detect near-duplicate predicates
 - **Predicate Taxonomies**: Normalize predicates to canonical forms via embeddings
-- **Command Line Interface**: Full-featured CLI with `split`, `pipeline`, and `plugins` commands
+- **Command Line Interface**: Full-featured CLI with `split`, `pipeline`, `document`, and `db` commands
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
 
 ## Installation
@@ -316,9 +318,7 @@ config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
 
 **Qualifiers (Stage 3):**
 - `person_qualifier` - PERSON → role, org (uses Gemma3)
-- `gleif_qualifier` - ORG → LEI, jurisdiction (GLEIF API)
-- `companies_house_qualifier` - ORG → UK company number
-- `sec_edgar_qualifier` - ORG → SEC CIK, ticker
+- `embedding_company_qualifier` - ORG → LEI, CIK, company number via embedding database (replaces API-based qualifiers)
 
 **Canonicalizers (Stage 4):**
 - `organization_canonicalizer` - ORG canonical names
@@ -342,7 +342,7 @@ v0.6.0 introduces a **company embedding database** for fast entity qualification
 | Source | Records | Identifier |
 |--------|---------|------------|
 | GLEIF | ~3.2M | LEI (Legal Entity Identifier) |
-| SEC Edgar | ~10K | CIK (Central Index Key) |
+| SEC Edgar | ~100K+ | CIK (Central Index Key) - all filers, not just tickers |
 | Companies House | ~5M | UK Company Number |
 | Wikidata | Variable | Wikidata QID |
 
@@ -351,7 +351,7 @@ v0.6.0 introduces a **company embedding database** for fast entity qualification
 ```bash
 # Import from authoritative sources
 corp-extractor db import-gleif --download
-corp-extractor db import-sec
+corp-extractor db import-sec --download      # Bulk submissions.zip (~100K+ filers)
 corp-extractor db import-companies-house --download
 corp-extractor db import-wikidata --limit 50000
 
@@ -379,15 +379,90 @@ for stmt in ctx.labeled_statements:
 ### Publishing to HuggingFace
 
 ```bash
-# Upload database
+# Upload database with all variants (full, lite, compressed)
 export HF_TOKEN="hf_..."
-corp-extractor db upload ~/.cache/corp-extractor/companies.db
+corp-extractor db upload                     # Uses default cache location
+corp-extractor db upload companies.db        # Or specify path
+corp-extractor db upload --no-lite           # Skip lite version
+corp-extractor db upload --no-compress       # Skip compressed versions
 
-# Download pre-built database
-corp-extractor db download
+# Download pre-built database (lite version by default)
+corp-extractor db download                   # Lite version (smaller, faster)
+corp-extractor db download --full            # Full version with all metadata
+
+# Local database management
+corp-extractor db create-lite companies.db   # Create lite version
+corp-extractor db compress companies.db      # Compress with gzip
 ```
 
 See [COMPANY_DB.md](../COMPANY_DB.md) for complete build and publish instructions.
+
+## New in v0.7.0: Document Processing
+
+v0.7.0 introduces **document-level processing** for handling files, URLs, and PDFs with automatic chunking, deduplication, and citation tracking.
+
+### Document CLI
+
+```bash
+# Process local files
+corp-extractor document process article.txt
+corp-extractor document process report.txt --title "Annual Report" --year 2024
+
+# Process URLs (web pages and PDFs)
+corp-extractor document process https://example.com/article
+corp-extractor document process https://example.com/report.pdf --use-ocr
+
+# Configure chunking
+corp-extractor document process article.txt --max-tokens 500 --overlap 50
+
+# Preview chunking without extraction
+corp-extractor document chunk article.txt --max-tokens 500
+```
+
+### Document Python API
+
+```python
+from statement_extractor.document import DocumentPipeline, DocumentPipelineConfig, Document
+from statement_extractor.models.document import ChunkingConfig
+
+# Configure document processing
+config = DocumentPipelineConfig(
+    chunking=ChunkingConfig(target_tokens=1000, overlap_tokens=100),
+    generate_summary=True,
+    deduplicate_across_chunks=True,
+)
+
+pipeline = DocumentPipeline(config)
+
+# Process text
+document = Document.from_text("Your long document text...", title="My Document")
+ctx = pipeline.process(document)
+
+# Process URL (async)
+ctx = await pipeline.process_url("https://example.com/article")
+
+# Access results
+print(f"Chunks: {ctx.chunk_count}")
+print(f"Statements: {ctx.statement_count}")
+print(f"Duplicates removed: {ctx.duplicates_removed}")
+
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn} --[{stmt.statement.predicate}]--> {stmt.object_fqn}")
+    if stmt.citation:
+        print(f"  Citation: {stmt.citation}")
+```
+
+### PDF Processing
+
+PDFs are automatically parsed using PyMuPDF. For scanned PDFs, use OCR:
+
+```bash
+# Install OCR dependencies
+pip install "corp-extractor[ocr]"
+
+# Process with OCR
+corp-extractor document process scanned.pdf --use-ocr
+```
 
 ## New in v0.4.0: GLiNER2 Integration
 

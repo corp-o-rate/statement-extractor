@@ -134,7 +134,10 @@ class DocumentSummarizer:
                 stop=["\n\n\n", "---"],
             )
             summary = summary.strip()
-            logger.info(f"Generated summary: {len(summary)} chars")
+            logger.info(f"Generated summary ({len(summary)} chars):")
+            # Log summary with indentation for readability
+            for line in summary.split("\n"):
+                logger.info(f"  {line}")
             return summary
 
         except Exception as e:

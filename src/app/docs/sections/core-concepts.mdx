@@ -497,13 +497,13 @@ The extraction stage uses GLiNER2 to extract relations and assign entity types, 
 Qualification plugins add context and external identifiers to entities:
 
 - **PersonQualifier**: Adds role and organization for PERSON entities using Gemma3
-- **GLEIFQualifier**: Looks up Legal Entity Identifier (LEI) for organizations
-- **CompaniesHouseQualifier**: Adds UK company registration numbers
-- **SECEdgarQualifier**: Adds SEC CIK and ticker symbols for US public companies
+- **EmbeddingCompanyQualifier**: Looks up company identifiers (LEI, CIK, UK company numbers) using the local embedding database
 
 The output is `QualifiedEntity` with an `EntityQualifiers` object containing:
 - Semantic qualifiers: `role`, `org`, `jurisdiction`
 - External identifiers: `lei`, `ch_number`, `sec_cik`, `ticker`, etc.
+
+**Note:** The embedding-based company qualifier replaces the older API-based qualifiers (GLEIF, Companies House, SEC Edgar APIs) for faster, offline entity resolution.
 
 #### Stage 4: Canonicalization
 
@@ -555,8 +555,151 @@ from statement_extractor.pipeline import PipelineConfig, ExtractionPipeline
 
 # Run with specific plugins disabled
 config = PipelineConfig(
-    disabled_plugins={"sec_edgar_qualifier", "companies_house_qualifier"}
+    disabled_plugins={"mnli_taxonomy_classifier"}  # Use embedding classifier instead
 )
 pipeline = ExtractionPipeline(config)
 ctx = pipeline.process(text)
 ```
+
+---
+
+### Document Processing
+
+<a id="document-processing"></a>
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.7.0</span>
+
+Version 0.7.0 introduces **document-level processing** for handling files, URLs, and PDFs with automatic chunking, deduplication, and citation tracking.
+
+#### Document Pipeline
+
+```mermaid
+flowchart LR
+    A[Document/URL] --> B[Loader]
+    B --> C[Chunker]
+    C --> D[Pipeline per Chunk]
+    D --> E[Deduplicator]
+    E --> F[Summarizer]
+    F --> G[Results + Citations]
+```
+
+The document pipeline:
+1. **Loads** content from files, URLs, or PDFs
+2. **Chunks** text into optimal-sized segments for the extraction model
+3. **Processes** each chunk through the 6-stage extraction pipeline
+4. **Deduplicates** statements across chunks
+5. **Generates** optional document summary
+6. **Tracks** citations back to source chunks
+
+#### Chunking Strategy
+
+Documents are split into chunks based on token count with configurable overlap:
+
+<table>
+  <thead>
+    <tr>
+      <th>Parameter</th>
+      <th>Default</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>target_tokens</code></td>
+      <td>1000</td>
+      <td>Target tokens per chunk</td>
+    </tr>
+    <tr>
+      <td><code>overlap_tokens</code></td>
+      <td>100</td>
+      <td>Token overlap between consecutive chunks</td>
+    </tr>
+    <tr>
+      <td><code>respect_sentences</code></td>
+      <td>true</td>
+      <td>Avoid splitting mid-sentence</td>
+    </tr>
+  </tbody>
+</table>
+
+#### URL and PDF Support
+
+The document pipeline can fetch and process content from URLs:
+
+- **Web pages**: HTML content is extracted using Readability-style parsing
+- **PDFs**: Parsed using PyMuPDF with optional OCR for scanned documents
+
+```python
+from statement_extractor.document import DocumentPipeline
+
+pipeline = DocumentPipeline()
+
+# Process a web page
+ctx = await pipeline.process_url("https://example.com/article")
+
+# Process a PDF with OCR
+from statement_extractor.document import URLLoaderConfig
+config = URLLoaderConfig(use_ocr=True)
+ctx = await pipeline.process_url("https://example.com/report.pdf", config)
+```
+
+#### Cross-Chunk Deduplication
+
+When processing long documents, the same fact may appear in multiple chunks. The deduplicator uses embedding similarity to identify and merge duplicate statements, keeping the highest-confidence version with proper citation tracking.
+
+---
+
+### Company Embedding Database
+
+<a id="company-database"></a>
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.6.0</span>
+
+Version 0.6.0 introduces a **company embedding database** for fast entity qualification using vector similarity search.
+
+#### Data Sources
+
+<table>
+  <thead>
+    <tr>
+      <th>Source</th>
+      <th>Records</th>
+      <th>Identifier</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>GLEIF</td>
+      <td>~3.2M</td>
+      <td>LEI (Legal Entity Identifier)</td>
+    </tr>
+    <tr>
+      <td>SEC Edgar</td>
+      <td>~100K+</td>
+      <td>CIK (Central Index Key)</td>
+    </tr>
+    <tr>
+      <td>Companies House</td>
+      <td>~5M</td>
+      <td>UK Company Number</td>
+    </tr>
+    <tr>
+      <td>Wikidata</td>
+      <td>Variable</td>
+      <td>QID</td>
+    </tr>
+  </tbody>
+</table>
+
+#### How It Works
+
+1. **Embedding Generation**: Company names are embedded using EmbeddingGemma (300M params)
+2. **Vector Search**: sqlite-vec enables fast similarity search across millions of records
+3. **Qualification**: When an ORG entity is found, the database is searched for matching companies
+4. **Identifier Resolution**: Matched companies provide LEI, CIK, company numbers, etc.
+
+#### Database Variants
+
+- **companies-lite.db**: Core fields and embeddings only (default download, smaller)
+- **companies.db**: Full database with complete source metadata
+- **\*.db.gz**: Gzip compressed versions for faster downloads

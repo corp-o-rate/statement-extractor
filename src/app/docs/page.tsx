@@ -32,13 +32,13 @@ const tocItems: TocItem[] = [
     label: 'Command Line Interface',
     level: 2,
     children: [
-      { id: 'uvx', label: 'Quick Run with uvx', level: 3 },
-      { id: 'cli-installation', label: 'Installation', level: 3 },
-      { id: 'cli-usage', label: 'Basic Usage', level: 3 },
+      { id: 'commands-overview', label: 'Commands Overview', level: 3 },
+      { id: 'split-command', label: 'Split Command', level: 3 },
+      { id: 'pipeline-command', label: 'Pipeline Command', level: 3 },
+      { id: 'document-commands', label: 'Document Command', level: 3 },
+      { id: 'db-commands', label: 'Database Commands', level: 3 },
+      { id: 'plugins-command', label: 'Plugins Command', level: 3 },
       { id: 'cli-output', label: 'Output Formats', level: 3 },
-      { id: 'cli-quality', label: 'Quality Options', level: 3 },
-      { id: 'cli-taxonomy', label: 'Predicate Taxonomy', level: 3 },
-      { id: 'cli-reference', label: 'All Options', level: 3 },
     ],
   },
   {
@@ -49,6 +49,10 @@ const tocItems: TocItem[] = [
       { id: 'statement-extraction', label: 'Statement Extraction', level: 3 },
       { id: 'diverse-beam-search', label: 'Diverse Beam Search', level: 3 },
       { id: 'quality-scoring', label: 'Quality Scoring', level: 3 },
+      { id: 'gliner2-integration', label: 'GLiNER2 Integration', level: 3 },
+      { id: 'pipeline-architecture', label: 'Pipeline Architecture', level: 3 },
+      { id: 'document-processing', label: 'Document Processing', level: 3 },
+      { id: 'company-database', label: 'Company Database', level: 3 },
     ],
   },
   {
@@ -157,18 +161,18 @@ export default function DocsPage() {
             {/* Hero */}
             <div className="not-prose mb-12">
               <span className="text-red-600 text-xs font-bold tracking-widest uppercase">
-                corp-extractor v0.2.5
+                corp-extractor v0.7.0
               </span>
               <h1 className="text-4xl font-black mt-2 mb-4">
                 Statement Extractor Documentation
               </h1>
               <p className="text-xl text-gray-600 max-w-2xl">
                 Extract structured subject-predicate-object statements from unstructured text
-                using the T5-Gemma 2 model with quality scoring and semantic deduplication.
+                using T5-Gemma 2 and GLiNER2 models with document processing, entity resolution, and taxonomy classification.
               </p>
 
               {/* Quick links */}
-              <div className="grid sm:grid-cols-4 gap-4 mt-8">
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
                 <a
                   href="#getting-started"
                   className="flex items-center gap-3 p-4 border-2 border-gray-200 hover:border-red-500 transition-colors group"
@@ -186,7 +190,17 @@ export default function DocsPage() {
                   <Terminal className="w-5 h-5 text-gray-400 group-hover:text-red-500" />
                   <div>
                     <div className="font-semibold">CLI</div>
-                    <div className="text-sm text-gray-500">Command line usage</div>
+                    <div className="text-sm text-gray-500">Command line & documents</div>
+                  </div>
+                </a>
+                <a
+                  href="#pipeline-architecture"
+                  className="flex items-center gap-3 p-4 border-2 border-gray-200 hover:border-red-500 transition-colors group"
+                >
+                  <Server className="w-5 h-5 text-gray-400 group-hover:text-red-500" />
+                  <div>
+                    <div className="font-semibold">6-Stage Pipeline</div>
+                    <div className="text-sm text-gray-500">Entity resolution & taxonomy</div>
                   </div>
                 </a>
                 <a
@@ -197,16 +211,6 @@ export default function DocsPage() {
                   <div>
                     <div className="font-semibold">API Reference</div>
                     <div className="text-sm text-gray-500">Functions & classes</div>
-                  </div>
-                </a>
-                <a
-                  href="#examples"
-                  className="flex items-center gap-3 p-4 border-2 border-gray-200 hover:border-red-500 transition-colors group"
-                >
-                  <Boxes className="w-5 h-5 text-gray-400 group-hover:text-red-500" />
-                  <div>
-                    <div className="font-semibold">Examples</div>
-                    <div className="text-sm text-gray-500">Code samples & patterns</div>
                   </div>
                 </a>
               </div>

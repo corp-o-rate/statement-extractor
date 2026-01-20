@@ -236,14 +236,23 @@ class URLLoader:
             text, metadata = extract_article_content(html)
             title = metadata.get("title")
             author = metadata.get("author")
+            # Log extracted metadata
+            logger.debug(f"Extracted metadata: {metadata}")
         else:
             text, title = extract_text_from_html(html)
             author = None
+            metadata = {}
 
         if not text or len(text.strip()) < 50:
             raise ValueError("No meaningful content extracted from HTML")
 
-        logger.info(f"Extracted {len(text)} chars from HTML (title: {title})")
+        logger.info(f"Extracted {len(text)} chars from HTML")
+        if title:
+            logger.info(f"  Title: {title}")
+        if author:
+            logger.info(f"  Author: {author}")
+        if metadata.get("published_date"):
+            logger.info(f"  Published: {metadata.get('published_date')}")
 
         # Create Document using from_pages since from_text forces source_type="text"
         kwargs = {
