@@ -333,6 +333,62 @@ config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
 
 Taxonomy classifiers return **multiple labels** per statement above the confidence threshold.
 
+## New in v0.6.0: Company Embedding Database
+
+v0.6.0 introduces a **company embedding database** for fast entity qualification using vector similarity search.
+
+### Data Sources
+
+| Source | Records | Identifier |
+|--------|---------|------------|
+| GLEIF | ~3.2M | LEI (Legal Entity Identifier) |
+| SEC Edgar | ~10K | CIK (Central Index Key) |
+| Companies House | ~5M | UK Company Number |
+| Wikidata | Variable | Wikidata QID |
+
+### Building the Database
+
+```bash
+# Import from authoritative sources
+corp-extractor db import-gleif --download
+corp-extractor db import-sec
+corp-extractor db import-companies-house --download
+corp-extractor db import-wikidata --limit 50000
+
+# Check status
+corp-extractor db status
+
+# Search for a company
+corp-extractor db search "Microsoft"
+```
+
+### Using in Pipeline
+
+The database is automatically used by the `embedding_company_qualifier` plugin for Stage 3 (Qualification):
+
+```python
+from statement_extractor.pipeline import ExtractionPipeline
+
+pipeline = ExtractionPipeline()
+ctx = pipeline.process("Microsoft acquired Activision Blizzard.")
+
+for stmt in ctx.labeled_statements:
+    print(f"{stmt.subject_fqn}")  # e.g., "Microsoft (sec_edgar:0000789019)"
+```
+
+### Publishing to HuggingFace
+
+```bash
+# Upload database
+export HF_TOKEN="hf_..."
+corp-extractor db upload ~/.cache/corp-extractor/companies.db
+
+# Download pre-built database
+corp-extractor db download
+```
+
+See [COMPANY_DB.md](../COMPANY_DB.md) for complete build and publish instructions.
+
 ## New in v0.4.0: GLiNER2 Integration
 
 v0.4.0 replaces spaCy with **GLiNER2** (205M params) for entity recognition and relation extraction. GLiNER2 is a unified model that handles NER, text classification, structured data extraction, and relation extraction with CPU-optimized inference.

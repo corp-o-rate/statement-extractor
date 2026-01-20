@@ -6,6 +6,7 @@ A web demo for the T5-Gemma 2 statement extraction model from [corp-o-rate.com](
 
 - **Statement Extraction**: Transform unstructured text into structured subject-predicate-object triples
 - **6-Stage Pipeline** *(v0.5.0)*: Plugin-based architecture with entity qualification, canonicalization, labeling, and taxonomy classification
+- **Company Database** *(v0.6.0)*: Embedding-based entity matching against GLEIF, SEC Edgar, Companies House, and Wikidata (~8M+ companies)
 - **Entity Recognition**: Automatic identification of entity types (ORG, PERSON, GPE, EVENT, etc.)
 - **Relationship Graph**: Interactive D3.js visualization of entity relationships
 - **Coreference Resolution**: Pronouns are resolved to their referenced entities
@@ -89,6 +90,26 @@ for stmt in ctx.labeled_statements:
 ```
 
 See [statement-extractor-lib/README.md](statement-extractor-lib/README.md) for full pipeline documentation.
+
+### Company Database (v0.6.0)
+
+Build a company embedding database for fast entity qualification:
+
+```bash
+# Import from authoritative sources
+corp-extractor db import-gleif --download      # 3.2M global companies (LEI)
+corp-extractor db import-sec                   # 10K US public companies (CIK)
+corp-extractor db import-companies-house --download  # 5M UK companies
+corp-extractor db import-wikidata --limit 50000  # Notable companies
+
+# Search
+corp-extractor db search "Microsoft"
+
+# Download pre-built database from HuggingFace
+corp-extractor db download
+```
+
+See [COMPANY_DB.md](COMPANY_DB.md) for complete build and publish instructions.
 
 ### Direct Model Access
 

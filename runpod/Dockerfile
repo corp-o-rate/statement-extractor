@@ -1,6 +1,10 @@
 # RunPod Serverless Dockerfile for Statement Extractor
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
+# HuggingFace token for gated models (pass with --build-arg HF_TOKEN=...)
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
+
 # Set working directory
 WORKDIR /app
 
@@ -28,10 +32,15 @@ RUN pip install --no-cache-dir \
 ENV CMAKE_ARGS="-DGGML_CUDA=on"
 RUN pip install --no-cache-dir llama-cpp-python
 
-# Pre-download embedding model (downloads on CPU during build, will use GPU at runtime)
+# Pre-download embedding models (downloads on CPU during build, will use GPU at runtime)
 RUN python -c "from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('sentence-transformers/paraphrase-MiniLM-L6-v2'); \
-    print('Embedding model downloaded')"
+    print('MiniLM embedding model downloaded')"
+
+# Pre-download EmbeddingGemma model for taxonomy classification
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+    model = SentenceTransformer('google/embeddinggemma-300m'); \
+    print('EmbeddingGemma-300m model downloaded')"
 
 # Pre-download GLiNER2 model for faster cold starts
 RUN python -c "from gliner2 import GLiNER2; \

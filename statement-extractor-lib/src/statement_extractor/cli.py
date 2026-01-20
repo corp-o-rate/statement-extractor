@@ -636,6 +636,492 @@ def _load_all_plugins():
 
 
 # =============================================================================
+# Database commands
+# =============================================================================
+
+@main.group("db")
+def db_cmd():
+    """
+    Manage company embedding database.
+
+    \b
+    Commands:
+        import-gleif    Import GLEIF LEI data
+        import-sec      Import SEC Edgar company data
+        status          Show database status
+        search          Search for a company
+        download        Download database from HuggingFace
+        upload          Upload database to HuggingFace
+
+    \b
+    Examples:
+        corp-extractor db import-gleif /path/to/lei-records.json
+        corp-extractor db import-sec
+        corp-extractor db status
+        corp-extractor db search "Apple Inc"
+    """
+    pass
+
+
+@db_cmd.command("gleif-info")
+def db_gleif_info():
+    """
+    Show information about the latest available GLEIF data file.
+
+    \b
+    Examples:
+        corp-extractor db gleif-info
+    """
+    from .database.importers import GleifImporter
+
+    importer = GleifImporter()
+
+    try:
+        info = importer.get_latest_file_info()
+        record_count = info.get('record_count')
+
+        click.echo("\nLatest GLEIF Data File")
+        click.echo("=" * 40)
+        click.echo(f"File ID: {info['id']}")
+        click.echo(f"Publish Date: {info['publish_date']}")
+        click.echo(f"Record Count: {record_count:,}" if record_count else "Record Count: unknown")
+
+        delta = info.get("delta_from_last_file", {})
+        if delta:
+            click.echo(f"\nChanges from previous file:")
+            if delta.get('new'):
+                click.echo(f"  New: {delta.get('new'):,}")
+            if delta.get('updated'):
+                click.echo(f"  Updated: {delta.get('updated'):,}")
+            if delta.get('retired'):
+                click.echo(f"  Retired: {delta.get('retired'):,}")
+
+    except Exception as e:
+        raise click.ClickException(f"Failed to get GLEIF info: {e}")
+
+
+@db_cmd.command("import-gleif")
+@click.argument("file_path", type=click.Path(exists=True), required=False)
+@click.option("--download", is_flag=True, help="Download latest GLEIF file before importing")
+@click.option("--force", is_flag=True, help="Force re-download even if cached")
+@click.option("--db", "db_path", type=click.Path(), help="Database path (default: ~/.cache/corp-extractor/companies.db)")
+@click.option("--limit", type=int, help="Limit number of records to import")
+@click.option("--batch-size", type=int, default=50000, help="Batch size for commits (default: 50000)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_path: Optional[str], limit: Optional[int], batch_size: int, verbose: bool):
+    """
+    Import GLEIF LEI data into the company database.
+
+    If no file path is provided and --download is set, downloads the latest
+    GLEIF data file automatically. Downloaded files are cached and reused
+    unless --force is specified.
+
+    \b
+    Examples:
+        corp-extractor db import-gleif /path/to/lei-records.xml
+        corp-extractor db import-gleif --download
+        corp-extractor db import-gleif --download --limit 10000
+        corp-extractor db import-gleif --download --force  # Re-download
+    """
+    _configure_logging(verbose)
+
+    from .database import CompanyDatabase, CompanyEmbedder
+    from .database.importers import GleifImporter
+
+    importer = GleifImporter()
+
+    # Handle file path
+    if file_path is None:
+        if not download:
+            raise click.UsageError("Either provide a file path or use --download to fetch the latest GLEIF data")
+        click.echo("Downloading latest GLEIF data...", err=True)
+        file_path = str(importer.download_latest(force=force))
+    elif download:
+        click.echo("Downloading latest GLEIF data (ignoring provided file path)...", err=True)
+        file_path = str(importer.download_latest(force=force))
+
+    click.echo(f"Importing GLEIF data from {file_path}...", err=True)
+
+    # Initialize components
+    embedder = CompanyEmbedder()
+    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+
+    # Import records in batches
+    records = []
+    count = 0
+
+    for record in importer.import_from_file(file_path, limit=limit):
+        records.append(record)
+
+        if len(records) >= batch_size:
+            # Embed and insert batch
+            names = [r.embedding_name for r in records]
+            embeddings = embedder.embed_batch(names)
+            database.insert_batch(records, embeddings)
+            count += len(records)
+            click.echo(f"Imported {count} records...", err=True)
+            records = []
+
+    # Final batch
+    if records:
+        names = [r.embedding_name for r in records]
+        embeddings = embedder.embed_batch(names)
+        database.insert_batch(records, embeddings)
+        count += len(records)
+
+    click.echo(f"\nImported {count} GLEIF records successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("import-sec")
+@click.option("--file", "file_path", type=click.Path(exists=True), help="Local SEC tickers JSON file")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--limit", type=int, help="Limit number of records")
+@click.option("--batch-size", type=int, default=1000, help="Batch size")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_sec(file_path: Optional[str], db_path: Optional[str], limit: Optional[int], batch_size: int, verbose: bool):
+    """
+    Import SEC Edgar company data into the company database.
+
+    Downloads from SEC website if no file provided.
+
+    \b
+    Examples:
+        corp-extractor db import-sec
+        corp-extractor db import-sec --file /path/to/company_tickers.json
+    """
+    _configure_logging(verbose)
+
+    from .database import CompanyDatabase, CompanyEmbedder
+    from .database.importers import SecEdgarImporter
+
+    click.echo("Importing SEC Edgar data...", err=True)
+
+    # Initialize components
+    embedder = CompanyEmbedder()
+    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    importer = SecEdgarImporter()
+
+    # Get records
+    if file_path:
+        record_iter = importer.import_from_file(file_path, limit=limit)
+    else:
+        record_iter = importer.import_from_url(limit=limit)
+
+    # Import records in batches
+    records = []
+    count = 0
+
+    for record in record_iter:
+        records.append(record)
+
+        if len(records) >= batch_size:
+            names = [r.embedding_name for r in records]
+            embeddings = embedder.embed_batch(names)
+            database.insert_batch(records, embeddings)
+            count += len(records)
+            click.echo(f"Imported {count} records...", err=True)
+            records = []
+
+    # Final batch
+    if records:
+        names = [r.embedding_name for r in records]
+        embeddings = embedder.embed_batch(names)
+        database.insert_batch(records, embeddings)
+        count += len(records)
+
+    click.echo(f"\nImported {count} SEC Edgar records successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("import-wikidata")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--limit", type=int, help="Limit number of records")
+@click.option("--batch-size", type=int, default=5000, help="Batch size for commits (default: 5000)")
+@click.option("--notable-only/--all", default=True, help="Only import notable companies with tickers/LEI (default: notable-only)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size: int, notable_only: bool, verbose: bool):
+    """
+    Import company data from Wikidata via SPARQL.
+
+    Queries Wikidata for companies with stock tickers, LEI codes, etc.
+    Uses the public Wikidata Query Service endpoint.
+
+    \b
+    Examples:
+        corp-extractor db import-wikidata
+        corp-extractor db import-wikidata --limit 10000
+        corp-extractor db import-wikidata --all  # Include all companies
+    """
+    _configure_logging(verbose)
+
+    from .database import CompanyDatabase, CompanyEmbedder
+    from .database.importers import WikidataImporter
+
+    click.echo("Importing Wikidata company data via SPARQL...", err=True)
+
+    # Initialize components
+    embedder = CompanyEmbedder()
+    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    importer = WikidataImporter()
+
+    # Import records in batches
+    records = []
+    count = 0
+
+    for record in importer.import_from_sparql(limit=limit, notable_only=notable_only):
+        records.append(record)
+
+        if len(records) >= batch_size:
+            names = [r.embedding_name for r in records]
+            embeddings = embedder.embed_batch(names)
+            database.insert_batch(records, embeddings)
+            count += len(records)
+            click.echo(f"Imported {count} records...", err=True)
+            records = []
+
+    # Final batch
+    if records:
+        names = [r.embedding_name for r in records]
+        embeddings = embedder.embed_batch(names)
+        database.insert_batch(records, embeddings)
+        count += len(records)
+
+    click.echo(f"\nImported {count} Wikidata records successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("import-companies-house")
+@click.option("--download", is_flag=True, help="Download bulk data file (free, no API key needed)")
+@click.option("--force", is_flag=True, help="Force re-download even if cached")
+@click.option("--file", "file_path", type=click.Path(exists=True), help="Local Companies House CSV/JSON file")
+@click.option("--search", "search_terms", type=str, help="Comma-separated search terms (requires API key)")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--limit", type=int, help="Limit number of records")
+@click.option("--batch-size", type=int, default=50000, help="Batch size for commits (default: 50000)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_companies_house(
+    download: bool,
+    force: bool,
+    file_path: Optional[str],
+    search_terms: Optional[str],
+    db_path: Optional[str],
+    limit: Optional[int],
+    batch_size: int,
+    verbose: bool,
+):
+    """
+    Import UK Companies House data into the company database.
+
+    \b
+    Options:
+    --download    Download free bulk data (all UK companies, ~5M records)
+    --file        Import from local CSV/JSON file
+    --search      Search via API (requires COMPANIES_HOUSE_API_KEY)
+
+    \b
+    Examples:
+        corp-extractor db import-companies-house --download
+        corp-extractor db import-companies-house --download --limit 100000
+        corp-extractor db import-companies-house --file /path/to/companies.csv
+        corp-extractor db import-companies-house --search "bank,insurance"
+    """
+    _configure_logging(verbose)
+
+    from .database import CompanyDatabase, CompanyEmbedder
+    from .database.importers import CompaniesHouseImporter
+
+    if not file_path and not search_terms and not download:
+        raise click.UsageError("Either --download, --file, or --search is required")
+
+    click.echo("Importing Companies House data...", err=True)
+
+    # Initialize components
+    embedder = CompanyEmbedder()
+    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    importer = CompaniesHouseImporter()
+
+    # Get records
+    if download:
+        # Download bulk data file
+        csv_path = importer.download_bulk_data(force=force)
+        click.echo(f"Using bulk data file: {csv_path}", err=True)
+        record_iter = importer.import_from_file(csv_path, limit=limit)
+    elif file_path:
+        record_iter = importer.import_from_file(file_path, limit=limit)
+    else:
+        terms = [t.strip() for t in search_terms.split(",") if t.strip()]
+        click.echo(f"Searching for: {terms}", err=True)
+        record_iter = importer.import_from_search(
+            search_terms=terms,
+            limit_per_term=limit or 100,
+            total_limit=limit,
+        )
+
+    # Import records in batches
+    records = []
+    count = 0
+
+    for record in record_iter:
+        records.append(record)
+
+        if len(records) >= batch_size:
+            names = [r.embedding_name for r in records]
+            embeddings = embedder.embed_batch(names)
+            database.insert_batch(records, embeddings)
+            count += len(records)
+            click.echo(f"Imported {count} records...", err=True)
+            records = []
+
+    # Final batch
+    if records:
+        names = [r.embedding_name for r in records]
+        embeddings = embedder.embed_batch(names)
+        database.insert_batch(records, embeddings)
+        count += len(records)
+
+    click.echo(f"\nImported {count} Companies House records successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("status")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+def db_status(db_path: Optional[str]):
+    """
+    Show database status and statistics.
+
+    \b
+    Examples:
+        corp-extractor db status
+        corp-extractor db status --db /path/to/companies.db
+    """
+    from .database import CompanyDatabase
+
+    try:
+        database = CompanyDatabase(db_path=db_path)
+        stats = database.get_stats()
+
+        click.echo("\nCompany Database Status")
+        click.echo("=" * 40)
+        click.echo(f"Total records: {stats.total_records:,}")
+        click.echo(f"Embedding dimension: {stats.embedding_dimension}")
+        click.echo(f"Database size: {stats.database_size_bytes / 1024 / 1024:.2f} MB")
+
+        if stats.by_source:
+            click.echo("\nRecords by source:")
+            for source, count in stats.by_source.items():
+                click.echo(f"  {source}: {count:,}")
+
+        database.close()
+
+    except Exception as e:
+        raise click.ClickException(f"Failed to read database: {e}")
+
+
+@db_cmd.command("search")
+@click.argument("query")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--top-k", type=int, default=10, help="Number of results")
+@click.option("--source", type=click.Choice(["gleif", "sec_edgar", "companies_house", "wikipedia"]), help="Filter by source")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_search(query: str, db_path: Optional[str], top_k: int, source: Optional[str], verbose: bool):
+    """
+    Search for a company in the database.
+
+    \b
+    Examples:
+        corp-extractor db search "Apple Inc"
+        corp-extractor db search "Microsoft" --source sec_edgar
+    """
+    _configure_logging(verbose)
+
+    from .database import CompanyDatabase, CompanyEmbedder
+
+    embedder = CompanyEmbedder()
+    database = CompanyDatabase(db_path=db_path)
+
+    click.echo(f"Searching for: {query}", err=True)
+
+    # Embed query
+    query_embedding = embedder.embed(query)
+
+    # Search
+    results = database.search(query_embedding, top_k=top_k, source_filter=source)
+
+    if not results:
+        click.echo("No results found.")
+        return
+
+    click.echo(f"\nTop {len(results)} matches:")
+    click.echo("-" * 60)
+
+    for i, (record, similarity) in enumerate(results, 1):
+        click.echo(f"{i}. {record.legal_name}")
+        click.echo(f"   Source: {record.source} | ID: {record.source_id}")
+        click.echo(f"   Canonical ID: {record.canonical_id}")
+        click.echo(f"   Similarity: {similarity:.4f}")
+        if verbose and record.record:
+            if record.record.get("ticker"):
+                click.echo(f"   Ticker: {record.record['ticker']}")
+            if record.record.get("jurisdiction"):
+                click.echo(f"   Jurisdiction: {record.record['jurisdiction']}")
+        click.echo()
+
+    database.close()
+
+
+@db_cmd.command("download")
+@click.option("--repo", type=str, default="corp-o-rate/company-embeddings", help="HuggingFace repo ID")
+@click.option("--db", "db_path", type=click.Path(), help="Output path for database")
+@click.option("--force", is_flag=True, help="Force re-download")
+def db_download(repo: str, db_path: Optional[str], force: bool):
+    """
+    Download company database from HuggingFace Hub.
+
+    \b
+    Examples:
+        corp-extractor db download
+        corp-extractor db download --repo my-org/my-company-db
+    """
+    from .database import download_database
+    from pathlib import Path
+
+    click.echo(f"Downloading database from {repo}...", err=True)
+
+    try:
+        path = download_database(repo_id=repo, force_download=force)
+        click.echo(f"Database downloaded to: {path}")
+    except Exception as e:
+        raise click.ClickException(f"Download failed: {e}")
+
+
+@db_cmd.command("upload")
+@click.argument("db_path", type=click.Path(exists=True))
+@click.option("--repo", type=str, default="corp-o-rate/company-embeddings", help="HuggingFace repo ID")
+@click.option("--message", type=str, default="Update company database", help="Commit message")
+def db_upload(db_path: str, repo: str, message: str):
+    """
+    Upload company database to HuggingFace Hub.
+
+    Requires HF_TOKEN environment variable to be set.
+
+    \b
+    Examples:
+        corp-extractor db upload companies.db
+        corp-extractor db upload companies.db --repo my-org/my-company-db
+    """
+    from .database import upload_database
+
+    click.echo(f"Uploading database to {repo}...", err=True)
+
+    try:
+        url = upload_database(db_path=db_path, repo_id=repo, commit_message=message)
+        click.echo(f"Database uploaded successfully: {url}")
+    except Exception as e:
+        raise click.ClickException(f"Upload failed: {e}")
+
+
+# =============================================================================
 # Helper functions
 # =============================================================================
 

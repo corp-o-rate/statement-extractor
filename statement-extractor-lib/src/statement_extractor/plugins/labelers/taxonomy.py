@@ -8,9 +8,19 @@ there are too many possible values for simple multi-choice classification.
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
 
 from ..base import BaseLabelerPlugin, TaxonomySchema, PluginCapability
+
+
+class TaxonomyEntry(TypedDict):
+    """Structure for each taxonomy label entry."""
+    description: str
+    id: int
+    mnli_label: str
+    embedding_label: str
+
+
 from ...pipeline.context import PipelineContext
 from ...models import (
     PipelineStatement,
@@ -214,7 +224,7 @@ class TaxonomyLabeler(BaseLabelerPlugin):
         self._top_k_categories = top_k_categories
         self._min_confidence = min_confidence
 
-        self._taxonomy: Optional[dict[str, dict[str, int]]] = None
+        self._taxonomy: Optional[dict[str, dict[str, TaxonomyEntry]]] = None
         self._classifier: Optional[TaxonomyClassifier] = None
 
     @property
@@ -250,7 +260,7 @@ class TaxonomyLabeler(BaseLabelerPlugin):
             scope="statement",
         )
 
-    def _load_taxonomy(self) -> dict[str, dict[str, int]]:
+    def _load_taxonomy(self) -> dict[str, dict[str, TaxonomyEntry]]:
         """Load taxonomy from JSON file."""
         if self._taxonomy is not None:
             return self._taxonomy
@@ -358,12 +368,15 @@ class TaxonomyLabeler(BaseLabelerPlugin):
         taxonomy = self._load_taxonomy()
 
         if category and category in taxonomy:
-            return taxonomy[category].get(label)
+            entry = taxonomy[category].get(label)
+            if entry:
+                return entry.get("id")
 
         # Search all categories for flat classification
         for cat_labels in taxonomy.values():
             if label in cat_labels:
-                return cat_labels[label]
+                entry = cat_labels[label]
+                return entry.get("id")
 
         return None
 

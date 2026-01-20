@@ -399,3 +399,112 @@ corp-extractor split -f article.txt --json | jq '.statements[] | select(.confide
 # Get FQNs from pipeline
 corp-extractor pipeline "Your text" -o json | jq '.labeled_statements[].subject.fqn'
 ```
+
+---
+
+### Database Commands
+
+<span id="db-commands" />
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.6.0</span>
+
+The `db` command group manages the company embedding database used for entity qualification.
+
+```bash
+# Show database status
+corp-extractor db status
+
+# Search for a company
+corp-extractor db search "Microsoft"
+corp-extractor db search "Barclays" --source companies_house
+
+# Import from data sources
+corp-extractor db import-gleif --download
+corp-extractor db import-sec
+corp-extractor db import-companies-house --download
+corp-extractor db import-wikidata --limit 50000
+
+# Download/upload from HuggingFace Hub
+corp-extractor db download
+corp-extractor db upload companies.db
+```
+
+#### Data Sources
+
+<table>
+  <thead>
+    <tr>
+      <th>Source</th>
+      <th>Command</th>
+      <th>Records</th>
+      <th>Identifier</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>GLEIF</td>
+      <td><code>import-gleif --download</code></td>
+      <td>~3.2M</td>
+      <td>LEI</td>
+    </tr>
+    <tr>
+      <td>SEC Edgar</td>
+      <td><code>import-sec</code></td>
+      <td>~10K</td>
+      <td>CIK</td>
+    </tr>
+    <tr>
+      <td>Companies House</td>
+      <td><code>import-companies-house --download</code></td>
+      <td>~5M</td>
+      <td>Company Number</td>
+    </tr>
+    <tr>
+      <td>Wikidata</td>
+      <td><code>import-wikidata</code></td>
+      <td>Variable</td>
+      <td>QID</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Database Options
+
+<table>
+  <thead>
+    <tr>
+      <th>Option</th>
+      <th>Description</th>
+      <th>Default</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--db PATH</code></td>
+      <td>Database file path</td>
+      <td>~/.cache/corp-extractor/companies.db</td>
+    </tr>
+    <tr>
+      <td><code>--limit N</code></td>
+      <td>Limit number of records</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>--download</code></td>
+      <td>Download source data automatically</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>--force</code></td>
+      <td>Force re-download even if cached</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><code>--source</code></td>
+      <td>Filter search by source</td>
+      <td>—</td>
+    </tr>
+  </tbody>
+</table>
+
+See [COMPANY_DB.md](https://github.com/corp-o-rate/statement-extractor/blob/main/COMPANY_DB.md) for complete build and publish instructions.

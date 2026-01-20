@@ -1,146 +1,7 @@
 'use client';
 
-import { Mail, Heart, Zap, AlertTriangle, RefreshCw, GitBranch, Target, Users, Building2 } from 'lucide-react';
-
-// SVG Diagram: Processing Pipeline
-function PipelineDiagram() {
-  return (
-    <svg viewBox="0 0 900 200" className="w-full max-w-4xl mx-auto my-8">
-      {/* Input */}
-      <g>
-        <rect x="10" y="60" width="100" height="80" rx="8" fill="#f3f4f6" stroke="#d1d5db" strokeWidth="2" />
-        <text x="60" y="95" textAnchor="middle" className="fill-gray-700 text-sm font-semibold">Raw Text</text>
-        <text x="60" y="115" textAnchor="middle" className="fill-gray-500 text-xs">Unstructured</text>
-      </g>
-
-      {/* Arrow 1 */}
-      <path d="M115 100 L145 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
-
-      {/* T5-Gemma 2 Model */}
-      <g>
-        <rect x="150" y="45" width="130" height="110" rx="8" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
-        <text x="215" y="75" textAnchor="middle" className="fill-red-700 text-sm font-bold">T5-Gemma 2</text>
-        <text x="215" y="93" textAnchor="middle" className="fill-gray-600 text-xs">540M params</text>
-        <line x1="165" y1="105" x2="265" y2="105" stroke="#fca5a5" strokeWidth="1" />
-        <text x="215" y="122" textAnchor="middle" className="fill-gray-500 text-xs">Beam Search</text>
-        <text x="215" y="137" textAnchor="middle" className="fill-gray-500 text-xs">4 candidates</text>
-      </g>
-
-      {/* Arrow 2 */}
-      <path d="M285 100 L315 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
-
-      {/* GLiNER2 */}
-      <g>
-        <rect x="320" y="45" width="130" height="110" rx="8" fill="#fefce8" stroke="#ca8a04" strokeWidth="2" />
-        <text x="385" y="75" textAnchor="middle" className="fill-yellow-700 text-sm font-bold">GLiNER2</text>
-        <text x="385" y="93" textAnchor="middle" className="fill-gray-600 text-xs">205M params</text>
-        <line x1="335" y1="105" x2="435" y2="105" stroke="#fde68a" strokeWidth="1" />
-        <text x="385" y="122" textAnchor="middle" className="fill-gray-500 text-xs">Entity extraction</text>
-        <text x="385" y="137" textAnchor="middle" className="fill-gray-500 text-xs">Boundary refinement</text>
-      </g>
-
-      {/* Arrow 3 */}
-      <path d="M455 100 L485 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
-
-      {/* Handler */}
-      <g>
-        <rect x="490" y="45" width="130" height="110" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
-        <text x="555" y="70" textAnchor="middle" className="fill-green-700 text-sm font-bold">Handler</text>
-        <text x="555" y="88" textAnchor="middle" className="fill-gray-500 text-xs">Scoring</text>
-        <text x="555" y="103" textAnchor="middle" className="fill-gray-500 text-xs">Deduplication</text>
-        <text x="555" y="118" textAnchor="middle" className="fill-gray-500 text-xs">Best selection</text>
-        <text x="555" y="133" textAnchor="middle" className="fill-gray-500 text-xs">XML validation</text>
-      </g>
-
-      {/* Arrow 4 */}
-      <path d="M625 100 L655 100" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead)" />
-
-      {/* Output */}
-      <g>
-        <rect x="660" y="60" width="140" height="80" rx="8" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
-        <text x="730" y="90" textAnchor="middle" className="fill-blue-700 text-sm font-semibold">Structured Data</text>
-        <text x="730" y="110" textAnchor="middle" className="fill-gray-500 text-xs">Subject-Predicate-Object</text>
-        <text x="730" y="125" textAnchor="middle" className="fill-gray-500 text-xs">+ Entity Types</text>
-      </g>
-
-      {/* Arrowhead marker */}
-      <defs>
-        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af" />
-        </marker>
-      </defs>
-    </svg>
-  );
-}
-
-// SVG Diagram: v0.4.0 Processing Flow
-function ProcessingFlowDiagram() {
-  return (
-    <svg viewBox="0 0 800 140" className="w-full max-w-4xl mx-auto my-6">
-      {/* Generate */}
-      <g>
-        <rect x="10" y="40" width="90" height="60" rx="8" fill="#fef2f2" stroke="#dc2626" strokeWidth="2" />
-        <text x="55" y="65" textAnchor="middle" className="fill-red-700 text-xs font-bold">Generate</text>
-        <text x="55" y="80" textAnchor="middle" className="fill-gray-500 text-xs">4 diverse beams</text>
-      </g>
-
-      {/* Arrow 1 */}
-      <path d="M105 70 L135 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
-
-      {/* GLiNER2 */}
-      <g>
-        <rect x="140" y="40" width="100" height="60" rx="8" fill="#fefce8" stroke="#ca8a04" strokeWidth="2" />
-        <text x="190" y="65" textAnchor="middle" className="fill-yellow-700 text-xs font-bold">GLiNER2</text>
-        <text x="190" y="80" textAnchor="middle" className="fill-gray-500 text-xs">entity extraction</text>
-      </g>
-
-      {/* Arrow 2 */}
-      <path d="M245 70 L275 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
-
-      {/* Score */}
-      <g>
-        <rect x="280" y="40" width="100" height="60" rx="8" fill="#fef2f2" stroke="#f87171" strokeWidth="2" />
-        <text x="330" y="65" textAnchor="middle" className="fill-red-600 text-xs font-bold">Score</text>
-        <text x="330" y="80" textAnchor="middle" className="fill-gray-500 text-xs">entity + similarity</text>
-      </g>
-
-      {/* Arrow 3 */}
-      <path d="M385 70 L415 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
-
-      {/* Merge Beams */}
-      <g>
-        <rect x="420" y="40" width="90" height="60" rx="8" fill="#f0fdf4" stroke="#16a34a" strokeWidth="2" />
-        <text x="465" y="65" textAnchor="middle" className="fill-green-700 text-xs font-bold">Merge</text>
-        <text x="465" y="80" textAnchor="middle" className="fill-gray-500 text-xs">top-N beams</text>
-      </g>
-
-      {/* Arrow 4 */}
-      <path d="M515 70 L545 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
-
-      {/* Deduplicate */}
-      <g>
-        <rect x="550" y="40" width="100" height="60" rx="8" fill="#f5f3ff" stroke="#7c3aed" strokeWidth="2" />
-        <text x="600" y="65" textAnchor="middle" className="fill-purple-700 text-xs font-bold">Deduplicate</text>
-        <text x="600" y="80" textAnchor="middle" className="fill-gray-500 text-xs">embeddings</text>
-      </g>
-
-      {/* Arrow 5 */}
-      <path d="M655 70 L685 70" stroke="#9ca3af" strokeWidth="2" markerEnd="url(#arrowhead2)" />
-
-      {/* Output */}
-      <g>
-        <circle cx="720" cy="70" r="35" fill="#eff6ff" stroke="#2563eb" strokeWidth="2" />
-        <text x="720" y="75" textAnchor="middle" className="fill-blue-700 text-xs font-bold">Output</text>
-      </g>
-
-      <defs>
-        <marker id="arrowhead2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#9ca3af" />
-        </marker>
-      </defs>
-    </svg>
-  );
-}
+import { Mail, Heart, Zap, AlertTriangle, Target, Users, Building2, Layers } from 'lucide-react';
+import { PipelineFlowDiagram, DataFlowDiagram } from './pipeline-diagram';
 
 // Corp-o-Rate Logo
 function CorpORateLogo() {
@@ -163,40 +24,90 @@ export function HowItWorks() {
           <h2 className="text-2xl md:text-3xl font-black mt-4">How It Works</h2>
         </div>
 
-        {/* Pipeline Overview */}
+        {/* 6-Stage Pipeline Overview */}
         <div className="mb-12">
           <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <GitBranch className="w-5 h-5 text-red-600" />
-            Processing Pipeline
+            <Layers className="w-5 h-5 text-red-600" />
+            6-Stage Pipeline Architecture <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-2">v0.5.0</span>
           </h3>
-          <PipelineDiagram />
+          <PipelineFlowDiagram />
           <p className="text-gray-600 text-center max-w-2xl mx-auto">
-            Text flows through the T5-Gemma 2 model using{' '}
-            <a
-              href="https://arxiv.org/abs/1610.02424"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-red-600 hover:underline"
-            >
-              Diverse Beam Search
-            </a>{' '}
-            (Vijayakumar et al., 2016) to generate multiple candidate extractions,
-            then the handler selects and validates the best result.
+            Text flows through a modular plugin-based pipeline. Each stage transforms the data progressively,
+            from raw text to fully qualified, labeled statements with taxonomy classifications.
           </p>
         </div>
 
-        {/* v0.4.0 Processing Flow */}
+        {/* Pipeline Stages Detail */}
         <div className="mb-12">
-          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <RefreshCw className="w-5 h-5 text-red-600" />
-            Quality-First Extraction <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-2">v0.4.0</span>
-          </h3>
-          <ProcessingFlowDiagram />
-          <p className="text-gray-600 text-center max-w-2xl mx-auto mb-6">
-            Multiple beam outputs pass through GLiNER2 for entity extraction and boundary refinement,
-            scored using entity confidence + semantic similarity, then deduplicated using embeddings.
+          <h3 className="text-xl font-bold mb-6">Pipeline Stages</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="border border-gray-300 px-4 py-2 text-left">Stage</th>
+                  <th className="border border-gray-300 px-4 py-2 text-left">Name</th>
+                  <th className="border border-gray-300 px-4 py-2 text-left">Purpose</th>
+                  <th className="border border-gray-300 px-4 py-2 text-left">Key Technology</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-red-600">1</td>
+                  <td className="border border-gray-300 px-4 py-2">Splitting</td>
+                  <td className="border border-gray-300 px-4 py-2">Text → Atomic Statements</td>
+                  <td className="border border-gray-300 px-4 py-2">T5-Gemma2 (540M params) with{' '}
+                    <a href="https://arxiv.org/abs/1610.02424" target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline">Diverse Beam Search</a>
+                  </td>
+                </tr>
+                <tr className="bg-gray-50">
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-yellow-600">2</td>
+                  <td className="border border-gray-300 px-4 py-2">Extraction</td>
+                  <td className="border border-gray-300 px-4 py-2">Atomic Statements → Typed Triples</td>
+                  <td className="border border-gray-300 px-4 py-2">GLiNER2 (205M params) entity recognition</td>
+                </tr>
+                <tr>
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-green-600">3</td>
+                  <td className="border border-gray-300 px-4 py-2">Qualification</td>
+                  <td className="border border-gray-300 px-4 py-2">Add identifiers (LEI, ticker, etc.)</td>
+                  <td className="border border-gray-300 px-4 py-2">Gemma 1B + GLEIF, SEC EDGAR, Companies House APIs</td>
+                </tr>
+                <tr className="bg-gray-50">
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-blue-600">4</td>
+                  <td className="border border-gray-300 px-4 py-2">Canonicalization</td>
+                  <td className="border border-gray-300 px-4 py-2">Resolve canonical entity names</td>
+                  <td className="border border-gray-300 px-4 py-2">Fuzzy matching + entity databases</td>
+                </tr>
+                <tr>
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-purple-600">5</td>
+                  <td className="border border-gray-300 px-4 py-2">Labeling</td>
+                  <td className="border border-gray-300 px-4 py-2">Add simple classifications</td>
+                  <td className="border border-gray-300 px-4 py-2">Multi-choice classifiers (sentiment, relation type)</td>
+                </tr>
+                <tr className="bg-gray-50">
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-orange-600">6</td>
+                  <td className="border border-gray-300 px-4 py-2">Taxonomy</td>
+                  <td className="border border-gray-300 px-4 py-2">Classify against ESG taxonomy</td>
+                  <td className="border border-gray-300 px-4 py-2">MNLI zero-shot <em>or</em> embedding similarity</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Data Flow */}
+        <div className="mb-12">
+          <h3 className="text-xl font-bold mb-4">Data Flow</h3>
+          <DataFlowDiagram />
+          <p className="text-gray-600 text-center max-w-2xl mx-auto">
+            Data is progressively enriched through each stage, from raw text to fully qualified statements
+            with entity types, canonical names, sentiment labels, and taxonomy classifications.
           </p>
-          <div className="grid md:grid-cols-2 gap-6 mt-6">
+        </div>
+
+        {/* Technical Features */}
+        <div className="mb-12">
+          <h3 className="text-xl font-bold mb-6">Technical Features</h3>
+          <div className="grid md:grid-cols-2 gap-6">
             <div className="bg-gray-50 p-4 rounded-lg border">
               <h4 className="font-semibold mb-2">
                 <a
@@ -209,30 +120,31 @@ export function HowItWorks() {
                 </a>
               </h4>
               <p className="text-sm text-gray-600">
-                Uses the <a href="https://arxiv.org/abs/1610.02424" target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline">Diverse Beam Search algorithm</a> (Vijayakumar et al., 2016)
-                to generate 4 different candidate outputs using beam groups with diversity penalty,
-                exploring multiple possible interpretations of the text.
+                The T5-Gemma2 model uses{' '}
+                <a href="https://arxiv.org/abs/1610.02424" target="_blank" rel="noopener noreferrer" className="text-red-600 hover:underline">Diverse Beam Search</a>{' '}
+                (Vijayakumar et al., 2016) to generate 4 diverse candidate outputs,
+                exploring multiple interpretations of the text.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Entity-Based Scoring <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.4</span></h4>
+              <h4 className="font-semibold mb-2">GLiNER2 Entity Extraction</h4>
               <p className="text-sm text-gray-600">
-                Each triple scored 0-1 combining semantic similarity (50%) with GLiNER2 entity recognition:
-                subject entity score (25%) and object entity score (25%). Named entities score highest.
+                GLiNER2 (205M params) refines entity boundaries and scores how &quot;entity-like&quot;
+                subjects and objects are. Uses 324 default predicates across 21 categories for relation extraction.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Beam Merging <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.2</span></h4>
+              <h4 className="font-semibold mb-2">Entity Qualification</h4>
               <p className="text-sm text-gray-600">
-                Instead of picking one beam, merges top-N beams to maximize coverage.
-                Resolves duplicates by keeping highest-confidence triples.
+                Gemma 1B extracts roles and relationships for PERSON entities. External APIs (GLEIF, SEC EDGAR,
+                Companies House) add legal identifiers like LEI, CIK, ticker symbols, and company registration numbers.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
-              <h4 className="font-semibold mb-2">Embedding Dedup <span className="text-xs bg-red-100 text-red-700 px-1 rounded">v0.2</span></h4>
+              <h4 className="font-semibold mb-2">Taxonomy Classification</h4>
               <p className="text-sm text-gray-600">
-                Uses sentence embeddings to detect semantically similar predicates (&quot;bought&quot; ≈ &quot;acquired&quot;),
-                removing redundant triples more intelligently than exact text matching.
+                Statements are classified against an ESG taxonomy using either MNLI zero-shot classification
+                or embedding similarity, returning multiple labels above confidence thresholds.
               </p>
             </div>
           </div>
@@ -283,11 +195,12 @@ export function HowItWorks() {
               <span className="text-green-600">✓</span> Recently Completed
             </h4>
             <ul className="text-sm text-green-700 space-y-1">
+              <li><strong>6-Stage Pipeline Architecture</strong> <span className="text-xs">(v0.5.0)</span> — Modular plugin system for full entity resolution</li>
+              <li><strong>Taxonomy Classification</strong> <span className="text-xs">(v0.5.0)</span> — MNLI + embedding-based ESG taxonomy classification</li>
+              <li><strong>Entity Qualification</strong> <span className="text-xs">(v0.5.0)</span> — LEI, ticker, CIK lookups via GLEIF, SEC, Companies House APIs</li>
+              <li><strong>Canonicalization</strong> <span className="text-xs">(v0.5.0)</span> — Fuzzy matching to resolve canonical entity names</li>
+              <li><strong>Statement Labeling</strong> <span className="text-xs">(v0.5.0)</span> — Sentiment analysis and relation type classification</li>
               <li><strong>GLiNER2 Integration</strong> <span className="text-xs">(v0.4.0)</span> — 205M param model for entity recognition and relation extraction</li>
-              <li><strong>Entity-Based Scoring</strong> <span className="text-xs">(v0.4.0)</span> — 50% semantic similarity + 25% subject/object entity scores</li>
-              <li><strong>Relation Extraction Mode</strong> <span className="text-xs">(v0.4.0)</span> — Use predefined predicates with GLiNER2 relation extraction</li>
-              <li><strong>Entity Boundary Refinement</strong> <span className="text-xs">(v0.4.0)</span> — GLiNER2 refines subject/object boundaries from T5-Gemma</li>
-              <li><strong>Best Triple Selection</strong> <span className="text-xs">(v0.3.0)</span> — Keeps highest-scoring triple per source</li>
             </ul>
           </div>
 
@@ -306,8 +219,8 @@ export function HowItWorks() {
               <p className="text-sm text-gray-600">Better detection of negative statements and contradictions</p>
             </div>
             <div className="border-l-4 border-red-600 pl-4 py-2">
-              <h4 className="font-semibold">Relationship Type Classification</h4>
-              <p className="text-sm text-gray-600">Categorize extracted relationships (acquisition, partnership, etc.)</p>
+              <h4 className="font-semibold">Knowledge Graph Integration</h4>
+              <p className="text-sm text-gray-600">Link extracted entities to external knowledge bases (Wikidata, etc.)</p>
             </div>
           </div>
         </div>

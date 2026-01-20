@@ -26,6 +26,14 @@ uv run corp-extractor split "text"           # Simple extraction (Stage 1)
 uv run corp-extractor pipeline "text"        # Full 6-stage pipeline
 uv run corp-extractor pipeline "text" -v     # Verbose with debug logs
 uv run corp-extractor plugins list           # List registered plugins
+
+# Company database commands
+uv run corp-extractor db status              # Show database stats
+uv run corp-extractor db search "Microsoft"  # Search for company
+uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF
+uv run corp-extractor db import-sec          # Import SEC Edgar
+uv run corp-extractor db import-companies-house --download --limit 10000  # Import UK companies
+uv run corp-extractor db import-wikidata --limit 5000  # Import Wikidata
 ```
 
 ## Architecture
@@ -73,6 +81,20 @@ Plugins are sorted by `priority` property (lower = runs first). Default is 100.
 - `plugins/extractors/gliner2.py` - GLiNER2 entity/relation extraction (Stage 2)
 - `plugins/taxonomy/embedding.py` - Embedding-based taxonomy classification (Stage 6)
 - `cli.py` - CLI entry point (`corp-extractor` command)
+
+### Company Database Module
+
+The `database/` module provides company embedding storage and search:
+
+- `database/models.py` - `CompanyRecord`, `CompanyMatch`, `DatabaseStats` Pydantic models
+- `database/store.py` - `CompanyDatabase` SQLite+sqlite-vec storage
+- `database/embeddings.py` - `CompanyEmbedder` using google/embeddinggemma-300m
+- `database/hub.py` - HuggingFace Hub upload/download
+- `database/importers/` - Data source importers:
+  - `gleif.py` - GLEIF LEI data (XML/JSON)
+  - `sec_edgar.py` - SEC company tickers
+  - `companies_house.py` - UK Companies House bulk data
+  - `wikidata.py` - Wikidata SPARQL queries
 
 ### Data Models Flow
 

@@ -11,9 +11,18 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
 
 import numpy as np
+
+
+class TaxonomyEntry(TypedDict):
+    """Structure for each taxonomy label entry."""
+    description: str
+    id: int
+    mnli_label: str
+    embedding_label: str
+
 
 from ..base import BaseLabelerPlugin, TaxonomySchema, PluginCapability
 from ...pipeline.context import PipelineContext
@@ -106,14 +115,14 @@ class EmbeddingClassifier:
 
     def precompute_label_embeddings(
         self,
-        taxonomy: dict[str, dict[str, int]],
+        taxonomy: dict[str, dict[str, TaxonomyEntry]],
         categories: Optional[list[str]] = None,
     ) -> None:
         """
         Pre-compute embeddings for all label names.
 
         Args:
-            taxonomy: Taxonomy dict {category: {label: id, ...}, ...}
+            taxonomy: Taxonomy dict {category: {label: TaxonomyEntry, ...}, ...}
             categories: Categories to include (default: all)
         """
         self._load_model()
@@ -314,7 +323,7 @@ class EmbeddingTaxonomyLabeler(BaseLabelerPlugin):
         self._top_k_categories = top_k_categories
         self._min_confidence = min_confidence
 
-        self._taxonomy: Optional[dict[str, dict[str, int]]] = None
+        self._taxonomy: Optional[dict[str, dict[str, TaxonomyEntry]]] = None
         self._classifier: Optional[EmbeddingClassifier] = None
         self._embeddings_computed = False
 
@@ -350,7 +359,7 @@ class EmbeddingTaxonomyLabeler(BaseLabelerPlugin):
             scope="statement",
         )
 
-    def _load_taxonomy(self) -> dict[str, dict[str, int]]:
+    def _load_taxonomy(self) -> dict[str, dict[str, TaxonomyEntry]]:
         """Load taxonomy from JSON file."""
         if self._taxonomy is not None:
             return self._taxonomy
@@ -456,7 +465,9 @@ class EmbeddingTaxonomyLabeler(BaseLabelerPlugin):
         taxonomy = self._load_taxonomy()
 
         if category in taxonomy:
-            return taxonomy[category].get(label)
+            entry = taxonomy[category].get(label)
+            if entry:
+                return entry.get("id")
 
         return None
 

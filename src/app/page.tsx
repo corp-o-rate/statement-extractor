@@ -17,6 +17,7 @@ import { ExportFormats } from '@/components/export-formats';
 import { Network, FileText, BookOpen, Bot, Edit3, Eye, Code } from 'lucide-react';
 import { HowItWorks, AboutCorpORate } from '@/components/about-sections';
 import { CanonicalPredicates } from '@/components/canonical-predicates';
+import { StatementTaxonomy } from '@/components/statement-taxonomy';
 import { WarmUpDialog } from '@/components/warm-up-dialog';
 
 // Polling interval in milliseconds
@@ -377,6 +378,11 @@ export default function Home() {
             {/* Canonical Predicates Reference */}
             <div className="mt-8">
               <CanonicalPredicates />
+            </div>
+
+            {/* Statement Taxonomy Reference */}
+            <div className="mt-8">
+              <StatementTaxonomy />
             </div>
           </div>
         </section>

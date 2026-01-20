@@ -151,12 +151,12 @@ export function StatementInput({ onExtract, isLoading, elapsedSeconds = 0 }: Sta
               className="w-4 h-4 accent-red-600 cursor-pointer"
             />
             <span className="text-sm text-gray-700">
-              Use canonical predicates
+              Use default predicates
             </span>
             <a
               href="#canonical-predicates"
               className="text-xs text-gray-400 hover:text-red-600 transition-colors"
-              title="View list of canonical predicates"
+              title="View list of default predicates"
             >
               (view list)
             </a>

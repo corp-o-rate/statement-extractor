@@ -11,9 +11,17 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypedDict
 
 import numpy as np
+
+
+class TaxonomyEntry(TypedDict):
+    """Structure for each taxonomy label entry."""
+    description: str
+    id: int
+    mnli_label: str
+    embedding_label: str
 
 from ..base import BaseTaxonomyPlugin, TaxonomySchema, PluginCapability
 from ...pipeline.context import PipelineContext
@@ -96,7 +104,7 @@ class EmbeddingClassifier:
 
     def precompute_label_embeddings(
         self,
-        taxonomy: dict[str, dict[str, int]],
+        taxonomy: dict[str, dict[str, TaxonomyEntry]],
         categories: Optional[list[str]] = None,
     ) -> None:
         """Pre-compute embeddings for all label names."""
@@ -223,7 +231,7 @@ class EmbeddingTaxonomyClassifier(BaseTaxonomyPlugin):
         self._top_k_categories = top_k_categories
         self._min_confidence = min_confidence
 
-        self._taxonomy: Optional[dict[str, dict[str, int]]] = None
+        self._taxonomy: Optional[dict[str, dict[str, TaxonomyEntry]]] = None
         self._classifier: Optional[EmbeddingClassifier] = None
         self._embeddings_computed = False
 
@@ -262,7 +270,7 @@ class EmbeddingTaxonomyClassifier(BaseTaxonomyPlugin):
     def supported_categories(self) -> list[str]:
         return self._categories.copy()
 
-    def _load_taxonomy(self) -> dict[str, dict[str, int]]:
+    def _load_taxonomy(self) -> dict[str, dict[str, TaxonomyEntry]]:
         if self._taxonomy is not None:
             return self._taxonomy
 
@@ -329,7 +337,9 @@ class EmbeddingTaxonomyClassifier(BaseTaxonomyPlugin):
     def _get_label_id(self, category: str, label: str) -> Optional[int]:
         taxonomy = self._load_taxonomy()
         if category in taxonomy:
-            return taxonomy[category].get(label)
+            entry = taxonomy[category].get(label)
+            if entry:
+                return entry.get("id")
         return None
 
 
