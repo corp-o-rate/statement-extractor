@@ -11,17 +11,27 @@ interface ExportFormatsProps {
 }
 
 function statementsToCSV(statements: Statement[]): string {
-  const headers = ['subject', 'subject_type', 'predicate', 'canonical_predicate', 'object', 'object_type', 'text', 'confidence'];
-  const rows = statements.map(s => [
-    `"${s.subject.name.replace(/"/g, '""')}"`,
-    s.subject.type,
-    `"${s.predicate.replace(/"/g, '""')}"`,
-    s.canonicalPredicate ? `"${s.canonicalPredicate.replace(/"/g, '""')}"` : '',
-    `"${s.object.name.replace(/"/g, '""')}"`,
-    s.object.type,
-    `"${s.text.replace(/"/g, '""')}"`,
-    s.confidence !== undefined ? s.confidence.toFixed(3) : '',
-  ].join(','));
+  const headers = ['subject', 'subject_type', 'predicate', 'predicate_category', 'object', 'object_type', 'text', 'confidence', 'sentiment', 'relation_type', 'topics'];
+  const rows = statements.map(s => {
+    // Get sentiment and relation_type from labels
+    const sentiment = s.labels?.find(l => l.label_type === 'sentiment')?.label_value || '';
+    const relationType = s.labels?.find(l => l.label_type === 'relation_type')?.label_value || s.predicateCategory || '';
+    // Get top 3 topics
+    const topics = (s.taxonomyResults || []).slice(0, 3).map(t => t.label).join('; ');
+    return [
+      `"${s.subject.name.replace(/"/g, '""')}"`,
+      s.subject.type,
+      `"${s.predicate.replace(/"/g, '""')}"`,
+      s.predicateCategory || '',
+      `"${s.object.name.replace(/"/g, '""')}"`,
+      s.object.type,
+      `"${s.text.replace(/"/g, '""')}"`,
+      s.confidence !== undefined ? s.confidence.toFixed(3) : '',
+      String(sentiment),
+      String(relationType),
+      `"${topics}"`,
+    ].join(',');
+  });
   return [headers.join(','), ...rows].join('\n');
 }
 
@@ -32,12 +42,31 @@ function statementsToJSON(statements: Statement[]): string {
 function statementsToXML(statements: Statement[]): string {
   const stmtElements = statements.map(s => {
     const confidenceAttr = s.confidence !== undefined ? ` confidence="${s.confidence.toFixed(3)}"` : '';
-    const canonicalEl = s.canonicalPredicate ? `\n    <canonical_predicate>${escapeXML(s.canonicalPredicate)}</canonical_predicate>` : '';
+    const categoryAttr = s.predicateCategory ? ` category="${escapeXML(s.predicateCategory)}"` : '';
+
+    // Build labels elements
+    let labelsEl = '';
+    if (s.labels && s.labels.length > 0) {
+      const labelEls = s.labels.map(l =>
+        `      <label type="${escapeXML(l.label_type)}" confidence="${l.confidence.toFixed(3)}">${escapeXML(String(l.label_value))}</label>`
+      ).join('\n');
+      labelsEl = `\n    <labels>\n${labelEls}\n    </labels>`;
+    }
+
+    // Build taxonomy elements (top 5)
+    let taxonomyEl = '';
+    if (s.taxonomyResults && s.taxonomyResults.length > 0) {
+      const topicEls = s.taxonomyResults.slice(0, 5).map(t =>
+        `      <topic category="${escapeXML(t.category)}" confidence="${t.confidence.toFixed(3)}">${escapeXML(t.label)}</topic>`
+      ).join('\n');
+      taxonomyEl = `\n    <taxonomy>\n${topicEls}\n    </taxonomy>`;
+    }
+
     return `  <stmt${confidenceAttr}>
     <subject type="${s.subject.type}">${escapeXML(s.subject.name)}</subject>
-    <predicate>${escapeXML(s.predicate)}</predicate>${canonicalEl}
+    <predicate${categoryAttr}>${escapeXML(s.predicate)}</predicate>
     <object type="${s.object.type}">${escapeXML(s.object.name)}</object>
-    <text>${escapeXML(s.text)}</text>
+    <text>${escapeXML(s.text)}</text>${labelsEl}${taxonomyEl}
   </stmt>`;
   }).join('\n');
   return `<statements>\n${stmtElements}\n</statements>`;
@@ -90,7 +119,14 @@ function statementsToCypher(statements: Statement[]): string {
     const escapedPredicate = s.predicate.replace(/'/g, "\\'");
     const confidenceProp = s.confidence !== undefined ? `, confidence: ${s.confidence.toFixed(3)}` : '';
     const canonicalProp = s.canonicalPredicate ? `, canonical_predicate: '${s.canonicalPredicate.replace(/'/g, "\\'")}'` : '';
-    return `CREATE (${subjectVar})-[:${relType} {predicate: '${escapedPredicate}'${canonicalProp}${confidenceProp}}]->(${objectVar})`;
+    const categoryProp = s.predicateCategory ? `, category: '${s.predicateCategory.replace(/'/g, "\\'")}'` : '';
+    // Add sentiment and relation_type from labels
+    const sentiment = s.labels?.find(l => l.label_type === 'sentiment')?.label_value;
+    const sentimentProp = sentiment ? `, sentiment: '${String(sentiment)}'` : '';
+    // Add top topics
+    const topics = (s.taxonomyResults || []).slice(0, 3).map(t => t.label);
+    const topicsProp = topics.length > 0 ? `, topics: [${topics.map(t => `'${t.replace(/'/g, "\\'")}'`).join(', ')}]` : '';
+    return `CREATE (${subjectVar})-[:${relType} {predicate: '${escapedPredicate}'${canonicalProp}${categoryProp}${confidenceProp}${sentimentProp}${topicsProp}}]->(${objectVar})`;
   });
 
   return [...nodeStatements, '', ...relStatements].join('\n');

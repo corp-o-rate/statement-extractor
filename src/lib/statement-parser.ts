@@ -27,7 +27,7 @@
  * </statements>
  */
 
-import { Statement, EntityType, Entity, ExtractionMethod } from './types';
+import { Statement, EntityType, Entity, ExtractionMethod, StatementLabel, TaxonomyResult } from './types';
 
 // Type for the JSON format from the library
 interface LibraryEntity {
@@ -35,20 +35,62 @@ interface LibraryEntity {
   type: string;
 }
 
+interface LibraryLabel {
+  label_type: string;
+  label_value: string | number | boolean;
+  confidence: number;
+  labeler?: string;
+}
+
+interface LibraryTaxonomyResult {
+  taxonomy_name: string;
+  category: string;
+  label: string;
+  label_id?: number;
+  confidence: number;
+  classifier?: string;
+}
+
 interface LibraryStatement {
   subject: LibraryEntity;
   predicate: string;
+  predicate_category?: string | null;
   object: LibraryEntity;
   source_text?: string | null;
   confidence_score?: number | null;
   canonical_predicate?: string | null;
   evidence_span?: [number, number] | null;
   extraction_method?: string | null;
+  labels?: LibraryLabel[];
+  taxonomy_results?: LibraryTaxonomyResult[];
+  // Also handle the as_dict() format from LabeledStatement
+  taxonomy?: Array<{ category: string; label: string; confidence: number }>;
 }
 
 interface LibraryExtractionResult {
   statements: LibraryStatement[];
+  labeled_statements?: LibraryLabeledStatement[];
   source_text?: string | null;
+}
+
+// LabeledStatement from pipeline output (as_dict format)
+interface LibraryLabeledStatement {
+  subject: {
+    text: string;
+    type: string;
+    fqn: string;
+    canonical_id?: string | null;
+  };
+  predicate: string;
+  object: {
+    text: string;
+    type: string;
+    fqn: string;
+    canonical_id?: string | null;
+  };
+  source_text?: string | null;
+  labels?: Record<string, string | number | boolean>;
+  taxonomy?: Array<{ category: string; label: string; confidence: number }>;
 }
 
 /**
@@ -193,24 +235,105 @@ export function parseStatements(input: string | LibraryExtractionResult): Statem
  * Parse statements from JSON format (v0.2.0+)
  */
 function parseJsonStatements(data: LibraryExtractionResult | LibraryStatement[]): Statement[] {
+  // Handle labeled_statements from pipeline output
+  if (!Array.isArray(data) && data.labeled_statements && data.labeled_statements.length > 0) {
+    return parseLabeledStatements(data.labeled_statements);
+  }
+
   // Handle array of statements directly
   const statements = Array.isArray(data) ? data : data.statements || [];
 
-  return statements.map((stmt: LibraryStatement) => ({
-    subject: {
-      name: stmt.subject?.text || '',
-      type: parseEntityType(stmt.subject?.type || null),
-    },
-    object: {
-      name: stmt.object?.text || '',
-      type: parseEntityType(stmt.object?.type || null),
-    },
-    predicate: stmt.predicate || '',
-    text: stmt.source_text || `${stmt.subject?.text || ''} ${stmt.predicate || ''} ${stmt.object?.text || ''}`.trim(),
-    confidence: stmt.confidence_score ?? undefined,
-    canonicalPredicate: stmt.canonical_predicate ?? undefined,
-    extractionMethod: parseExtractionMethod(stmt.extraction_method),
-  })).filter((stmt: Statement) => stmt.subject.name && stmt.predicate);
+  return statements.map((stmt: LibraryStatement) => {
+    // Parse labels
+    const labels: StatementLabel[] = (stmt.labels || []).map(l => ({
+      label_type: l.label_type,
+      label_value: l.label_value,
+      confidence: l.confidence,
+      labeler: l.labeler,
+    }));
+
+    // Parse taxonomy results (handle both formats)
+    let taxonomyResults: TaxonomyResult[] = [];
+    if (stmt.taxonomy_results && stmt.taxonomy_results.length > 0) {
+      taxonomyResults = stmt.taxonomy_results.map(t => ({
+        taxonomy_name: t.taxonomy_name,
+        category: t.category,
+        label: t.label,
+        label_id: t.label_id,
+        confidence: t.confidence,
+        classifier: t.classifier,
+      }));
+    } else if (stmt.taxonomy && stmt.taxonomy.length > 0) {
+      // Handle simplified as_dict() format
+      taxonomyResults = stmt.taxonomy.map(t => ({
+        taxonomy_name: 'esg_topics',
+        category: t.category,
+        label: t.label,
+        confidence: t.confidence,
+      }));
+    }
+
+    return {
+      subject: {
+        name: stmt.subject?.text || '',
+        type: parseEntityType(stmt.subject?.type || null),
+      },
+      object: {
+        name: stmt.object?.text || '',
+        type: parseEntityType(stmt.object?.type || null),
+      },
+      predicate: stmt.predicate || '',
+      predicateCategory: stmt.predicate_category ?? undefined,
+      text: stmt.source_text || `${stmt.subject?.text || ''} ${stmt.predicate || ''} ${stmt.object?.text || ''}`.trim(),
+      confidence: stmt.confidence_score ?? undefined,
+      canonicalPredicate: stmt.canonical_predicate ?? undefined,
+      extractionMethod: parseExtractionMethod(stmt.extraction_method),
+      labels: labels.length > 0 ? labels : undefined,
+      taxonomyResults: taxonomyResults.length > 0 ? taxonomyResults : undefined,
+    };
+  }).filter((stmt: Statement) => stmt.subject.name && stmt.predicate);
+}
+
+/**
+ * Parse labeled statements from pipeline output (as_dict format)
+ */
+function parseLabeledStatements(labeledStmts: LibraryLabeledStatement[]): Statement[] {
+  return labeledStmts.map((stmt) => {
+    // Convert labels dict to array
+    const labels: StatementLabel[] = [];
+    if (stmt.labels) {
+      for (const [label_type, label_value] of Object.entries(stmt.labels)) {
+        labels.push({
+          label_type,
+          label_value,
+          confidence: 1.0, // Labels from as_dict don't include confidence
+        });
+      }
+    }
+
+    // Parse taxonomy
+    const taxonomyResults: TaxonomyResult[] = (stmt.taxonomy || []).map(t => ({
+      taxonomy_name: 'esg_topics',
+      category: t.category,
+      label: t.label,
+      confidence: t.confidence,
+    }));
+
+    return {
+      subject: {
+        name: stmt.subject?.text || '',
+        type: parseEntityType(stmt.subject?.type || null),
+      },
+      object: {
+        name: stmt.object?.text || '',
+        type: parseEntityType(stmt.object?.type || null),
+      },
+      predicate: stmt.predicate || '',
+      text: stmt.source_text || `${stmt.subject?.text || ''} ${stmt.predicate || ''} ${stmt.object?.text || ''}`.trim(),
+      labels: labels.length > 0 ? labels : undefined,
+      taxonomyResults: taxonomyResults.length > 0 ? taxonomyResults : undefined,
+    };
+  }).filter((stmt: Statement) => stmt.subject.name && stmt.predicate);
 }
 
 /**

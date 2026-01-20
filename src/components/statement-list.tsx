@@ -61,6 +61,7 @@ function ExtractionMethodBadge({ method }: { method?: ExtractionMethod }) {
     spacy: 'spaCy',
     split: 'Split',
     model: 'Model',
+    gliner_relation: 'GLiNER2',
   };
 
   const methodColors: Record<ExtractionMethod, string> = {
@@ -68,6 +69,7 @@ function ExtractionMethodBadge({ method }: { method?: ExtractionMethod }) {
     spacy: 'bg-purple-100 text-purple-700',
     split: 'bg-orange-100 text-orange-700',
     model: 'bg-gray-100 text-gray-600',
+    gliner_relation: 'bg-emerald-100 text-emerald-700',
   };
 
   const methodDescriptions: Record<ExtractionMethod, string> = {
@@ -75,6 +77,7 @@ function ExtractionMethodBadge({ method }: { method?: ExtractionMethod }) {
     spacy: 'All components from spaCy parsing',
     split: 'Source text split around predicate',
     model: 'All components from T5-Gemma model',
+    gliner_relation: 'GLiNER2 relation extraction',
   };
 
   // Show "Unknown" if no method
@@ -99,7 +102,45 @@ function ExtractionMethodBadge({ method }: { method?: ExtractionMethod }) {
   );
 }
 
+function LabelBadge({ label, value }: { label: string; value: string | number | boolean }) {
+  // Color coding for sentiment
+  let colorClass = 'bg-gray-100 text-gray-600';
+  if (label === 'sentiment') {
+    if (value === 'positive') colorClass = 'bg-green-100 text-green-700';
+    else if (value === 'negative') colorClass = 'bg-red-100 text-red-700';
+    else colorClass = 'bg-gray-100 text-gray-600';
+  } else if (label === 'relation_type') {
+    colorClass = 'bg-indigo-100 text-indigo-700';
+  }
+
+  return (
+    <span className={`text-xs px-1.5 py-0.5 rounded ${colorClass}`}>
+      <span className="opacity-60">{label}:</span> {String(value)}
+    </span>
+  );
+}
+
+function TaxonomyBadge({ category, label, confidence }: { category: string; label: string; confidence: number }) {
+  const percent = Math.round(confidence * 100);
+  return (
+    <span
+      className="text-xs px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200"
+      title={`${category}: ${label} (${percent}% confidence)`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function StatementCard({ statement, index }: { statement: Statement; index: number }) {
+  // Get labels as key-value pairs for display
+  const labelsToShow = statement.labels?.filter(l =>
+    l.label_type === 'sentiment' || l.label_type === 'relation_type'
+  ) || [];
+
+  // Get top 3 taxonomy results
+  const topTaxonomy = (statement.taxonomyResults || []).slice(0, 3);
+
   return (
     <div className="editorial-card p-4">
       {/* Header row with statement number and confidence */}
@@ -140,6 +181,35 @@ function StatementCard({ statement, index }: { statement: Statement; index: numb
           </div>
         </div>
       </div>
+
+      {/* Labels row (sentiment, relation_type) */}
+      {labelsToShow.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 pl-6 mb-2">
+          {labelsToShow.map((label, i) => (
+            <LabelBadge key={i} label={label.label_type} value={label.label_value} />
+          ))}
+          {statement.predicateCategory && (
+            <span className="text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
+              <span className="opacity-60">category:</span> {statement.predicateCategory}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Taxonomy topics row */}
+      {topTaxonomy.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 pl-6 mb-2">
+          <span className="text-xs text-gray-400">Topics:</span>
+          {topTaxonomy.map((t, i) => (
+            <TaxonomyBadge key={i} category={t.category} label={t.label} confidence={t.confidence} />
+          ))}
+          {(statement.taxonomyResults?.length || 0) > 3 && (
+            <span className="text-xs text-gray-400">
+              +{(statement.taxonomyResults?.length || 0) - 3} more
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Full statement text */}
       {statement.text && (

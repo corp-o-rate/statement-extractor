@@ -17,17 +17,37 @@ export type EntityType =
   | 'QUANTITY'
   | 'UNKNOWN';
 
-export type ExtractionMethod = 'hybrid' | 'spacy' | 'split' | 'model';
+export type ExtractionMethod = 'hybrid' | 'spacy' | 'split' | 'model' | 'gliner_relation';
 
 export interface Entity {
   name: string;
   type: EntityType;
 }
 
+/** Label applied to a statement (sentiment, relation_type, etc.) */
+export interface StatementLabel {
+  label_type: string;
+  label_value: string | number | boolean;
+  confidence: number;
+  labeler?: string;
+}
+
+/** Taxonomy classification result */
+export interface TaxonomyResult {
+  taxonomy_name: string;
+  category: string;
+  label: string;
+  label_id?: number;
+  confidence: number;
+  classifier?: string;
+}
+
 export interface Statement {
   subject: Entity;
   object: Entity;
   predicate: string;
+  /** Category of the predicate (e.g., 'ownership_control', 'employment_leadership') */
+  predicateCategory?: string;
   text: string;
   /** Semantic similarity score (0-1) between source text and reassembled triple */
   confidence?: number;
@@ -35,6 +55,10 @@ export interface Statement {
   canonicalPredicate?: string;
   /** Method used to extract this triple (hybrid, spacy, split, or model) */
   extractionMethod?: ExtractionMethod;
+  /** Labels applied to this statement (sentiment, relation_type, etc.) */
+  labels?: StatementLabel[];
+  /** Taxonomy classification results */
+  taxonomyResults?: TaxonomyResult[];
 }
 
 export interface ExtractionResult {
