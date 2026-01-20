@@ -52,9 +52,8 @@ RUN python -c "from huggingface_hub import hf_hub_download; \
     path = hf_hub_download(repo_id='google/gemma-3-12b-it-qat-q4_0-gguf', filename='gemma-3-12b-it-q4_0.gguf'); \
     print(f'Gemma3 GGUF model downloaded to {path}')"
 
-# Install corp-extractor library with database support
+# Install corp-extractor library
 RUN pip install --no-cache-dir --no-deps corp-extractor==0.6.0
-RUN pip install --no-cache-dir sqlite-vec
 
 # Download models at build time for faster cold starts
 RUN python -c "from statement_extractor import StatementExtractor; \

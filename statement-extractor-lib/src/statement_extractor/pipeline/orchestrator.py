@@ -227,10 +227,12 @@ class ExtractionPipeline:
                 if entity.entity_ref not in entities_to_qualify:
                     entities_to_qualify[entity.entity_ref] = entity
 
-        logger.debug(f"Qualifying {len(entities_to_qualify)} unique entities")
+        logger.info(f"Stage 3: Qualifying {len(entities_to_qualify)} unique entities")
 
         # Qualify each entity using applicable plugins
-        for entity_ref, entity in entities_to_qualify.items():
+        entities_list = list(entities_to_qualify.items())
+        for idx, (entity_ref, entity) in enumerate(entities_list, 1):
+            logger.info(f"  [{idx}/{len(entities_list)}] Qualifying '{entity.text}' ({entity.type.value})")
             qualifiers = EntityQualifiers()
             sources = []
 

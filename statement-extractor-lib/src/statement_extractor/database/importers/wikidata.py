@@ -224,6 +224,7 @@ class WikidataImporter:
                 legal_name=label,
                 source="wikipedia",  # Use "wikipedia" as source per schema
                 source_id=wikidata_id,
+                region=country_label or "",
                 record=record_data,
             )
 
@@ -278,6 +279,7 @@ class WikidataImporter:
                 legal_name=label,
                 source="wikipedia",
                 source_id=qid,
+                region="",  # Not available from search API
                 record={
                     "wikidata_id": qid,
                     "label": label,

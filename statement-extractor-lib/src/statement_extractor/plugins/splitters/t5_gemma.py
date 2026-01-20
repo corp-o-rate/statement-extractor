@@ -7,7 +7,6 @@ subject-predicate-object triples from text.
 
 import logging
 import re
-import xml.etree.ElementTree as ET
 from typing import Optional
 
 from ..base import BaseSplitterPlugin, PluginCapability
@@ -266,62 +265,28 @@ class T5GemmaSplitter(BaseSplitterPlugin):
 
         return results
 
+    # Regex pattern to extract <text> content from <stmt> blocks
+    _STMT_TEXT_PATTERN = re.compile(r'<stmt>.*?<text>(.*?)</text>.*?</stmt>', re.DOTALL)
+
     def _parse_xml_to_raw_triples(self, xml_output: str) -> list[RawTriple]:
-        """Parse XML output into RawTriple objects."""
+        """Extract source sentences from <stmt><text>...</text></stmt> blocks."""
         raw_triples = []
 
-        try:
-            root = ET.fromstring(xml_output)
-        except ET.ParseError as e:
-            logger.warning(f"XML parse error: {e}")
-            # Try to repair
-            xml_output = self._repair_xml(xml_output)
-            try:
-                root = ET.fromstring(xml_output)
-            except ET.ParseError:
-                logger.error("XML repair failed")
-                return raw_triples
+        # Find all <text> content within <stmt> blocks
+        text_matches = self._STMT_TEXT_PATTERN.findall(xml_output)
+        logger.debug(f"Found {len(text_matches)} stmt text blocks via regex")
 
-        if root.tag != "statements":
-            logger.warning(f"Unexpected root tag: {root.tag}")
-            return raw_triples
-
-        for stmt_elem in root.findall("stmt"):
-            try:
-                subject_elem = stmt_elem.find("subject")
-                predicate_elem = stmt_elem.find("predicate")
-                object_elem = stmt_elem.find("object")
-                text_elem = stmt_elem.find("text")
-
-                subject_text = subject_elem.text.strip() if subject_elem is not None and subject_elem.text else ""
-                predicate_text = predicate_elem.text.strip() if predicate_elem is not None and predicate_elem.text else ""
-                object_text = object_elem.text.strip() if object_elem is not None and object_elem.text else ""
-                source_text = text_elem.text.strip() if text_elem is not None and text_elem.text else ""
-
-                if subject_text and object_text and source_text:
-                    raw_triples.append(RawTriple(
-                        subject_text=subject_text,
-                        predicate_text=predicate_text,
-                        object_text=object_text,
-                        source_sentence=source_text,
-                    ))
-                else:
-                    logger.debug(f"Skipping incomplete triple: s={subject_text}, p={predicate_text}, o={object_text}")
-
-            except Exception as e:
-                logger.warning(f"Error parsing stmt element: {e}")
-                continue
+        for source_text in text_matches:
+            source_text = source_text.strip()
+            if source_text:
+                raw_triples.append(RawTriple(
+                    subject_text="",
+                    predicate_text="",
+                    object_text="",
+                    source_sentence=source_text,
+                ))
 
         return raw_triples
-
-    def _repair_xml(self, xml_string: str) -> str:
-        """Attempt to repair common XML syntax errors."""
-        # Use the repair function from extractor.py
-        from ...extractor import repair_xml
-        repaired, repairs = repair_xml(xml_string)
-        if repairs:
-            logger.debug(f"XML repairs: {', '.join(repairs)}")
-        return repaired
 
 
 # Allow importing without decorator for testing

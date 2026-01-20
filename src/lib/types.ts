@@ -75,6 +75,28 @@ export interface JobSubmissionResponse {
   inputText: string;
 }
 
+// Job submission response for URL extraction
+export interface UrlJobSubmissionResponse {
+  jobId: string;
+  status: 'IN_QUEUE' | 'IN_PROGRESS';
+  inputUrl: string;
+  isUrlJob: true;
+}
+
+// URL extraction result with metadata
+export interface UrlExtractionResult {
+  statements: Statement[];
+  metadata: {
+    title?: string;
+    url: string;
+    chunk_count: number;
+    statement_count: number;
+    duplicates_removed: number;
+  };
+  summary?: string;
+  cached?: boolean;
+}
+
 // Job status response
 export interface JobStatusResponse {
   status: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED' | 'TIMED_OUT';

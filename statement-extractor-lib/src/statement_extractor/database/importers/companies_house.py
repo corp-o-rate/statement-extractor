@@ -32,8 +32,36 @@ CH_COMPANY_URL = f"{CH_API_BASE}/company"
 CH_BULK_DATA_URL = "https://download.companieshouse.gov.uk/BasicCompanyDataAsOneFile-{date}.zip"
 CH_BULK_DATA_PAGE = "https://download.companieshouse.gov.uk/en_output.html"
 
-# Company status values to include (active companies)
-ACTIVE_STATUSES = {"active", "open"}
+# Company status prefixes to include (active companies)
+ACTIVE_STATUS_PREFIXES = ("active", "open", "live")
+
+# Company type prefixes that are operating companies (matched case-insensitively via startswith)
+# Values from bulk CSV data - using prefix matching to handle truncated values
+COMPANY_TYPE_PREFIXES = (
+    # Limited companies (most common - ~4.8M records)
+    "private limited company",
+    "public limited company",
+    "private unlimited company",
+    # Limited by guarantee (values get truncated in CSV due to commas)
+    "pri/ltd by guar",
+    "pri/lbg/nsc",
+    # LLPs (~46K)
+    "limited liability partnership",
+    # Community interest companies (~38K)
+    "community interest company",
+    # Charitable incorporated organisations (~45K combined)
+    "charitable incorporated organisation",
+    "scottish charitable incorporated organisation",
+    # Registered societies (~10K)
+    "registered society",
+    # Overseas entities (~18K)
+    "overseas entity",
+    # Other
+    "other company type",
+    "royal charter",
+    "old public company",
+    # Note: Excluded - "Limited Partnership" (often used for funds)
+)
 
 
 class CompaniesHouseImporter:
@@ -255,12 +283,17 @@ class CompaniesHouseImporter:
             company_number = item.get("company_number")
             title = item.get("title") or item.get("company_name", "")
             company_status = item.get("company_status", "").lower()
+            company_type = item.get("company_type", "").lower()
 
             if not company_number or not title:
                 return None
 
             # Filter by status if configured
-            if self._active_only and company_status not in ACTIVE_STATUSES:
+            if self._active_only and not company_status.startswith(ACTIVE_STATUS_PREFIXES):
+                return None
+
+            # Filter to only include actual companies (not sole traders, individuals, etc.)
+            if company_type and not company_type.startswith(COMPANY_TYPE_PREFIXES):
                 return None
 
             # Get address info
@@ -292,6 +325,7 @@ class CompaniesHouseImporter:
                 legal_name=title,
                 source="companies_house",
                 source_id=company_number,
+                region=country,
                 record=record_data,
             )
 
@@ -308,7 +342,8 @@ class CompaniesHouseImporter:
             # Companies House CSV column names
             company_number = row.get("CompanyNumber") or row.get("company_number", "")
             company_name = row.get("CompanyName") or row.get("company_name", "")
-            company_status = (row.get("CompanyStatus") or row.get("company_status", "")).lower()
+            company_status = (row.get("CompanyStatus") or row.get("company_status", "")).lower().strip()
+            company_type = (row.get("CompanyCategory") or row.get("company_type", "")).lower().strip()
 
             if not company_number or not company_name:
                 return None
@@ -317,7 +352,11 @@ class CompaniesHouseImporter:
             company_number = company_number.strip()
             company_name = company_name.strip()
 
-            if self._active_only and company_status not in ACTIVE_STATUSES:
+            if self._active_only and not company_status.startswith(ACTIVE_STATUS_PREFIXES):
+                return None
+
+            # Filter to only include actual companies (not sole traders, individuals, etc.)
+            if company_type and not company_type.startswith(COMPANY_TYPE_PREFIXES):
                 return None
 
             record_data = {
@@ -330,12 +369,16 @@ class CompaniesHouseImporter:
                 "sic_code": row.get("SICCode.SicText_1", "").strip(),
             }
 
+            # Use CountryOfOrigin for region
+            region = row.get("CountryOfOrigin", "United Kingdom").strip()
+
             return CompanyRecord(
                 name=company_name,
                 embedding_name=company_name,
                 legal_name=company_name,
                 source="companies_house",
                 source_id=company_number,
+                region=region,
                 record=record_data,
             )
 

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 COMPANY_MATCH_PROMPT = """You are matching a company name extracted from text to a database of known companies.
 
 Extracted name: "{query_name}"
-
+{context_line}
 Candidate matches (sorted by similarity):
 {candidates}
 
@@ -32,6 +32,7 @@ Rules:
 - The match should refer to the same legal entity
 - Minor spelling differences or abbreviations are OK (e.g., "Apple" matches "Apple Inc.")
 - Different companies with similar names should NOT match
+- Consider the REGION when matching - prefer companies from regions mentioned in or relevant to the context
 - If the extracted name is too generic or ambiguous, respond "NONE"
 
 Respond with ONLY the number of the best match (1, 2, 3, etc.) or "NONE".
@@ -187,26 +188,34 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         embedder = self._get_embedder()
 
         # Embed query name
+        logger.debug(f"    Embedding query: '{entity.text}'")
         query_embedding = embedder.embed(entity.text)
 
         # Search for similar companies
+        logger.debug(f"    Searching database for similar companies...")
         results = database.search(query_embedding, top_k=self._top_k)
 
         # Filter by minimum similarity
         results = [(r, s) for r, s in results if s >= self._min_similarity]
 
         if not results:
+            logger.debug(f"    No matches found above threshold {self._min_similarity}")
             self._cache[cache_key] = None
             return None
 
+        logger.info(f"    Found {len(results)} candidates, top: '{results[0][0].name}' ({results[0][1]:.3f})")
+
         # Get best match (optionally with LLM confirmation)
-        best_match = self._select_best_match(entity.text, results)
+        logger.debug(f"    Selecting best match (LLM={self._use_llm_confirmation})...")
+        best_match = self._select_best_match(entity.text, results, context)
 
         if best_match is None:
+            logger.info(f"    No confident match for '{entity.text}'")
             self._cache[cache_key] = None
             return None
 
         record, similarity = best_match
+        logger.info(f"    Matched: '{record.legal_name}' (source={record.source}, similarity={similarity:.3f})")
 
         # Build qualifiers from matched record
         qualifiers = self._build_qualifiers(record, similarity)
@@ -218,6 +227,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         self,
         query_name: str,
         candidates: list[tuple],
+        context: "PipelineContext",
     ) -> Optional[tuple]:
         """
         Select the best match from candidates.
@@ -236,7 +246,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         llm = self._get_llm()
         if llm is not None:
             try:
-                return self._llm_select_match(query_name, candidates)
+                return self._llm_select_match(query_name, candidates, context)
             except Exception as e:
                 logger.debug(f"LLM confirmation failed: {e}")
 
@@ -253,17 +263,27 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         self,
         query_name: str,
         candidates: list[tuple],
+        context: "PipelineContext",
     ) -> Optional[tuple]:
         """Use LLM to select the best match."""
-        # Format candidates for prompt
+        # Format candidates for prompt with region info
         candidate_lines = []
         for i, (record, similarity) in enumerate(candidates[:10], 1):  # Limit to top 10
+            region_str = f", region: {record.region}" if record.region else ""
             candidate_lines.append(
-                f"{i}. {record.legal_name} (source: {record.source}, similarity: {similarity:.3f})"
+                f"{i}. {record.legal_name} (source: {record.source}{region_str}, similarity: {similarity:.3f})"
             )
+
+        # Build context line from source text if available
+        context_line = ""
+        if context.source_text:
+            # Truncate source text for prompt
+            source_preview = context.source_text[:500] + "..." if len(context.source_text) > 500 else context.source_text
+            context_line = f"Source text context: \"{source_preview}\"\n"
 
         prompt = COMPANY_MATCH_PROMPT.format(
             query_name=query_name,
+            context_line=context_line,
             candidates="\n".join(candidate_lines),
         )
 

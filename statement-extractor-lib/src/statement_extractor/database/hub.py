@@ -410,17 +410,25 @@ def upload_database_with_variants(
                 compress_database(lite_path, lite_compressed_path)
                 files_to_upload.append((lite_compressed_path, DEFAULT_DB_LITE_COMPRESSED_FILENAME))
 
-        # Upload all files
+        # Copy all files to a staging directory for upload_folder
+        staging_dir = temp_path / "staging"
+        staging_dir.mkdir()
+
         for local_path, remote_filename in files_to_upload:
-            logger.info(f"Uploading {remote_filename}...")
-            result = api.upload_file(
-                path_or_fileobj=str(local_path),
-                path_in_repo=remote_filename,
-                repo_id=repo_id,
-                repo_type="dataset",
-                commit_message=f"{commit_message} ({remote_filename})",
-            )
-            results[remote_filename] = result
+            shutil.copy2(local_path, staging_dir / remote_filename)
+            logger.info(f"Staged {remote_filename}")
+
+        # Upload all files in a single commit to avoid LFS pointer issues
+        logger.info(f"Uploading {len(files_to_upload)} files to {repo_id}...")
+        api.upload_folder(
+            folder_path=str(staging_dir),
+            repo_id=repo_id,
+            repo_type="dataset",
+            commit_message=commit_message,
+        )
+
+        for _, remote_filename in files_to_upload:
+            results[remote_filename] = f"https://huggingface.co/datasets/{repo_id}/blob/main/{remote_filename}"
             logger.info(f"Uploaded {remote_filename}")
 
     return results

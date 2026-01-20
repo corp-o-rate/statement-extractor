@@ -25,6 +25,25 @@ SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 # User agent for SEC requests (required)
 SEC_USER_AGENT = "corp-extractor/1.0 (contact@corp-o-rate.com)"
 
+# Entity types that are operating companies (exclude individuals and funds)
+ORG_ENTITY_TYPES = {
+    "operating",  # Operating companies
+    "foreign-private-issuer",  # Foreign companies
+}
+
+# SIC codes for funds/financial instruments to exclude
+FUND_SIC_CODES = {
+    "6722",  # Management Investment Offices, Open-End
+    "6726",  # Other Investment Offices
+    "6732",  # Educational, Religious, and Charitable Trusts
+    "6733",  # Trusts, Except Educational, Religious, and Charitable
+    "6792",  # Oil Royalty Traders
+    "6794",  # Patent Owners and Lessors
+    "6795",  # Mineral Royalty Traders
+    "6798",  # Real Estate Investment Trusts
+    "6799",  # Investors, NEC
+}
+
 
 class SecEdgarImporter:
     """
@@ -163,6 +182,7 @@ class SecEdgarImporter:
                 legal_name=title,
                 source="sec_edgar",
                 source_id=cik_str,
+                region="US",  # Tickers file is US-only
                 record=record_data,
             )
             count += 1
@@ -200,14 +220,31 @@ class SecEdgarImporter:
         try:
             cik = str(data.get("cik", "")).zfill(10)
             name = data.get("name", "").strip()
+            entity_type = data.get("entityType", "").lower()
 
             if not cik or not name:
                 return None
 
-            # Get additional fields
+            # Filter to only include operating companies (exclude individuals and funds)
+            ticker = self._ticker_lookup.get(cik, "") if self._ticker_lookup else ""
             sic = data.get("sic", "")
+
+            # Exclude funds/financial instruments by SIC code
+            if sic in FUND_SIC_CODES:
+                return None
+
+            # Include if: has a known org entity type, OR has a ticker (publicly traded), OR has SIC code
+            is_organization = (
+                entity_type in ORG_ENTITY_TYPES
+                or ticker  # Has a ticker symbol = publicly traded company
+                or sic  # Has SIC code = classified business
+            )
+
+            if not is_organization:
+                return None
+
+            # Get additional fields
             sic_description = data.get("sicDescription", "")
-            entity_type = data.get("entityType", "")
             state = data.get("stateOfIncorporation", "")
             fiscal_year_end = data.get("fiscalYearEnd", "")
 
@@ -241,12 +278,16 @@ class SecEdgarImporter:
                 },
             }
 
+            # Use stateOrCountry for region (2-letter US state or country code)
+            region = business_addr.get("stateOrCountry", "US")
+
             return CompanyRecord(
                 name=name,
                 embedding_name=name,
                 legal_name=name,
                 source="sec_edgar",
                 source_id=cik,
+                region=region,
                 record=record_data,
             )
 

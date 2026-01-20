@@ -24,6 +24,13 @@ LEI_NAMESPACES = {
     'lei': 'http://www.gleif.org/data/schema/leidata/2016',
 }
 
+# EntityCategory values that represent operating companies (exclude funds, branches, etc.)
+# See: https://www.gleif.org/en/about-lei/common-data-file-format
+ALLOWED_ENTITY_CATEGORIES = {
+    "GENERAL",  # Regular legal entities (companies)
+    "",  # Empty/unset - include for backwards compatibility
+}
+
 
 class GleifImporter:
     """
@@ -33,6 +40,9 @@ class GleifImporter:
     - JSON concatenated files (level1-concatenated.json)
     - Individual JSON records
     - Streaming import for large files
+
+    Filters to only include GENERAL category entities (excludes FUND, BRANCH,
+    SOLE_PROPRIETOR, INTERNATIONAL_ORGANIZATION).
     """
 
     def __init__(self, active_only: bool = True):
@@ -225,6 +235,11 @@ class GleifImporter:
             if self._active_only and status and status.upper() != 'ACTIVE':
                 return None
 
+            # Get entity category - filter to only GENERAL entities (exclude FUND, BRANCH, etc.)
+            entity_category = find_text(entity_elem, 'EntityCategory') or ""
+            if entity_category.upper() not in ALLOWED_ENTITY_CATEGORIES and entity_category not in ALLOWED_ENTITY_CATEGORIES:
+                return None
+
             # Get jurisdiction
             jurisdiction = find_text(entity_elem, 'LegalJurisdiction')
 
@@ -262,6 +277,7 @@ class GleifImporter:
                 legal_name=legal_name,
                 source="gleif",
                 source_id=lei,
+                region=country,
                 record=record_data,
             )
 
@@ -284,6 +300,11 @@ class GleifImporter:
             registration = attrs.get("registration", {})
             status = registration.get("status") or entity.get("status") or raw.get("status")
             if self._active_only and status and status.upper() != "ACTIVE":
+                return None
+
+            # Get entity category - filter to only GENERAL entities (exclude FUND, BRANCH, etc.)
+            entity_category = entity.get("category") or entity.get("EntityCategory") or ""
+            if entity_category.upper() not in ALLOWED_ENTITY_CATEGORIES and entity_category not in ALLOWED_ENTITY_CATEGORIES:
                 return None
 
             # Get LEI
@@ -347,6 +368,7 @@ class GleifImporter:
                 legal_name=legal_name,
                 source="gleif",
                 source_id=lei,
+                region=country,
                 record=record_data,
             )
 

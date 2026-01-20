@@ -21,6 +21,7 @@ class CompanyRecord(BaseModel):
     legal_name: str = Field(..., description="Official legal name")
     source: SourceType = Field(..., description="Data source")
     source_id: str = Field(..., description="Unique identifier from source (LEI, CIK, CH number)")
+    region: str = Field(default="", description="Geographic region/country (e.g., 'UK', 'US', 'DE')")
     record: dict[str, Any] = Field(default_factory=dict, description="Original record from source")
 
     @property
@@ -36,6 +37,7 @@ class CompanyRecord(BaseModel):
             "legal_name": self.legal_name,
             "source": self.source,
             "source_id": self.source_id,
+            "region": self.region,
             "record": self.record,
         }
 

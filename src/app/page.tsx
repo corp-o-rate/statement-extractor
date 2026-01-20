@@ -3,14 +3,14 @@
 import { useState, useEffect } from 'react';
 import { Header } from '@/components/header';
 import { Footer } from '@/components/footer';
-import { StatementInput } from '@/components/statement-input';
+import { StatementInput, ExtractionInput } from '@/components/statement-input';
 import { StatementList } from '@/components/statement-list';
 import { StatementEditor } from '@/components/statement-editor';
 import { RelationshipGraph } from '@/components/relationship-graph';
 import { RateLimitBanner } from '@/components/rate-limit-banner';
 import { QuickStart } from '@/components/documentation';
 import { LLMPrompts } from '@/components/llm-prompts';
-import { ExtractionResult, Statement, JobSubmissionResponse, JobStatusResponse } from '@/lib/types';
+import { ExtractionResult, Statement, JobSubmissionResponse, JobStatusResponse, UrlJobSubmissionResponse, UrlExtractionResult } from '@/lib/types';
 import { getUserUuid } from '@/lib/user-uuid';
 import { toast } from 'sonner';
 import { ExportFormats } from '@/components/export-formats';
@@ -73,11 +73,11 @@ export default function Home() {
     return response.json();
   };
 
-  const handleExtract = async (text: string, options?: { useCanonicalPredicates?: boolean }) => {
+  const handleExtract = async (input: ExtractionInput) => {
     setIsLoading(true);
     setElapsedSeconds(0);
     setRateLimitMessage(undefined);
-    setInputText(text);
+    setInputText(input.mode === 'text' ? input.text || '' : input.url || '');
     setHasLiked(false); // Reset like status for new extraction
     setShowWarmUpDialog(false);
     setShowTimeoutDialog(false);
@@ -90,13 +90,15 @@ export default function Home() {
     }, 1000);
 
     try {
+      // Build request body based on input mode
+      const requestBody = input.mode === 'text'
+        ? { text: input.text, useCanonicalPredicates: input.useCanonicalPredicates }
+        : { url: input.url };
+
       const response = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text,
-          useCanonicalPredicates: options?.useCanonicalPredicates,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -106,16 +108,51 @@ export default function Home() {
 
       const result = await response.json();
 
-      // Check if this is a job submission (has jobId) or immediate result (has statements)
-      if (result.jobId) {
-        // Async job - poll for result
+      // Check if this is a URL job submission
+      if (result.isUrlJob && result.jobId) {
+        const urlJobSubmission = result as UrlJobSubmissionResponse;
+        console.log(`URL job submitted: ${urlJobSubmission.jobId}`);
+
+        let statusResult: JobStatusResponse;
+        do {
+          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+          statusResult = await pollJobStatus(urlJobSubmission.jobId);
+          console.log(`Job status: ${statusResult.status}`);
+        } while (statusResult.status === 'IN_QUEUE' || statusResult.status === 'IN_PROGRESS');
+
+        if (statusResult.status === 'FAILED') {
+          throw new Error(statusResult.error || 'Job failed');
+        }
+
+        if (statusResult.status === 'TIMED_OUT') {
+          clearInterval(timerInterval);
+          setIsLoading(false);
+          setShowWarmUpDialog(false);
+          setShowTimeoutDialog(true);
+          return;
+        }
+
+        // URL job completed
+        const statements = statusResult.statements || [];
+        setStatements(statements);
+        setEditedStatements(JSON.parse(JSON.stringify(statements)));
+        setHasChanges(false);
+        setIsEditMode(false);
+
+        if (statements.length === 0) {
+          toast.info('No statements found in the document');
+        } else {
+          toast.success(`Extracted ${statements.length} statement${statements.length !== 1 ? 's' : ''} from document`);
+        }
+      } else if (result.jobId) {
+        // Text job - poll for result
         const jobSubmission = result as JobSubmissionResponse;
         console.log(`Job submitted: ${jobSubmission.jobId}`);
 
         let statusResult: JobStatusResponse;
         do {
           await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
-          statusResult = await pollJobStatus(jobSubmission.jobId, text, options?.useCanonicalPredicates);
+          statusResult = await pollJobStatus(jobSubmission.jobId, input.text, input.useCanonicalPredicates);
           console.log(`Job status: ${statusResult.status}`);
         } while (statusResult.status === 'IN_QUEUE' || statusResult.status === 'IN_PROGRESS');
 
