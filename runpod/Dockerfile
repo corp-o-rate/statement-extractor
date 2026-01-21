@@ -1,4 +1,5 @@
 # RunPod Serverless Dockerfile for Statement Extractor
+# syntax=docker/dockerfile:1.4
 FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
 # HuggingFace token for gated models (pass with --build-arg HF_TOKEN=...)
@@ -9,7 +10,9 @@ ENV HF_TOKEN=${HF_TOKEN}
 WORKDIR /app
 
 # Upgrade PyTorch to 2.6+ (required for T5Gemma2 masking_utils)
-RUN pip install --no-cache-dir --upgrade \
+# Using BuildKit cache mount to persist pip cache across builds
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade \
     torch==2.6.0 \
     torchvision \
     torchaudio \
@@ -17,7 +20,8 @@ RUN pip install --no-cache-dir --upgrade \
 
 # Install Python dependencies
 # NOTE: T5Gemma2 requires the dev version of transformers from GitHub
-RUN pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
     runpod \
     accelerate \
     safetensors \
@@ -30,15 +34,19 @@ RUN pip install --no-cache-dir \
 
 # Install llama-cpp-python with CUDA support for GGUF models
 ENV CMAKE_ARGS="-DGGML_CUDA=on"
-RUN pip install --no-cache-dir llama-cpp-python
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install llama-cpp-python
 
 # Pre-download embedding models (downloads on CPU during build, will use GPU at runtime)
 RUN python -c "from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('sentence-transformers/paraphrase-MiniLM-L6-v2'); \
     print('MiniLM embedding model downloaded')"
 
-# Pre-download EmbeddingGemma model for taxonomy classification
-RUN python -c "from sentence_transformers import SentenceTransformer; \
+# Pre-download EmbeddingGemma model for taxonomy classification (gated model requires auth)
+RUN python -c "import os; from huggingface_hub import login; \
+    token = os.environ.get('HF_TOKEN'); \
+    token and login(token=token); \
+    from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('google/embeddinggemma-300m'); \
     print('EmbeddingGemma-300m model downloaded')"
 
@@ -53,7 +61,8 @@ RUN python -c "from huggingface_hub import hf_hub_download; \
     print(f'Gemma3 GGUF model downloaded to {path}')"
 
 # Install corp-extractor library
-RUN pip install --no-cache-dir --no-deps corp-extractor==0.8.0
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-deps corp-extractor==0.8.0
 
 # Verify imports work correctly
 RUN python -c "from statement_extractor.plugins import BaseQualifierPlugin, BaseLabelerPlugin, BaseTaxonomyPlugin; \

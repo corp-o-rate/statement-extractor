@@ -5,10 +5,9 @@
 const stages = [
   { num: 1, name: 'Splitting', tech: 'T5-Gemma2', color: 'red' },
   { num: 2, name: 'Extraction', tech: 'GLiNER2', color: 'amber' },
-  { num: 3, name: 'Qualification', tech: 'Gemma 1B + APIs', color: 'emerald' },
-  { num: 4, name: 'Canonicalization', tech: 'Fuzzy Match', color: 'blue' },
-  { num: 5, name: 'Labeling', tech: 'Multi-choice', color: 'violet' },
-  { num: 6, name: 'Taxonomy', tech: 'MNLI / Embed', color: 'orange' },
+  { num: 3, name: 'Qualification', tech: 'Embedding DB', color: 'emerald' },
+  { num: 4, name: 'Labeling', tech: 'Multi-choice', color: 'violet' },
+  { num: 5, name: 'Taxonomy', tech: 'MNLI / Embed', color: 'orange' },
 ];
 
 const colorMap: Record<string, { bg: string; border: string; text: string; dot: string }> = {
@@ -109,7 +108,7 @@ export function PipelineFlowDiagram() {
       {/* Connector arrow down */}
       <DownArrow />
 
-      {/* Row 2: Stages 4-6 → Output */}
+      {/* Row 2: Stages 4-5 → Output */}
       <div className="flex items-center justify-center gap-1">
         {secondRow.map((stage, i) => (
           <div key={stage.num} className="flex items-center">
@@ -135,8 +134,7 @@ const dataSteps = [
   { label: 'Text', color: 'gray' },
   { label: 'Atomic Statements', color: 'red' },
   { label: 'Typed Triples', color: 'amber' },
-  { label: 'Qualified Entities', color: 'emerald' },
-  { label: 'Canonical Entities', color: 'blue' },
+  { label: 'Canonical Entities', color: 'emerald' },
   { label: 'Labeled Statements', color: 'violet' },
   { label: 'Taxonomy Results', color: 'orange' },
 ];

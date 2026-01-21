@@ -24,11 +24,11 @@ export function HowItWorks() {
           <h2 className="text-2xl md:text-3xl font-black mt-4">How It Works</h2>
         </div>
 
-        {/* 6-Stage Pipeline Overview */}
+        {/* 5-Stage Pipeline Overview */}
         <div className="mb-12">
           <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
             <Layers className="w-5 h-5 text-red-600" />
-            6-Stage Pipeline Architecture <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-2">v0.5.0</span>
+            5-Stage Pipeline Architecture <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded ml-2">v0.8.0</span>
           </h3>
           <PipelineFlowDiagram />
           <p className="text-gray-600 text-center max-w-2xl mx-auto">
@@ -68,23 +68,17 @@ export function HowItWorks() {
                 <tr>
                   <td className="border border-gray-300 px-4 py-2 font-bold text-green-600">3</td>
                   <td className="border border-gray-300 px-4 py-2">Qualification</td>
-                  <td className="border border-gray-300 px-4 py-2">Add identifiers (LEI, ticker, etc.)</td>
-                  <td className="border border-gray-300 px-4 py-2">Gemma 1B + GLEIF, SEC EDGAR, Companies House APIs</td>
+                  <td className="border border-gray-300 px-4 py-2">Entities → Canonical names, identifiers, FQN</td>
+                  <td className="border border-gray-300 px-4 py-2">Company embedding database (SEC, GLEIF, UK Companies House)</td>
                 </tr>
                 <tr className="bg-gray-50">
-                  <td className="border border-gray-300 px-4 py-2 font-bold text-blue-600">4</td>
-                  <td className="border border-gray-300 px-4 py-2">Canonicalization</td>
-                  <td className="border border-gray-300 px-4 py-2">Resolve canonical entity names</td>
-                  <td className="border border-gray-300 px-4 py-2">Fuzzy matching + entity databases</td>
-                </tr>
-                <tr>
-                  <td className="border border-gray-300 px-4 py-2 font-bold text-purple-600">5</td>
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-purple-600">4</td>
                   <td className="border border-gray-300 px-4 py-2">Labeling</td>
                   <td className="border border-gray-300 px-4 py-2">Add simple classifications</td>
                   <td className="border border-gray-300 px-4 py-2">Multi-choice classifiers (sentiment, relation type)</td>
                 </tr>
-                <tr className="bg-gray-50">
-                  <td className="border border-gray-300 px-4 py-2 font-bold text-orange-600">6</td>
+                <tr>
+                  <td className="border border-gray-300 px-4 py-2 font-bold text-orange-600">5</td>
                   <td className="border border-gray-300 px-4 py-2">Taxonomy</td>
                   <td className="border border-gray-300 px-4 py-2">Classify against ESG taxonomy</td>
                   <td className="border border-gray-300 px-4 py-2">MNLI zero-shot <em>or</em> embedding similarity</td>
@@ -136,8 +130,8 @@ export function HowItWorks() {
             <div className="bg-gray-50 p-4 rounded-lg border">
               <h4 className="font-semibold mb-2">Entity Qualification</h4>
               <p className="text-sm text-gray-600">
-                Gemma 1B extracts roles and relationships for PERSON entities. External APIs (GLEIF, SEC EDGAR,
-                Companies House) add legal identifiers like LEI, CIK, ticker symbols, and company registration numbers.
+                Company embedding database (~100K+ SEC, ~3M GLEIF, ~5M UK companies) provides fast vector similarity
+                search to resolve entities to canonical names with identifiers (LEI, CIK, company numbers) and FQN.
               </p>
             </div>
             <div className="bg-gray-50 p-4 rounded-lg border">
@@ -195,10 +189,10 @@ export function HowItWorks() {
               <span className="text-green-600">✓</span> Recently Completed
             </h4>
             <ul className="text-sm text-green-700 space-y-1">
-              <li><strong>6-Stage Pipeline Architecture</strong> <span className="text-xs">(v0.5.0)</span> — Modular plugin system for full entity resolution</li>
+              <li><strong>5-Stage Pipeline Architecture</strong> <span className="text-xs">(v0.8.0)</span> — Merged qualification + canonicalization into single stage</li>
+              <li><strong>Company Embedding Database</strong> <span className="text-xs">(v0.8.0)</span> — Fast vector search for ~100K+ SEC, ~3M GLEIF, ~5M UK companies</li>
               <li><strong>Taxonomy Classification</strong> <span className="text-xs">(v0.5.0)</span> — MNLI + embedding-based ESG taxonomy classification</li>
-              <li><strong>Entity Qualification</strong> <span className="text-xs">(v0.5.0)</span> — LEI, ticker, CIK lookups via GLEIF, SEC, Companies House APIs</li>
-              <li><strong>Canonicalization</strong> <span className="text-xs">(v0.5.0)</span> — Fuzzy matching to resolve canonical entity names</li>
+              <li><strong>Entity Qualification</strong> <span className="text-xs">(v0.5.0)</span> — LEI, ticker, CIK lookups with canonical names and FQN</li>
               <li><strong>Statement Labeling</strong> <span className="text-xs">(v0.5.0)</span> — Sentiment analysis and relation type classification</li>
               <li><strong>GLiNER2 Integration</strong> <span className="text-xs">(v0.4.0)</span> — 205M param model for entity recognition and relation extraction</li>
             </ul>
