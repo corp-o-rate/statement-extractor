@@ -9,18 +9,27 @@ Provides:
 """
 
 from .models import CompanyRecord, CompanyMatch, DatabaseStats
-from .store import CompanyDatabase
+from .store import CompanyDatabase, get_database
 from .embeddings import CompanyEmbedder, get_embedder
-from .hub import download_database, get_database_path, upload_database
+from .hub import (
+    download_database,
+    get_database_path,
+    upload_database,
+    upload_database_with_variants,
+    create_embedding_cache,
+)
 
 __all__ = [
     "CompanyRecord",
     "CompanyMatch",
     "DatabaseStats",
     "CompanyDatabase",
+    "get_database",
     "CompanyEmbedder",
     "get_embedder",
     "download_database",
     "get_database_path",
     "upload_database",
+    "upload_database_with_variants",
+    "create_embedding_cache",
 ]

@@ -115,7 +115,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         if self._database is not None:
             return self._database
 
-        from ...database import CompanyDatabase
+        from ...database.store import get_database
         from ...database.hub import get_database_path
 
         # Find database path
@@ -127,7 +127,8 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
             logger.warning("Company database not available. Skipping embedding qualification.")
             return None
 
-        self._database = CompanyDatabase(db_path=db_path)
+        # Use singleton to ensure index is only loaded once
+        self._database = get_database(db_path=db_path)
         logger.info(f"Loaded company database from {db_path}")
         return self._database
 

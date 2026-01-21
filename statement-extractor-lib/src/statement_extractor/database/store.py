@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 # Default database location
 DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "companies.db"
 
+# Module-level singleton for CompanyDatabase to prevent multiple loads
+_database_instances: dict[str, "CompanyDatabase"] = {}
+
 
 def _serialize_embedding(embedding: np.ndarray) -> bytes:
     """Serialize numpy array to bytes for storage."""
@@ -31,6 +34,27 @@ def _serialize_embedding(embedding: np.ndarray) -> bytes:
 def _deserialize_embedding(data: bytes, dim: int) -> np.ndarray:
     """Deserialize bytes to numpy array."""
     return np.array(struct.unpack(f"{dim}f", data), dtype=np.float32)
+
+
+def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "CompanyDatabase":
+    """
+    Get a singleton CompanyDatabase instance for the given path.
+
+    This ensures the embedding index is only loaded once into memory,
+    regardless of how many times the database is accessed.
+
+    Args:
+        db_path: Path to database file
+        embedding_dim: Dimension of embeddings
+
+    Returns:
+        Shared CompanyDatabase instance
+    """
+    path_key = str(db_path or DEFAULT_DB_PATH)
+    if path_key not in _database_instances:
+        logger.debug(f"Creating new CompanyDatabase instance for {path_key}")
+        _database_instances[path_key] = CompanyDatabase(db_path=db_path, embedding_dim=embedding_dim)
+    return _database_instances[path_key]
 
 
 class CompanyDatabase:
@@ -61,6 +85,10 @@ class CompanyDatabase:
         self._index_loaded = False
         self._embeddings: Optional[np.ndarray] = None  # (N, dim) matrix
         self._row_ids: Optional[np.ndarray] = None  # (N,) array of SQLite row IDs
+
+        # Cache file paths (same directory as database)
+        self._cache_embeddings_path = self._db_path.with_suffix(".embeddings.npy")
+        self._cache_rowids_path = self._db_path.with_suffix(".rowids.npy")
 
     def _ensure_dir(self) -> None:
         """Ensure database directory exists."""
@@ -117,15 +145,139 @@ class CompanyDatabase:
 
         conn.commit()
 
+    def _is_cache_valid(self) -> bool:
+        """Check if cached embedding index exists and is newer than database."""
+        if not self._cache_embeddings_path.exists() or not self._cache_rowids_path.exists():
+            return False
+
+        if not self._db_path.exists():
+            return False
+
+        # Cache is valid if it's newer than the database file
+        db_mtime = self._db_path.stat().st_mtime
+        cache_mtime = self._cache_embeddings_path.stat().st_mtime
+        return cache_mtime > db_mtime
+
+    def _load_from_cache(self) -> bool:
+        """
+        Load embeddings from mmap cache files.
+
+        Returns:
+            True if cache was loaded successfully, False otherwise
+        """
+        try:
+            start = time.time()
+            logger.info("Loading embedding index from cache (mmap)...")
+
+            # Load with mmap for fastest possible loading
+            # mmap_mode='r' maps the file read-only, no copying to memory
+            self._embeddings = np.load(self._cache_embeddings_path, mmap_mode="r")
+            self._row_ids = np.load(self._cache_rowids_path, mmap_mode="r")
+
+            # Verify dimensions
+            if self._embeddings.shape[1] != self._embedding_dim:
+                logger.warning(
+                    f"Cache dimension mismatch: {self._embeddings.shape[1]} != {self._embedding_dim}"
+                )
+                return False
+
+            elapsed = time.time() - start
+            logger.info(f"Loaded {len(self._embeddings):,} embeddings from cache in {elapsed:.2f}s")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to load from cache: {e}")
+            return False
+
+    def _save_to_cache(self) -> None:
+        """Save embeddings to cache files for fast future loading."""
+        if self._embeddings is None or self._row_ids is None:
+            return
+
+        try:
+            start = time.time()
+
+            # Calculate expected sizes
+            expected_emb_size = self._embeddings.nbytes + 128  # numpy header overhead
+            expected_rowid_size = self._row_ids.nbytes + 128
+
+            # Check available disk space (need ~2x for safety during write)
+            import shutil
+            free_space = shutil.disk_usage(self._db_path.parent).free
+            required_space = (expected_emb_size + expected_rowid_size) * 2
+
+            if free_space < required_space:
+                logger.warning(
+                    f"Skipping cache save: insufficient disk space "
+                    f"({free_space / 1e9:.1f} GB free, need ~{required_space / 1e9:.1f} GB)"
+                )
+                return
+
+            logger.info("Saving embedding index to cache...")
+
+            # Save to temp files first, then rename (atomic on most filesystems)
+            temp_emb = self._cache_embeddings_path.with_suffix(".npy.tmp")
+            temp_rowid = self._cache_rowids_path.with_suffix(".npy.tmp")
+
+            try:
+                np.save(temp_emb, self._embeddings)
+                np.save(temp_rowid, self._row_ids)
+
+                # Verify sizes before renaming
+                if temp_emb.stat().st_size < expected_emb_size * 0.9:
+                    raise IOError("Embeddings file appears truncated")
+                if temp_rowid.stat().st_size < expected_rowid_size * 0.9:
+                    raise IOError("Rowids file appears truncated")
+
+                # Atomic rename
+                temp_emb.rename(self._cache_embeddings_path)
+                temp_rowid.rename(self._cache_rowids_path)
+
+                elapsed = time.time() - start
+                cache_size_mb = (
+                    self._cache_embeddings_path.stat().st_size +
+                    self._cache_rowids_path.stat().st_size
+                ) / (1024 * 1024)
+                logger.info(f"Saved cache ({cache_size_mb:.1f} MB) in {elapsed:.2f}s")
+
+            finally:
+                # Clean up temp files if they exist
+                if temp_emb.exists():
+                    temp_emb.unlink()
+                if temp_rowid.exists():
+                    temp_rowid.unlink()
+
+        except Exception as e:
+            logger.warning(f"Failed to save cache: {e}")
+            # Clean up any partial cache files
+            self.invalidate_cache()
+
+    def invalidate_cache(self) -> None:
+        """Delete cached embedding index files."""
+        for path in [self._cache_embeddings_path, self._cache_rowids_path]:
+            if path.exists():
+                path.unlink()
+                logger.debug(f"Deleted cache file: {path}")
+
     def _load_index(self) -> None:
         """Load all embeddings into memory for fast search."""
         if self._index_loaded:
             return
 
-        conn = self._connect()
         start = time.time()
 
-        logger.info("Loading embedding index into memory...")
+        # Try loading from mmap cache first (fastest)
+        if self._is_cache_valid():
+            if self._load_from_cache():
+                self._index_loaded = True
+                return
+            else:
+                # Cache was invalid, delete it
+                self.invalidate_cache()
+
+        # Fall back to loading from SQLite
+        conn = self._connect()
+        logger.info("Loading embedding index from database...")
 
         # Count records first
         cursor = conn.execute("SELECT COUNT(*) FROM companies WHERE embedding IS NOT NULL")
@@ -142,19 +294,43 @@ class CompanyDatabase:
         self._embeddings = np.zeros((count, self._embedding_dim), dtype=np.float32)
         self._row_ids = np.zeros(count, dtype=np.int64)
 
-        # Load all embeddings
+        # Load embeddings in batches for better performance
+        # Using fetchmany with numpy.frombuffer is much faster than row-by-row struct.unpack
+        batch_size = 10000
         cursor = conn.execute("SELECT id, embedding FROM companies WHERE embedding IS NOT NULL")
-        for i, row in enumerate(cursor):
-            self._row_ids[i] = row["id"]
-            self._embeddings[i] = _deserialize_embedding(row["embedding"], self._embedding_dim)
+        idx = 0
+        last_log_time = start
+
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+
+            for row in rows:
+                self._row_ids[idx] = row["id"]
+                # numpy.frombuffer is much faster than struct.unpack
+                self._embeddings[idx] = np.frombuffer(row["embedding"], dtype=np.float32)
+                idx += 1
+
+            # Log progress every 5 seconds
+            now = time.time()
+            if now - last_log_time >= 5.0:
+                logger.info(f"  Loaded {idx:,}/{count:,} embeddings ({100*idx/count:.1f}%)...")
+                last_log_time = now
 
         # Normalize embeddings for cosine similarity (dot product of normalized vectors)
+        logger.info("Normalizing embeddings...")
         norms = np.linalg.norm(self._embeddings, axis=1, keepdims=True)
         norms[norms == 0] = 1  # Avoid division by zero
         self._embeddings = self._embeddings / norms
 
         elapsed = time.time() - start
-        logger.info(f"Loaded {count} embeddings into memory in {elapsed:.2f}s")
+        logger.info(f"Loaded {count:,} embeddings from database in {elapsed:.2f}s")
+
+        # Save to cache for fast future loading
+        self._save_to_cache()
+
+        self._index_loaded = True
 
     def close(self) -> None:
         """Close database connection."""
@@ -197,8 +373,9 @@ class CompanyDatabase:
         row_id = cursor.lastrowid
         assert row_id is not None
 
-        # Invalidate in-memory index so it gets reloaded on next search
+        # Invalidate in-memory index and file cache so it gets reloaded on next search
         self._index_loaded = False
+        self.invalidate_cache()
 
         conn.commit()
         return row_id
@@ -250,8 +427,9 @@ class CompanyDatabase:
 
         conn.commit()
 
-        # Invalidate in-memory index
+        # Invalidate in-memory index and file cache
         self._index_loaded = False
+        self.invalidate_cache()
 
         return count
 
@@ -416,8 +594,9 @@ class CompanyDatabase:
 
         conn.commit()
 
-        # Invalidate in-memory index
+        # Invalidate in-memory index and file cache
         self._index_loaded = False
+        self.invalidate_cache()
 
         logger.info(f"Deleted {deleted} records from source '{source}'")
         return deleted

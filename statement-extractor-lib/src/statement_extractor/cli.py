@@ -369,7 +369,7 @@ def pipeline_cmd(
     if enabled_plugins:
         enabled_plugin_set = {p.strip() for p in enabled_plugins.split(",") if p.strip()}
 
-    disabled_plugin_set = set()
+    disabled_plugin_set = None
     if disable_plugins:
         disabled_plugin_set = {p.strip() for p in disable_plugins.split(",") if p.strip()}
 
@@ -380,13 +380,15 @@ def pipeline_cmd(
         if not quiet:
             click.echo("Default predicates disabled - using entity extraction only", err=True)
 
-    # Create config
-    config = PipelineConfig(
-        enabled_stages=enabled_stages,
-        enabled_plugins=enabled_plugin_set,
-        disabled_plugins=disabled_plugin_set,
-        extractor_options=extractor_options,
-    )
+    # Create config - only pass disabled_plugins if user explicitly specified, otherwise use defaults
+    config_kwargs: dict = {
+        "enabled_stages": enabled_stages,
+        "enabled_plugins": enabled_plugin_set,
+        "extractor_options": extractor_options,
+    }
+    if disabled_plugin_set is not None:
+        config_kwargs["disabled_plugins"] = disabled_plugin_set
+    config = PipelineConfig(**config_kwargs)
 
     # Run pipeline
     try:
