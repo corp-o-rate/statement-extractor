@@ -8,13 +8,12 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 ## Features
 
-- **6-Stage Pipeline** *(v0.5.0)*: Modular plugin-based architecture for full entity resolution
+- **5-Stage Pipeline** *(v0.8.0)*: Modular plugin-based architecture for full entity resolution
 - **Document Processing** *(v0.7.0)*: Process documents, URLs, and PDFs with chunking and deduplication
 - **Company Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (~100K+ SEC, ~3M GLEIF, ~5M UK companies)
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
-- **Entity Qualification** *(v0.5.0)*: Adds roles, identifiers (LEI, ticker, company numbers) via embedding database
-- **Canonicalization** *(v0.5.0)*: Resolves entities to canonical forms with fuzzy matching
+- **Entity Qualification** *(v0.8.0)*: Adds identifiers (LEI, ticker, company numbers), canonical names, and FQN via embedding database
 - **Statement Labeling** *(v0.5.0)*: Sentiment analysis, relation type classification, confidence scoring
 - **GLiNER2 Integration** *(v0.4.0)*: Uses GLiNER2 (205M params) for entity recognition and relation extraction
 - **Predefined Predicates**: Optional `--predicates` list for GLiNER2 relation extraction mode
@@ -256,9 +255,9 @@ for stmt in fixed_statements:
 
 During deduplication, reversed duplicates (e.g., "A -> P -> B" and "B -> P -> A") are now detected and merged, with the correct orientation determined by source text similarity.
 
-## New in v0.5.0: Pipeline Architecture
+## Pipeline Architecture
 
-v0.5.0 introduces a **6-stage plugin-based pipeline** for comprehensive entity resolution, statement enrichment, and taxonomy classification.
+The library uses a **5-stage plugin-based pipeline** for comprehensive entity resolution, statement enrichment, and taxonomy classification.
 
 ### Pipeline Stages
 
@@ -266,10 +265,9 @@ v0.5.0 introduces a **6-stage plugin-based pipeline** for comprehensive entity r
 |-------|------|-------|--------|----------|
 | 1 | Splitting | Text | `RawTriple[]` | T5-Gemma2 |
 | 2 | Extraction | `RawTriple[]` | `PipelineStatement[]` | GLiNER2 |
-| 3 | Qualification | Entities | `QualifiedEntity[]` | Gemma3, APIs |
-| 4 | Canonicalization | `QualifiedEntity[]` | `CanonicalEntity[]` | Fuzzy matching |
-| 5 | Labeling | Statements | `LabeledStatement[]` | Sentiment, etc. |
-| 6 | Taxonomy | Statements | `TaxonomyResult[]` | MNLI, Embeddings |
+| 3 | Qualification | Entities | `CanonicalEntity[]` | Embedding DB |
+| 4 | Labeling | Statements | `LabeledStatement[]` | Sentiment, etc. |
+| 5 | Taxonomy | Statements | `TaxonomyResult[]` | MNLI, Embeddings |
 
 ### Pipeline Python API
 
@@ -318,16 +316,12 @@ config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
 
 **Qualifiers (Stage 3):**
 - `person_qualifier` - PERSON → role, org (uses Gemma3)
-- `embedding_company_qualifier` - ORG → LEI, CIK, company number via embedding database (replaces API-based qualifiers)
+- `embedding_company_qualifier` - ORG → canonical name, identifiers (LEI, CIK, company number), and FQN via embedding database
 
-**Canonicalizers (Stage 4):**
-- `organization_canonicalizer` - ORG canonical names
-- `person_canonicalizer` - PERSON name variants
-
-**Labelers (Stage 5):**
+**Labelers (Stage 4):**
 - `sentiment_labeler` - Statement sentiment analysis
 
-**Taxonomy Classifiers (Stage 6):**
+**Taxonomy Classifiers (Stage 5):**
 - `mnli_taxonomy_classifier` - MNLI zero-shot classification against ESG taxonomy
 - `embedding_taxonomy_classifier` - Embedding similarity-based taxonomy classification
 

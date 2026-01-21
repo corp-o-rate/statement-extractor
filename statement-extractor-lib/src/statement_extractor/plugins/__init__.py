@@ -4,10 +4,9 @@ Plugins module for the extraction pipeline.
 Contains all plugin implementations organized by stage:
 - splitters/: Stage 1 - Text to atomic triples
 - extractors/: Stage 2 - Refine entities and relations
-- qualifiers/: Stage 3 - Add qualifiers and identifiers
-- canonicalizers/: Stage 4 - Resolve canonical forms
-- labelers/: Stage 5 - Classify statements
-- taxonomy/: Stage 6 - Taxonomy classification
+- qualifiers/: Stage 3 - Qualify entities (add identifiers, canonical names, FQN)
+- labelers/: Stage 4 - Classify statements
+- taxonomy/: Stage 5 - Taxonomy classification
 """
 
 from .base import (
@@ -16,7 +15,6 @@ from .base import (
     BaseSplitterPlugin,
     BaseExtractorPlugin,
     BaseQualifierPlugin,
-    BaseCanonicalizerPlugin,
     BaseLabelerPlugin,
     BaseTaxonomyPlugin,
     # Content acquisition plugins
@@ -28,7 +26,7 @@ from .base import (
 )
 
 # Import plugin modules for auto-registration
-from . import splitters, extractors, qualifiers, canonicalizers, labelers, taxonomy
+from . import splitters, extractors, qualifiers, labelers, taxonomy
 # Content acquisition plugins
 from . import scrapers, pdf
 
@@ -38,7 +36,6 @@ __all__ = [
     "BaseSplitterPlugin",
     "BaseExtractorPlugin",
     "BaseQualifierPlugin",
-    "BaseCanonicalizerPlugin",
     "BaseLabelerPlugin",
     "BaseTaxonomyPlugin",
     # Content acquisition plugins
@@ -51,7 +48,6 @@ __all__ = [
     "splitters",
     "extractors",
     "qualifiers",
-    "canonicalizers",
     "labelers",
     "taxonomy",
     "scrapers",

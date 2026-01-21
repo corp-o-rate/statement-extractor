@@ -64,8 +64,51 @@ class CanonicalEntity(BaseModel):
     )
     fqn: str = Field(
         ...,
-        description="Fully qualified name, e.g., 'Tim Cook (CEO, Apple Inc)'"
+        description="Fully qualified name, e.g., 'AMAZON CORP INC (SEC-CIK,USA)'"
     )
+
+    @property
+    def name(self) -> Optional[str]:
+        """Get the canonical/legal name if available."""
+        # Prefer legal_name from qualifiers (set by embedding qualifier)
+        if self.qualified_entity.qualifiers.legal_name:
+            return self.qualified_entity.qualifiers.legal_name
+        # Fall back to canonical match name
+        if self.canonical_match and self.canonical_match.canonical_name:
+            return self.canonical_match.canonical_name
+        return None
+
+    @property
+    def qualifiers_dict(self) -> Optional[dict[str, str]]:
+        """
+        Get qualifiers as a dict for serialization.
+
+        Returns a dict with keys like: legal_name, region, source, source_id
+        Only returns non-None values. Returns None if no qualifiers are set.
+        """
+        qualifiers = self.qualified_entity.qualifiers
+        identifiers = qualifiers.identifiers
+        result = {}
+
+        # Add legal name
+        if qualifiers.legal_name:
+            result["legal_name"] = qualifiers.legal_name
+
+        # Add region (prefer region, fall back to jurisdiction/country)
+        if qualifiers.region:
+            result["region"] = qualifiers.region
+        elif qualifiers.jurisdiction:
+            result["region"] = qualifiers.jurisdiction
+        elif qualifiers.country:
+            result["region"] = qualifiers.country
+
+        # Add source and source_id from identifiers
+        if "source" in identifiers:
+            result["source"] = identifiers["source"]
+        if "source_id" in identifiers:
+            result["source_id"] = identifiers["source_id"]
+
+        return result if result else None
 
     @classmethod
     def from_qualified(

@@ -28,12 +28,6 @@ DEFAULT_DB_LITE_FILENAME = "companies-lite.db"
 DEFAULT_DB_COMPRESSED_FILENAME = "companies.db.gz"
 DEFAULT_DB_LITE_COMPRESSED_FILENAME = "companies-lite.db.gz"
 
-# Embedding cache files (mmap-loadable numpy arrays)
-CACHE_EMBEDDINGS_FILENAME = "companies.embeddings.npy"
-CACHE_ROWIDS_FILENAME = "companies.rowids.npy"
-CACHE_EMBEDDINGS_COMPRESSED = "companies.embeddings.npy.gz"
-CACHE_ROWIDS_COMPRESSED = "companies.rowids.npy.gz"
-
 # Local cache directory
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "corp-extractor"
 
@@ -294,56 +288,6 @@ def compress_database(
     return output_path
 
 
-def create_embedding_cache(
-    db_path: str | Path,
-    output_dir: Optional[str | Path] = None,
-) -> tuple[Path, Path]:
-    """
-    Create mmap-loadable embedding cache files from a database.
-
-    Args:
-        db_path: Path to the database file
-        output_dir: Output directory (default: same directory as database)
-
-    Returns:
-        Tuple of (embeddings_path, rowids_path)
-    """
-    import numpy as np
-    from .store import CompanyDatabase
-
-    db_path = Path(db_path)
-    if not db_path.exists():
-        raise FileNotFoundError(f"Database not found: {db_path}")
-
-    output_dir = Path(output_dir) if output_dir else db_path.parent
-
-    logger.info(f"Creating embedding cache from {db_path}")
-
-    # Load database and trigger index loading
-    db = CompanyDatabase(db_path=db_path)
-
-    # Force load from SQLite (not from existing cache)
-    db._index_loaded = False
-    db.invalidate_cache()
-    db._load_index()
-
-    if db._embeddings is None or db._row_ids is None:
-        raise RuntimeError("Failed to load embeddings from database")
-
-    # Save to output directory
-    embeddings_path = output_dir / CACHE_EMBEDDINGS_FILENAME
-    rowids_path = output_dir / CACHE_ROWIDS_FILENAME
-
-    np.save(embeddings_path, db._embeddings)
-    np.save(rowids_path, db._row_ids)
-
-    emb_size = embeddings_path.stat().st_size / (1024 * 1024)
-    rowid_size = rowids_path.stat().st_size / (1024 * 1024)
-    logger.info(f"Created cache: embeddings={emb_size:.1f}MB, rowids={rowid_size:.1f}MB")
-
-    return embeddings_path, rowids_path
-
-
 def decompress_database(
     compressed_path: str | Path,
     output_path: Optional[str | Path] = None,
@@ -386,18 +330,15 @@ def upload_database_with_variants(
     token: Optional[str] = None,
     include_lite: bool = True,
     include_compressed: bool = True,
-    include_cache: bool = True,
 ) -> dict[str, str]:
     """
-    Upload company database with optional lite, compressed, and cache variants.
+    Upload company database with optional lite and compressed variants.
 
     Creates and uploads:
     - companies.db (full database)
     - companies-lite.db (without record data, smaller)
     - companies.db.gz (compressed full database)
     - companies-lite.db.gz (compressed lite database)
-    - companies.embeddings.npy.gz (compressed embedding cache for fast mmap loading)
-    - companies.rowids.npy.gz (compressed row ID cache)
 
     Args:
         db_path: Local path to full database file
@@ -406,7 +347,6 @@ def upload_database_with_variants(
         token: HuggingFace API token
         include_lite: Whether to create and upload lite version
         include_compressed: Whether to create and upload compressed versions
-        include_cache: Whether to create and upload embedding cache files
 
     Returns:
         Dict mapping filename to upload URL
@@ -448,7 +388,7 @@ def upload_database_with_variants(
         files_to_upload = []
 
         # Full database
-        files_to_upload.append((db_path, DEFAULT_DB_FILENAME))
+        files_to_upload.append((db_path, DEFAULT_DB_FULL_FILENAME))
 
         # Lite version
         if include_lite:
@@ -469,23 +409,6 @@ def upload_database_with_variants(
                 lite_path = temp_path / DEFAULT_DB_LITE_FILENAME
                 compress_database(lite_path, lite_compressed_path)
                 files_to_upload.append((lite_compressed_path, DEFAULT_DB_LITE_COMPRESSED_FILENAME))
-
-        # Embedding cache files (for fast mmap loading)
-        if include_cache:
-            logger.info("Creating embedding cache files...")
-            embeddings_path, rowids_path = create_embedding_cache(db_path, temp_path)
-            files_to_upload.append((embeddings_path, CACHE_EMBEDDINGS_FILENAME))
-            files_to_upload.append((rowids_path, CACHE_ROWIDS_FILENAME))
-
-            # Also compress cache files
-            if include_compressed:
-                emb_compressed = temp_path / CACHE_EMBEDDINGS_COMPRESSED
-                compress_database(embeddings_path, emb_compressed)
-                files_to_upload.append((emb_compressed, CACHE_EMBEDDINGS_COMPRESSED))
-
-                rowid_compressed = temp_path / CACHE_ROWIDS_COMPRESSED
-                compress_database(rowids_path, rowid_compressed)
-                files_to_upload.append((rowid_compressed, CACHE_ROWIDS_COMPRESSED))
 
         # Copy all files to a staging directory for upload_folder
         staging_dir = temp_path / "staging"
@@ -518,12 +441,9 @@ def download_database(
     cache_dir: Optional[Path] = None,
     force_download: bool = False,
     prefer_compressed: bool = True,
-    download_cache: bool = True,
 ) -> Path:
     """
     Download company database from HuggingFace Hub.
-
-    Also downloads embedding cache files if available for fast loading.
 
     Args:
         repo_id: HuggingFace repo ID (e.g., "corp-o-rate/company-embeddings")
@@ -532,7 +452,6 @@ def download_database(
         cache_dir: Local cache directory
         force_download: Force re-download even if cached
         prefer_compressed: Try to download compressed version first
-        download_cache: Also download embedding cache files for fast mmap loading
 
     Returns:
         Path to the downloaded database file (decompressed if was .gz)
@@ -566,11 +485,6 @@ def download_database(
             final_path = cache_dir / filename
             decompress_database(local_path, final_path)
             logger.info(f"Database downloaded and decompressed to {final_path}")
-
-            # Try to download embedding cache files
-            if download_cache:
-                _download_cache_files(repo_id, revision, cache_dir, force_download, prefer_compressed)
-
             return final_path
         except Exception as e:
             logger.debug(f"Compressed version not available: {e}")
@@ -587,80 +501,5 @@ def download_database(
         repo_type="dataset",
     )
 
-    # Try to download embedding cache files
-    if download_cache:
-        _download_cache_files(repo_id, revision, cache_dir, force_download, prefer_compressed)
-
     logger.info(f"Database downloaded to {local_path}")
     return Path(local_path)
-
-
-def _download_cache_files(
-    repo_id: str,
-    revision: Optional[str],
-    cache_dir: Path,
-    force_download: bool,
-    prefer_compressed: bool,
-) -> bool:
-    """
-    Download embedding cache files for fast mmap loading.
-
-    Returns True if cache files were downloaded successfully.
-    """
-    try:
-        from huggingface_hub import hf_hub_download
-    except ImportError:
-        return False
-
-    logger.info("Downloading embedding cache files for fast loading...")
-
-    success = True
-
-    for cache_filename, compressed_filename in [
-        (CACHE_EMBEDDINGS_FILENAME, CACHE_EMBEDDINGS_COMPRESSED),
-        (CACHE_ROWIDS_FILENAME, CACHE_ROWIDS_COMPRESSED),
-    ]:
-        final_path = cache_dir / cache_filename
-
-        # Skip if already exists and not forcing
-        if final_path.exists() and not force_download:
-            logger.debug(f"Cache file exists: {final_path}")
-            continue
-
-        try:
-            # Try compressed version first
-            if prefer_compressed:
-                try:
-                    local_path = hf_hub_download(
-                        repo_id=repo_id,
-                        filename=compressed_filename,
-                        revision=revision,
-                        cache_dir=str(cache_dir),
-                        force_download=force_download,
-                        repo_type="dataset",
-                    )
-                    decompress_database(local_path, final_path)
-                    logger.info(f"Downloaded and decompressed: {cache_filename}")
-                    continue
-                except Exception:
-                    pass  # Try uncompressed
-
-            # Try uncompressed version
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=cache_filename,
-                revision=revision,
-                cache_dir=str(cache_dir),
-                force_download=force_download,
-                repo_type="dataset",
-            )
-            # Copy to final location if different
-            if Path(local_path) != final_path:
-                shutil.copy2(local_path, final_path)
-            logger.info(f"Downloaded: {cache_filename}")
-
-        except Exception as e:
-            logger.debug(f"Cache file not available: {cache_filename}: {e}")
-            success = False
-
-    return success

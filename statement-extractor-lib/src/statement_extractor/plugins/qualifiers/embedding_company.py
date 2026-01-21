@@ -4,7 +4,7 @@ EmbeddingCompanyQualifier - Qualifies ORG entities using embedding similarity.
 Uses a local embedding database to:
 1. Find similar company names by embedding
 2. Use LLM to confirm the best match
-3. Return qualified entity with canonical ID
+3. Return CanonicalEntity with FQN and qualifiers
 """
 
 import logging
@@ -13,7 +13,14 @@ from typing import Optional
 from ..base import BaseQualifierPlugin, PluginCapability
 from ...pipeline.context import PipelineContext
 from ...pipeline.registry import PluginRegistry
-from ...models import ExtractedEntity, EntityQualifiers, EntityType
+from ...models import (
+    ExtractedEntity,
+    EntityQualifiers,
+    EntityType,
+    QualifiedEntity,
+    CanonicalEntity,
+    CanonicalMatch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +84,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         self._database = None
         self._embedder = None
         self._llm = None
-        self._cache: dict[str, Optional[EntityQualifiers]] = {}
+        self._cache: dict[str, Optional[CanonicalEntity]] = {}
 
     @property
     def name(self) -> str:
@@ -161,7 +168,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         self,
         entity: ExtractedEntity,
         context: PipelineContext,
-    ) -> Optional[EntityQualifiers]:
+    ) -> Optional[CanonicalEntity]:
         """
         Qualify an ORG entity using embedding similarity.
 
@@ -170,7 +177,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
             context: Pipeline context
 
         Returns:
-            EntityQualifiers with identifiers, or None if no match
+            CanonicalEntity with qualifiers, FQN, and canonical match, or None if no match
         """
         if entity.type != EntityType.ORG:
             return None
@@ -192,9 +199,13 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         logger.debug(f"    Embedding query: '{entity.text}'")
         query_embedding = embedder.embed(entity.text)
 
-        # Search for similar companies
+        # Search for similar companies using hybrid text + vector search
         logger.debug(f"    Searching database for similar companies...")
-        results = database.search(query_embedding, top_k=self._top_k)
+        results = database.search(
+            query_embedding,
+            top_k=self._top_k,
+            query_text=entity.text,  # Enable text-based pre-filtering
+        )
 
         # Filter by minimum similarity
         results = [(r, s) for r, s in results if s >= self._min_similarity]
@@ -204,10 +215,14 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
             self._cache[cache_key] = None
             return None
 
-        logger.info(f"    Found {len(results)} candidates, top: '{results[0][0].name}' ({results[0][1]:.3f})")
+        # Log all candidates
+        logger.info(f"    Found {len(results)} candidates for '{entity.text}':")
+        for i, (record, sim) in enumerate(results[:10], 1):
+            region_str = f" [{record.region}]" if record.region else ""
+            logger.info(f"      {i}. {record.legal_name}{region_str} (sim={sim:.3f}, source={record.source})")
 
         # Get best match (optionally with LLM confirmation)
-        logger.debug(f"    Selecting best match (LLM={self._use_llm_confirmation})...")
+        logger.info(f"    Selecting best match (LLM={self._use_llm_confirmation})...")
         best_match = self._select_best_match(entity.text, results, context)
 
         if best_match is None:
@@ -218,11 +233,11 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         record, similarity = best_match
         logger.info(f"    Matched: '{record.legal_name}' (source={record.source}, similarity={similarity:.3f})")
 
-        # Build qualifiers from matched record
-        qualifiers = self._build_qualifiers(record, similarity)
+        # Build CanonicalEntity from matched record
+        canonical = self._build_canonical_entity(entity, record, similarity)
 
-        self._cache[cache_key] = qualifiers
-        return qualifiers
+        self._cache[cache_key] = canonical
+        return canonical
 
     def _select_best_match(
         self,
@@ -240,7 +255,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
 
         # If only one strong match, use it directly
         if len(candidates) == 1 and candidates[0][1] >= 0.9:
-            logger.debug(f"Single strong match: {candidates[0][0].name} ({candidates[0][1]:.3f})")
+            logger.info(f"    Single strong match: '{candidates[0][0].legal_name}' (sim={candidates[0][1]:.3f})")
             return candidates[0]
 
         # Try LLM confirmation
@@ -249,15 +264,15 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
             try:
                 return self._llm_select_match(query_name, candidates, context)
             except Exception as e:
-                logger.debug(f"LLM confirmation failed: {e}")
+                logger.warning(f"    LLM confirmation failed: {e}")
 
         # Fallback: use top match if similarity is high enough
         top_record, top_similarity = candidates[0]
         if top_similarity >= 0.85:
-            logger.debug(f"Using top match: {top_record.name} ({top_similarity:.3f})")
+            logger.info(f"    No LLM, using top match: '{top_record.legal_name}' (sim={top_similarity:.3f})")
             return candidates[0]
 
-        logger.debug(f"No confident match for '{query_name}' (top: {top_similarity:.3f})")
+        logger.info(f"    No confident match for '{query_name}' (top sim={top_similarity:.3f} < 0.85)")
         return None
 
     def _llm_select_match(
@@ -292,30 +307,56 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         response = self._llm.generate(prompt, max_tokens=10, stop=["\n"])
         response = response.strip()
 
-        logger.debug(f"LLM match response for '{query_name}': {response}")
+        logger.info(f"    LLM response for '{query_name}': {response}")
 
         # Parse response
         if response.upper() == "NONE":
+            logger.info(f"    LLM chose: NONE (no match)")
             return None
 
         try:
             idx = int(response) - 1
             if 0 <= idx < len(candidates):
-                return candidates[idx]
+                chosen = candidates[idx]
+                logger.info(f"    LLM chose: #{idx + 1} '{chosen[0].legal_name}' (sim={chosen[1]:.3f})")
+                return chosen
         except ValueError:
-            pass
+            logger.warning(f"    LLM response '{response}' could not be parsed as number")
 
         # Fallback to top match if LLM response is unclear
-        return candidates[0] if candidates[0][1] >= 0.8 else None
+        if candidates[0][1] >= 0.8:
+            logger.info(f"    Fallback to top match: '{candidates[0][0].legal_name}' (sim={candidates[0][1]:.3f})")
+            return candidates[0]
 
-    def _build_qualifiers(self, record, similarity: float) -> EntityQualifiers:
-        """Build EntityQualifiers from a matched record."""
-        identifiers = {}
+        logger.info(f"    No confident match (top sim={candidates[0][1]:.3f} < 0.8)")
+        return None
 
-        # Add source-specific identifiers
+    def _build_canonical_entity(
+        self,
+        entity: ExtractedEntity,
+        record,
+        similarity: float,
+    ) -> CanonicalEntity:
+        """Build CanonicalEntity from a matched company record."""
+        # Map source names to identifier prefixes
         source = record.source
         source_id = record.source_id
+        source_prefix_map = {
+            "gleif": "LEI",
+            "sec_edgar": "SEC-CIK",
+            "companies_house": "UK-CH",
+            "wikidata": "WIKIDATA",
+        }
+        source_prefix = source_prefix_map.get(source, source.upper())
 
+        # Build identifiers dict
+        identifiers = {
+            "source": source_prefix,
+            "source_id": source_id,
+            "canonical_id": f"{source_prefix}:{source_id}",
+        }
+
+        # Add source-specific identifiers for compatibility
         if source == "gleif":
             identifiers["lei"] = source_id
         elif source == "sec_edgar":
@@ -325,20 +366,52 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         elif source == "companies_house":
             identifiers["ch_number"] = source_id
 
-        # Add canonical ID
-        identifiers["canonical_id"] = record.canonical_id
-
         # Extract location info from record
         record_data = record.record
         jurisdiction = record_data.get("jurisdiction")
         country = record_data.get("country")
         city = record_data.get("city")
+        region = record.region  # From CompanyRecord
 
-        return EntityQualifiers(
+        # Build qualifiers
+        qualifiers = EntityQualifiers(
+            legal_name=record.legal_name,
+            region=region,
             jurisdiction=jurisdiction,
             country=country,
             city=city,
             identifiers=identifiers,
+        )
+
+        # Create QualifiedEntity
+        qualified = QualifiedEntity(
+            entity_ref=entity.entity_ref,
+            original_text=entity.text,
+            entity_type=entity.type,
+            qualifiers=qualifiers,
+            qualification_sources=[self.name],
+        )
+
+        # Build FQN: "LEGAL_NAME (SOURCE,REGION)"
+        fqn_parts = [source_prefix]
+        if region:
+            fqn_parts.append(region)
+        fqn = f"{record.legal_name} ({','.join(fqn_parts)})"
+
+        # Create canonical match
+        canonical_match = CanonicalMatch(
+            canonical_id=f"{source_prefix}:{source_id}",
+            canonical_name=record.legal_name,
+            match_method="embedding",
+            match_confidence=similarity,
+            match_details={"source": source, "similarity": similarity},
+        )
+
+        return CanonicalEntity(
+            entity_ref=entity.entity_ref,
+            qualified_entity=qualified,
+            canonical_match=canonical_match,
+            fqn=fqn,
         )
 
 

@@ -22,6 +22,9 @@ class EntityQualifiers(BaseModel):
     - CompaniesHouseQualifierPlugin: Adds UK company number
     - SECEdgarQualifierPlugin: Adds SEC CIK, ticker
     """
+    # Canonical name from database (for ORG entities)
+    legal_name: Optional[str] = Field(None, description="Canonical legal name from database")
+
     # Semantic qualifiers (for PERSON entities)
     org: Optional[str] = Field(None, description="Organization/employer name")
     role: Optional[str] = Field(None, description="Job title/position/role")
@@ -41,7 +44,7 @@ class EntityQualifiers(BaseModel):
     def has_any_qualifier(self) -> bool:
         """Check if any qualifier or identifier is set."""
         return bool(
-            self.org or self.role or self.region or self.country or
+            self.legal_name or self.org or self.role or self.region or self.country or
             self.city or self.jurisdiction or self.identifiers
         )
 
@@ -53,6 +56,7 @@ class EntityQualifiers(BaseModel):
         """
         merged_identifiers = {**self.identifiers, **other.identifiers}
         return EntityQualifiers(
+            legal_name=other.legal_name or self.legal_name,
             org=other.org or self.org,
             role=other.role or self.role,
             region=other.region or self.region,

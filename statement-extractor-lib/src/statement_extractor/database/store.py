@@ -1,19 +1,21 @@
 """
-Company database with in-memory vector search.
+Company database with sqlite-vec for vector search.
 
-Loads embeddings into memory for fast numpy-based similarity search.
-SQLite is used only for record storage and retrieval.
+Uses a hybrid approach:
+1. Text-based filtering to narrow candidates (Levenshtein-like)
+2. sqlite-vec vector search for semantic ranking
 """
 
 import json
 import logging
+import re
 import sqlite3
-import struct
 import time
 from pathlib import Path
 from typing import Iterator, Optional
 
 import numpy as np
+import sqlite_vec
 
 from .models import CompanyRecord, DatabaseStats
 
@@ -25,23 +27,116 @@ DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "companies.db"
 # Module-level singleton for CompanyDatabase to prevent multiple loads
 _database_instances: dict[str, "CompanyDatabase"] = {}
 
+# Comprehensive set of corporate legal suffixes (international)
+COMPANY_SUFFIXES: set[str] = {
+    'A/S', 'AB', 'AG', 'AO', 'AG & Co', 'AG &', 'AG & CO.', 'AG & CO. KG', 'AG & CO. KGaA',
+    'AG & KG', 'AG & KGaA', 'AG & PARTNER', 'ATE', 'ASA', 'B.V.', 'BV', 'Class A', 'Class B',
+    'Class C', 'Class D', 'Class E', 'Class F', 'Class G', 'CO', 'Co', 'Co.', 'Company',
+    'Corp', 'Corp.', 'Corporation', 'DAC', 'GmbH', 'Inc', 'Inc.', 'Incorporated', 'KGaA',
+    'Limited', 'LLC', 'LLP', 'LP', 'Ltd', 'Ltd.', 'N.V.', 'NV', 'Plc', 'PC', 'plc', 'PLC',
+    'Pty Ltd', 'Pty', 'Pty. Ltd.', 'S.A.', 'S.A.B. de C.V.', 'SAB de CV', 'S.A.B.', 'S.A.P.I.',
+    'NV/SA', 'SDI', 'SpA', 'S.L.', 'S.p.A.', 'SA', 'SE', 'Tbk PT', 'U.A.',
+    # Additional common suffixes
+    'Group', 'Holdings', 'Holding', 'Partners', 'Trust', 'Fund', 'Bank', 'N.A.', 'The',
+}
 
-def _serialize_embedding(embedding: np.ndarray) -> bytes:
-    """Serialize numpy array to bytes for storage."""
-    return struct.pack(f"{len(embedding)}f", *embedding.tolist())
+# Pre-compile the suffix pattern for performance
+_SUFFIX_PATTERN = re.compile(
+    r'\s+(' + '|'.join(re.escape(suffix) for suffix in COMPANY_SUFFIXES) + r')\.?$',
+    re.IGNORECASE
+)
 
 
-def _deserialize_embedding(data: bytes, dim: int) -> np.ndarray:
-    """Deserialize bytes to numpy array."""
-    return np.array(struct.unpack(f"{dim}f", data), dtype=np.float32)
+def _clean_company_name(name: str | None) -> str:
+    """
+    Remove special characters and formatting from company name.
+
+    Removes brackets, parentheses, quotes, and other formatting artifacts.
+    """
+    if not name:
+        return ""
+    # Remove special characters, keeping only alphanumeric and spaces
+    cleaned = re.sub(r'[•;:\'"\[\](){}<>`~!@#$%^&*\-_=+\\|/?!`~]+', ' ', name)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # Recurse if changes were made (handles nested special chars)
+    return _clean_company_name(cleaned) if cleaned != name else cleaned
+
+
+def _remove_suffix(name: str) -> str:
+    """
+    Remove corporate legal suffixes from company name.
+
+    Iteratively removes suffixes until no more are found.
+    Also removes possessive 's and trailing punctuation.
+    """
+    cleaned = name.strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    # Remove possessive 's (e.g., "Amazon's" -> "Amazon")
+    cleaned = re.sub(r"'s\b", "", cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    while True:
+        new_name = _SUFFIX_PATTERN.sub('', cleaned)
+        # Remove trailing punctuation
+        new_name = re.sub(r'[ .,;&\n\t/)]$', '', new_name)
+
+        if new_name == cleaned:
+            break
+        cleaned = new_name.strip()
+
+    return cleaned.strip()
+
+
+def _normalize_name(name: str) -> str:
+    """
+    Normalize company name for text matching.
+
+    1. Remove possessive 's (before cleaning removes apostrophe)
+    2. Clean special characters
+    3. Remove legal suffixes
+    4. Lowercase
+    5. If result is empty, use cleaned lowercase original
+
+    Always returns a non-empty string for valid input.
+    """
+    if not name:
+        return ""
+    # Remove possessive 's first (before cleaning removes the apostrophe)
+    normalized = re.sub(r"'s\b", "", name)
+    # Clean special characters
+    cleaned = _clean_company_name(normalized)
+    # Remove legal suffixes
+    normalized = _remove_suffix(cleaned)
+    # Lowercase for matching
+    normalized = normalized.lower()
+    # If normalized is empty (e.g., name was just "Ltd"), use the cleaned name
+    if not normalized:
+        normalized = cleaned.lower() if cleaned else name.lower()
+    return normalized
+
+
+def _extract_search_terms(query: str) -> list[str]:
+    """
+    Extract search terms from a query for SQL LIKE matching.
+
+    Returns list of terms to search for, ordered by length (longest first).
+    """
+    # Split into words
+    words = query.split()
+
+    # Filter out very short words (< 3 chars) unless it's the only word
+    if len(words) > 1:
+        words = [w for w in words if len(w) >= 3]
+
+    # Sort by length descending (longer words are more specific)
+    words.sort(key=len, reverse=True)
+
+    return words[:3]  # Limit to top 3 terms
 
 
 def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "CompanyDatabase":
     """
     Get a singleton CompanyDatabase instance for the given path.
-
-    This ensures the embedding index is only loaded once into memory,
-    regardless of how many times the database is accessed.
 
     Args:
         db_path: Path to database file
@@ -59,10 +154,11 @@ def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768)
 
 class CompanyDatabase:
     """
-    SQLite database with in-memory vector search for companies.
+    SQLite database with sqlite-vec for company vector search.
 
-    Loads all embeddings into memory for fast numpy-based similarity search.
-    SQLite is used only for record storage and retrieval by ID.
+    Uses hybrid text + vector search:
+    1. Text filtering with Levenshtein distance to reduce candidates
+    2. sqlite-vec for semantic similarity ranking
     """
 
     def __init__(
@@ -81,21 +177,12 @@ class CompanyDatabase:
         self._embedding_dim = embedding_dim
         self._conn: Optional[sqlite3.Connection] = None
 
-        # In-memory index for fast search
-        self._index_loaded = False
-        self._embeddings: Optional[np.ndarray] = None  # (N, dim) matrix
-        self._row_ids: Optional[np.ndarray] = None  # (N,) array of SQLite row IDs
-
-        # Cache file paths (same directory as database)
-        self._cache_embeddings_path = self._db_path.with_suffix(".embeddings.npy")
-        self._cache_rowids_path = self._db_path.with_suffix(".rowids.npy")
-
     def _ensure_dir(self) -> None:
         """Ensure database directory exists."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _connect(self) -> sqlite3.Connection:
-        """Get or create database connection."""
+        """Get or create database connection with sqlite-vec loaded."""
         if self._conn is not None:
             return self._conn
 
@@ -103,13 +190,18 @@ class CompanyDatabase:
         self._conn = sqlite3.connect(str(self._db_path))
         self._conn.row_factory = sqlite3.Row
 
+        # Load sqlite-vec extension
+        self._conn.enable_load_extension(True)
+        sqlite_vec.load(self._conn)
+        self._conn.enable_load_extension(False)
+
         # Create tables
         self._create_tables()
 
         return self._conn
 
     def _create_tables(self) -> None:
-        """Create database tables."""
+        """Create database tables including sqlite-vec virtual table."""
         conn = self._conn
         assert conn is not None
 
@@ -118,13 +210,13 @@ class CompanyDatabase:
             CREATE TABLE IF NOT EXISTS companies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
+                name_normalized TEXT NOT NULL,
                 embedding_name TEXT NOT NULL,
                 legal_name TEXT NOT NULL,
                 source TEXT NOT NULL,
                 source_id TEXT NOT NULL,
                 region TEXT NOT NULL DEFAULT '',
                 record TEXT NOT NULL,
-                embedding BLOB,
                 UNIQUE(source, source_id)
             )
         """)
@@ -136,201 +228,24 @@ class CompanyDatabase:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
-        # Create indexes
+        # Create indexes on main table
         conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_name_normalized ON companies(name_normalized)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_source ON companies(source)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_source_id ON companies(source, source_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_region ON companies(region)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_name_region_source ON companies(name, region, source)")
 
+        # Create sqlite-vec virtual table for embeddings
+        # vec0 is the recommended virtual table type
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS company_embeddings USING vec0(
+                company_id INTEGER PRIMARY KEY,
+                embedding float[{self._embedding_dim}]
+            )
+        """)
+
         conn.commit()
-
-    def _is_cache_valid(self) -> bool:
-        """Check if cached embedding index exists and is newer than database."""
-        if not self._cache_embeddings_path.exists() or not self._cache_rowids_path.exists():
-            return False
-
-        if not self._db_path.exists():
-            return False
-
-        # Cache is valid if it's newer than the database file
-        db_mtime = self._db_path.stat().st_mtime
-        cache_mtime = self._cache_embeddings_path.stat().st_mtime
-        return cache_mtime > db_mtime
-
-    def _load_from_cache(self) -> bool:
-        """
-        Load embeddings from mmap cache files.
-
-        Returns:
-            True if cache was loaded successfully, False otherwise
-        """
-        try:
-            start = time.time()
-            logger.info("Loading embedding index from cache (mmap)...")
-
-            # Load with mmap for fastest possible loading
-            # mmap_mode='r' maps the file read-only, no copying to memory
-            self._embeddings = np.load(self._cache_embeddings_path, mmap_mode="r")
-            self._row_ids = np.load(self._cache_rowids_path, mmap_mode="r")
-
-            # Verify dimensions
-            if self._embeddings.shape[1] != self._embedding_dim:
-                logger.warning(
-                    f"Cache dimension mismatch: {self._embeddings.shape[1]} != {self._embedding_dim}"
-                )
-                return False
-
-            elapsed = time.time() - start
-            logger.info(f"Loaded {len(self._embeddings):,} embeddings from cache in {elapsed:.2f}s")
-            return True
-
-        except Exception as e:
-            logger.warning(f"Failed to load from cache: {e}")
-            return False
-
-    def _save_to_cache(self) -> None:
-        """Save embeddings to cache files for fast future loading."""
-        if self._embeddings is None or self._row_ids is None:
-            return
-
-        try:
-            start = time.time()
-
-            # Calculate expected sizes
-            expected_emb_size = self._embeddings.nbytes + 128  # numpy header overhead
-            expected_rowid_size = self._row_ids.nbytes + 128
-
-            # Check available disk space (need ~2x for safety during write)
-            import shutil
-            free_space = shutil.disk_usage(self._db_path.parent).free
-            required_space = (expected_emb_size + expected_rowid_size) * 2
-
-            if free_space < required_space:
-                logger.warning(
-                    f"Skipping cache save: insufficient disk space "
-                    f"({free_space / 1e9:.1f} GB free, need ~{required_space / 1e9:.1f} GB)"
-                )
-                return
-
-            logger.info("Saving embedding index to cache...")
-
-            # Save to temp files first, then rename (atomic on most filesystems)
-            temp_emb = self._cache_embeddings_path.with_suffix(".npy.tmp")
-            temp_rowid = self._cache_rowids_path.with_suffix(".npy.tmp")
-
-            try:
-                np.save(temp_emb, self._embeddings)
-                np.save(temp_rowid, self._row_ids)
-
-                # Verify sizes before renaming
-                if temp_emb.stat().st_size < expected_emb_size * 0.9:
-                    raise IOError("Embeddings file appears truncated")
-                if temp_rowid.stat().st_size < expected_rowid_size * 0.9:
-                    raise IOError("Rowids file appears truncated")
-
-                # Atomic rename
-                temp_emb.rename(self._cache_embeddings_path)
-                temp_rowid.rename(self._cache_rowids_path)
-
-                elapsed = time.time() - start
-                cache_size_mb = (
-                    self._cache_embeddings_path.stat().st_size +
-                    self._cache_rowids_path.stat().st_size
-                ) / (1024 * 1024)
-                logger.info(f"Saved cache ({cache_size_mb:.1f} MB) in {elapsed:.2f}s")
-
-            finally:
-                # Clean up temp files if they exist
-                if temp_emb.exists():
-                    temp_emb.unlink()
-                if temp_rowid.exists():
-                    temp_rowid.unlink()
-
-        except Exception as e:
-            logger.warning(f"Failed to save cache: {e}")
-            # Clean up any partial cache files
-            self.invalidate_cache()
-
-    def invalidate_cache(self) -> None:
-        """Delete cached embedding index files."""
-        for path in [self._cache_embeddings_path, self._cache_rowids_path]:
-            if path.exists():
-                path.unlink()
-                logger.debug(f"Deleted cache file: {path}")
-
-    def _load_index(self) -> None:
-        """Load all embeddings into memory for fast search."""
-        if self._index_loaded:
-            return
-
-        start = time.time()
-
-        # Try loading from mmap cache first (fastest)
-        if self._is_cache_valid():
-            if self._load_from_cache():
-                self._index_loaded = True
-                return
-            else:
-                # Cache was invalid, delete it
-                self.invalidate_cache()
-
-        # Fall back to loading from SQLite
-        conn = self._connect()
-        logger.info("Loading embedding index from database...")
-
-        # Count records first
-        cursor = conn.execute("SELECT COUNT(*) FROM companies WHERE embedding IS NOT NULL")
-        count = cursor.fetchone()[0]
-
-        if count == 0:
-            logger.warning("No embeddings found in database")
-            self._embeddings = np.zeros((0, self._embedding_dim), dtype=np.float32)
-            self._row_ids = np.zeros(0, dtype=np.int64)
-            self._index_loaded = True
-            return
-
-        # Pre-allocate arrays
-        self._embeddings = np.zeros((count, self._embedding_dim), dtype=np.float32)
-        self._row_ids = np.zeros(count, dtype=np.int64)
-
-        # Load embeddings in batches for better performance
-        # Using fetchmany with numpy.frombuffer is much faster than row-by-row struct.unpack
-        batch_size = 10000
-        cursor = conn.execute("SELECT id, embedding FROM companies WHERE embedding IS NOT NULL")
-        idx = 0
-        last_log_time = start
-
-        while True:
-            rows = cursor.fetchmany(batch_size)
-            if not rows:
-                break
-
-            for row in rows:
-                self._row_ids[idx] = row["id"]
-                # numpy.frombuffer is much faster than struct.unpack
-                self._embeddings[idx] = np.frombuffer(row["embedding"], dtype=np.float32)
-                idx += 1
-
-            # Log progress every 5 seconds
-            now = time.time()
-            if now - last_log_time >= 5.0:
-                logger.info(f"  Loaded {idx:,}/{count:,} embeddings ({100*idx/count:.1f}%)...")
-                last_log_time = now
-
-        # Normalize embeddings for cosine similarity (dot product of normalized vectors)
-        logger.info("Normalizing embeddings...")
-        norms = np.linalg.norm(self._embeddings, axis=1, keepdims=True)
-        norms[norms == 0] = 1  # Avoid division by zero
-        self._embeddings = self._embeddings / norms
-
-        elapsed = time.time() - start
-        logger.info(f"Loaded {count:,} embeddings from database in {elapsed:.2f}s")
-
-        # Save to cache for fast future loading
-        self._save_to_cache()
-
-        self._index_loaded = True
 
     def close(self) -> None:
         """Close database connection."""
@@ -351,31 +266,35 @@ class CompanyDatabase:
         """
         conn = self._connect()
 
-        # Serialize record and embedding
+        # Serialize record
         record_json = json.dumps(record.record)
-        embedding_bytes = _serialize_embedding(embedding)
+        name_normalized = _normalize_name(record.name)
 
         cursor = conn.execute("""
             INSERT OR REPLACE INTO companies
-            (name, embedding_name, legal_name, source, source_id, region, record, embedding)
+            (name, name_normalized, embedding_name, legal_name, source, source_id, region, record)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.name,
+            name_normalized,
             record.embedding_name,
             record.legal_name,
             record.source,
             record.source_id,
             record.region,
             record_json,
-            embedding_bytes,
         ))
 
         row_id = cursor.lastrowid
         assert row_id is not None
 
-        # Invalidate in-memory index and file cache so it gets reloaded on next search
-        self._index_loaded = False
-        self.invalidate_cache()
+        # Insert embedding into vec table
+        # sqlite-vec expects the embedding as a blob
+        embedding_blob = embedding.astype(np.float32).tobytes()
+        conn.execute("""
+            INSERT OR REPLACE INTO company_embeddings (company_id, embedding)
+            VALUES (?, ?)
+        """, (row_id, embedding_blob))
 
         conn.commit()
         return row_id
@@ -402,22 +321,32 @@ class CompanyDatabase:
 
         for record, embedding in zip(records, embeddings):
             record_json = json.dumps(record.record)
-            embedding_bytes = _serialize_embedding(embedding)
+            name_normalized = _normalize_name(record.name)
 
-            conn.execute("""
+            cursor = conn.execute("""
                 INSERT OR REPLACE INTO companies
-                (name, embedding_name, legal_name, source, source_id, region, record, embedding)
+                (name, name_normalized, embedding_name, legal_name, source, source_id, region, record)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.name,
+                name_normalized,
                 record.embedding_name,
                 record.legal_name,
                 record.source,
                 record.source_id,
                 record.region,
                 record_json,
-                embedding_bytes,
             ))
+
+            row_id = cursor.lastrowid
+            assert row_id is not None
+
+            # Insert embedding
+            embedding_blob = embedding.astype(np.float32).tobytes()
+            conn.execute("""
+                INSERT OR REPLACE INTO company_embeddings (company_id, embedding)
+                VALUES (?, ?)
+            """, (row_id, embedding_blob))
 
             count += 1
 
@@ -426,11 +355,6 @@ class CompanyDatabase:
                 logger.info(f"Inserted {count} records...")
 
         conn.commit()
-
-        # Invalidate in-memory index and file cache
-        self._index_loaded = False
-        self.invalidate_cache()
-
         return count
 
     def search(
@@ -438,65 +362,195 @@ class CompanyDatabase:
         query_embedding: np.ndarray,
         top_k: int = 20,
         source_filter: Optional[str] = None,
+        query_text: Optional[str] = None,
+        max_text_candidates: int = 5000,
     ) -> list[tuple[CompanyRecord, float]]:
         """
-        Search for similar companies by embedding.
+        Search for similar companies using hybrid text + vector search.
 
-        Uses in-memory numpy-based search for fast results.
+        Two-stage approach:
+        1. If query_text provided, use SQL LIKE to find candidates containing search terms
+        2. Use sqlite-vec for vector similarity ranking on filtered candidates
 
         Args:
             query_embedding: Query embedding vector
             top_k: Number of results to return
             source_filter: Optional filter by source (gleif, sec_edgar, etc.)
+            query_text: Optional query text for text-based pre-filtering
+            max_text_candidates: Max candidates to keep after text filtering
 
         Returns:
             List of (CompanyRecord, similarity_score) tuples
         """
         start = time.time()
-
-        # Ensure index is loaded
-        self._load_index()
-
-        if self._embeddings is None or len(self._embeddings) == 0:
-            return []
+        self._connect()
 
         # Normalize query embedding
         query_norm = np.linalg.norm(query_embedding)
         if query_norm == 0:
             return []
         query_normalized = query_embedding / query_norm
+        query_blob = query_normalized.astype(np.float32).tobytes()
 
-        # Compute cosine similarities (dot product of normalized vectors)
-        similarities = np.dot(self._embeddings, query_normalized)
+        # Stage 1: Text-based pre-filtering (if query_text provided)
+        candidate_ids: Optional[set[int]] = None
+        if query_text:
+            query_normalized_text = _normalize_name(query_text)
+            if query_normalized_text:
+                candidate_ids = self._text_filter_candidates(
+                    query_normalized_text,
+                    max_candidates=max_text_candidates,
+                    source_filter=source_filter,
+                )
+                logger.info(f"Text filter: {len(candidate_ids)} candidates for '{query_text}'")
 
-        # Get top-k indices
-        if len(similarities) <= top_k:
-            top_indices = np.argsort(similarities)[::-1]
+        # Stage 2: Vector search
+        if candidate_ids is not None and len(candidate_ids) == 0:
+            # No text matches, return empty
+            return []
+
+        # Check if sqlite-vec table has data (for backwards compatibility with old DBs)
+        cursor = self._conn.execute("SELECT COUNT(*) FROM company_embeddings")
+        vec_count = cursor.fetchone()[0]
+
+        if vec_count == 0:
+            # Old database format - use BLOB embeddings directly
+            logger.debug("Using legacy BLOB embedding search (sqlite-vec table empty)")
+            results = self._vector_search_legacy(
+                query_normalized, candidate_ids, top_k, source_filter
+            )
+        elif candidate_ids is not None:
+            # Search within text-filtered candidates
+            results = self._vector_search_filtered(
+                query_blob, candidate_ids, top_k, source_filter
+            )
         else:
-            # Use argpartition for efficiency with large arrays
-            top_indices = np.argpartition(similarities, -top_k)[-top_k:]
-            top_indices = top_indices[np.argsort(similarities[top_indices])[::-1]]
+            # Full vector search
+            results = self._vector_search_full(query_blob, top_k, source_filter)
 
-        # Fetch records from database
-        conn = self._connect()
-        results = []
+        elapsed = time.time() - start
+        logger.debug(f"Hybrid search took {elapsed:.3f}s (results={len(results)})")
+        return results
 
-        for idx in top_indices:
-            row_id = int(self._row_ids[idx])
-            similarity = float(similarities[idx])
+    def _text_filter_candidates(
+        self,
+        query_normalized: str,
+        max_candidates: int,
+        source_filter: Optional[str] = None,
+    ) -> set[int]:
+        """
+        Filter candidates using SQL LIKE for fast text matching.
 
-            cursor = conn.execute("""
-                SELECT name, embedding_name, legal_name, source, source_id, region, record
-                FROM companies WHERE id = ?
-            """, (row_id,))
-            row = cursor.fetchone()
+        This is a generous pre-filter to reduce the embedding search space.
+        Returns set of company IDs that contain any search term.
+        Uses `name_normalized` column for consistent matching.
+        """
+        conn = self._conn
+        assert conn is not None
 
-            if row is None:
+        # Extract search terms from the normalized query
+        search_terms = _extract_search_terms(query_normalized)
+        if not search_terms:
+            return set()
+
+        logger.debug(f"Text filter search terms: {search_terms}")
+
+        # Build OR clause for LIKE matching on any term
+        # Use name_normalized for consistent matching (already lowercased, suffixes removed)
+        like_clauses = []
+        params: list = []
+        for term in search_terms:
+            like_clauses.append("name_normalized LIKE ?")
+            params.append(f"%{term}%")
+
+        where_clause = " OR ".join(like_clauses)
+
+        # Add source filter if specified
+        if source_filter:
+            query = f"""
+                SELECT id FROM companies
+                WHERE ({where_clause}) AND source = ?
+                LIMIT ?
+            """
+            params.append(source_filter)
+        else:
+            query = f"""
+                SELECT id FROM companies
+                WHERE {where_clause}
+                LIMIT ?
+            """
+
+        params.append(max_candidates)
+
+        cursor = conn.execute(query, params)
+        return set(row["id"] for row in cursor)
+
+    def _vector_search_legacy(
+        self,
+        query_normalized: np.ndarray,
+        candidate_ids: Optional[set[int]],
+        top_k: int,
+        source_filter: Optional[str],
+    ) -> list[tuple[CompanyRecord, float]]:
+        """
+        Legacy vector search using BLOB embeddings in companies table.
+
+        Used for backwards compatibility with databases that don't have
+        the sqlite-vec virtual table populated.
+        """
+        conn = self._conn
+        assert conn is not None
+
+        # Build query to fetch embeddings
+        if candidate_ids is not None:
+            placeholders = ",".join("?" * len(candidate_ids))
+            if source_filter:
+                query = f"""
+                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
+                    FROM companies
+                    WHERE id IN ({placeholders}) AND source = ? AND embedding IS NOT NULL
+                """
+                params = list(candidate_ids) + [source_filter]
+            else:
+                query = f"""
+                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
+                    FROM companies
+                    WHERE id IN ({placeholders}) AND embedding IS NOT NULL
+                """
+                params = list(candidate_ids)
+        else:
+            if source_filter:
+                query = """
+                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
+                    FROM companies
+                    WHERE source = ? AND embedding IS NOT NULL
+                """
+                params = [source_filter]
+            else:
+                query = """
+                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
+                    FROM companies
+                    WHERE embedding IS NOT NULL
+                """
+                params = []
+
+        cursor = conn.execute(query, params)
+
+        # Compute similarities
+        results: list[tuple[CompanyRecord, float]] = []
+        for row in cursor:
+            # Deserialize embedding from BLOB
+            embedding_blob = row["embedding"]
+            if not embedding_blob:
                 continue
+            embedding = np.frombuffer(embedding_blob, dtype=np.float32)
 
-            # Apply source filter if specified
-            if source_filter and row["source"] != source_filter:
+            # Normalize and compute cosine similarity
+            emb_norm = np.linalg.norm(embedding)
+            if emb_norm == 0:
                 continue
+            embedding_normalized = embedding / emb_norm
+            similarity = float(np.dot(query_normalized, embedding_normalized))
 
             record = CompanyRecord(
                 name=row["name"],
@@ -509,9 +563,128 @@ class CompanyDatabase:
             )
             results.append((record, similarity))
 
-        elapsed = time.time() - start
-        logger.debug(f"Vector search took {elapsed:.3f}s (results={len(results)})")
+        # Sort by similarity and return top-k
+        results.sort(key=lambda x: x[1], reverse=True)
+        return results[:top_k]
+
+    def _vector_search_filtered(
+        self,
+        query_blob: bytes,
+        candidate_ids: set[int],
+        top_k: int,
+        source_filter: Optional[str],
+    ) -> list[tuple[CompanyRecord, float]]:
+        """Vector search within a filtered set of candidates."""
+        conn = self._conn
+        assert conn is not None
+
+        if not candidate_ids:
+            return []
+
+        # Build IN clause for candidate IDs
+        placeholders = ",".join("?" * len(candidate_ids))
+
+        # Query sqlite-vec with KNN search, filtered by candidate IDs
+        # Using distance function - lower is more similar for L2
+        # We'll use cosine distance
+        query = f"""
+            SELECT
+                e.company_id,
+                vec_distance_cosine(e.embedding, ?) as distance
+            FROM company_embeddings e
+            WHERE e.company_id IN ({placeholders})
+            ORDER BY distance
+            LIMIT ?
+        """
+
+        cursor = conn.execute(query, [query_blob] + list(candidate_ids) + [top_k])
+
+        results = []
+        for row in cursor:
+            company_id = row["company_id"]
+            distance = row["distance"]
+            # Convert cosine distance to similarity (1 - distance)
+            similarity = 1.0 - distance
+
+            # Fetch full record
+            record = self._get_record_by_id(company_id)
+            if record:
+                # Apply source filter if specified
+                if source_filter and record.source != source_filter:
+                    continue
+                results.append((record, similarity))
+
         return results
+
+    def _vector_search_full(
+        self,
+        query_blob: bytes,
+        top_k: int,
+        source_filter: Optional[str],
+    ) -> list[tuple[CompanyRecord, float]]:
+        """Full vector search without text pre-filtering."""
+        conn = self._conn
+        assert conn is not None
+
+        # KNN search with sqlite-vec
+        if source_filter:
+            # Need to join with companies table for source filter
+            query = """
+                SELECT
+                    e.company_id,
+                    vec_distance_cosine(e.embedding, ?) as distance
+                FROM company_embeddings e
+                JOIN companies c ON e.company_id = c.id
+                WHERE c.source = ?
+                ORDER BY distance
+                LIMIT ?
+            """
+            cursor = conn.execute(query, (query_blob, source_filter, top_k))
+        else:
+            query = """
+                SELECT
+                    company_id,
+                    vec_distance_cosine(embedding, ?) as distance
+                FROM company_embeddings
+                ORDER BY distance
+                LIMIT ?
+            """
+            cursor = conn.execute(query, (query_blob, top_k))
+
+        results = []
+        for row in cursor:
+            company_id = row["company_id"]
+            distance = row["distance"]
+            similarity = 1.0 - distance
+
+            record = self._get_record_by_id(company_id)
+            if record:
+                results.append((record, similarity))
+
+        return results
+
+    def _get_record_by_id(self, company_id: int) -> Optional[CompanyRecord]:
+        """Get a company record by ID."""
+        conn = self._conn
+        assert conn is not None
+
+        cursor = conn.execute("""
+            SELECT name, embedding_name, legal_name, source, source_id, region, record
+            FROM companies WHERE id = ?
+        """, (company_id,))
+
+        row = cursor.fetchone()
+        if row:
+            return CompanyRecord(
+                name=row["name"],
+                embedding_name=row["embedding_name"],
+                legal_name=row["legal_name"],
+                source=row["source"],
+                source_id=row["source_id"],
+                region=row["region"] or "",
+                record=json.loads(row["record"]),
+            )
+        return None
 
     def get_by_source_id(self, source: str, source_id: str) -> Optional[CompanyRecord]:
         """Get a company record by source and source_id."""
@@ -585,18 +758,156 @@ class CompanyDatabase:
                 record=json.loads(row["record"]),
             )
 
+    def migrate_name_normalized(self, batch_size: int = 50000) -> int:
+        """
+        Populate the name_normalized column for all records.
+
+        This is a one-time migration for databases that don't have
+        normalized names populated.
+
+        Args:
+            batch_size: Number of records to process per batch
+
+        Returns:
+            Number of records updated
+        """
+        conn = self._connect()
+
+        # Check how many need migration (empty, null, or placeholder "-")
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM companies WHERE name_normalized = '' OR name_normalized IS NULL OR name_normalized = '-'"
+        )
+        empty_count = cursor.fetchone()[0]
+
+        if empty_count == 0:
+            logger.info("All records already have name_normalized populated")
+            return 0
+
+        logger.info(f"Populating name_normalized for {empty_count} records...")
+
+        updated = 0
+        last_id = 0
+
+        while True:
+            # Get batch of records that need normalization, ordered by ID
+            cursor = conn.execute("""
+                SELECT id, name FROM companies
+                WHERE id > ? AND (name_normalized = '' OR name_normalized IS NULL OR name_normalized = '-')
+                ORDER BY id
+                LIMIT ?
+            """, (last_id, batch_size))
+
+            rows = cursor.fetchall()
+            if not rows:
+                break
+
+            # Update each record
+            for row in rows:
+                # _normalize_name now always returns non-empty for valid input
+                normalized = _normalize_name(row["name"])
+                conn.execute(
+                    "UPDATE companies SET name_normalized = ? WHERE id = ?",
+                    (normalized, row["id"])
+                )
+                last_id = row["id"]
+
+            conn.commit()
+            updated += len(rows)
+            logger.info(f"  Updated {updated}/{empty_count} records...")
+
+        logger.info(f"Migration complete: {updated} name_normalized values populated")
+        return updated
+
+    def migrate_to_sqlite_vec(self, batch_size: int = 10000) -> int:
+        """
+        Migrate embeddings from BLOB column to sqlite-vec virtual table.
+
+        This is a one-time migration for databases created before sqlite-vec support.
+
+        Args:
+            batch_size: Number of records to process per batch
+
+        Returns:
+            Number of embeddings migrated
+        """
+        conn = self._connect()
+
+        # Check if migration is needed
+        cursor = conn.execute("SELECT COUNT(*) FROM company_embeddings")
+        vec_count = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(*) FROM companies WHERE embedding IS NOT NULL")
+        blob_count = cursor.fetchone()[0]
+
+        if vec_count >= blob_count:
+            logger.info(f"Migration not needed: sqlite-vec has {vec_count} embeddings, BLOB has {blob_count}")
+            return 0
+
+        logger.info(f"Migrating {blob_count} embeddings from BLOB to sqlite-vec...")
+
+        # Get IDs that need migration (in sqlite-vec but not in companies)
+        cursor = conn.execute("""
+            SELECT c.id, c.embedding
+            FROM companies c
+            LEFT JOIN company_embeddings e ON c.id = e.company_id
+            WHERE c.embedding IS NOT NULL AND e.company_id IS NULL
+        """)
+
+        migrated = 0
+        batch = []
+
+        for row in cursor:
+            company_id = row["id"]
+            embedding_blob = row["embedding"]
+
+            if embedding_blob:
+                batch.append((company_id, embedding_blob))
+
+            if len(batch) >= batch_size:
+                self._insert_vec_batch(batch)
+                migrated += len(batch)
+                logger.info(f"  Migrated {migrated}/{blob_count} embeddings...")
+                batch = []
+
+        # Insert remaining batch
+        if batch:
+            self._insert_vec_batch(batch)
+            migrated += len(batch)
+
+        logger.info(f"Migration complete: {migrated} embeddings migrated to sqlite-vec")
+        return migrated
+
+    def _insert_vec_batch(self, batch: list[tuple[int, bytes]]) -> None:
+        """Insert a batch of embeddings into sqlite-vec table."""
+        conn = self._conn
+        assert conn is not None
+
+        for company_id, embedding_blob in batch:
+            conn.execute("""
+                INSERT OR REPLACE INTO company_embeddings (company_id, embedding)
+                VALUES (?, ?)
+            """, (company_id, embedding_blob))
+
+        conn.commit()
+
     def delete_source(self, source: str) -> int:
         """Delete all records from a specific source."""
         conn = self._connect()
 
+        # First get IDs to delete from vec table
+        cursor = conn.execute("SELECT id FROM companies WHERE source = ?", (source,))
+        ids_to_delete = [row["id"] for row in cursor]
+
+        # Delete from vec table
+        if ids_to_delete:
+            placeholders = ",".join("?" * len(ids_to_delete))
+            conn.execute(f"DELETE FROM company_embeddings WHERE company_id IN ({placeholders})", ids_to_delete)
+
+        # Delete from main table
         cursor = conn.execute("DELETE FROM companies WHERE source = ?", (source,))
         deleted = cursor.rowcount
 
         conn.commit()
-
-        # Invalidate in-memory index and file cache
-        self._index_loaded = False
-        self.invalidate_cache()
 
         logger.info(f"Deleted {deleted} records from source '{source}'")
         return deleted

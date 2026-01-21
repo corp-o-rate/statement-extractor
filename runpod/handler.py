@@ -232,39 +232,9 @@ def process_url_sync(
     finally:
         loop.close()
 
-    # Convert results to serializable format
-    statements = []
-    for stmt in ctx.labeled_statements:
-        stmt_dict = {
-            "subject": {
-                "text": stmt.subject.entity.text if stmt.subject else "",
-                "type": stmt.subject.entity.type.value if stmt.subject and stmt.subject.entity.type else "UNKNOWN",
-            },
-            "predicate": stmt.statement.predicate if stmt.statement else "",
-            "object": {
-                "text": stmt.object.entity.text if stmt.object else "",
-                "type": stmt.object.entity.type.value if stmt.object and stmt.object.entity.type else "UNKNOWN",
-            },
-            "text": stmt.statement.source_text if stmt.statement else "",
-        }
-        # Add labels if present
-        if stmt.labels:
-            stmt_dict["labels"] = {
-                label.label_type: label.label_value
-                for label in stmt.labels
-            }
-        # Add taxonomy results if present
-        if stmt.taxonomy_results:
-            stmt_dict["taxonomy"] = [
-                {
-                    "taxonomy": tr.taxonomy_name,
-                    "category": tr.category,
-                    "label": tr.label,
-                    "confidence": tr.confidence,
-                }
-                for tr in stmt.taxonomy_results
-            ]
-        statements.append(stmt_dict)
+    # Convert results to serializable format using as_dict() which includes
+    # subject/object with name, fqn, qualifiers, plus labels and taxonomy
+    statements = [stmt.as_dict() for stmt in ctx.labeled_statements]
 
     result = {
         "statements": statements,

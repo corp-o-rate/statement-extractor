@@ -16,7 +16,6 @@ from .hub import (
     get_database_path,
     upload_database,
     upload_database_with_variants,
-    create_embedding_cache,
 )
 
 __all__ = [
@@ -31,5 +30,4 @@ __all__ = [
     "get_database_path",
     "upload_database",
     "upload_database_with_variants",
-    "create_embedding_cache",
 ]

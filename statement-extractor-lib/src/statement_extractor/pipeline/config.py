@@ -16,10 +16,10 @@ class PipelineConfig(BaseModel):
     Controls which stages are enabled, which plugins to use,
     and stage-specific options.
     """
-    # Stage selection (1=Splitting, 2=Extraction, 3=Qualification, 4=Canonicalization, 5=Labeling, 6=Taxonomy)
+    # Stage selection (1=Splitting, 2=Extraction, 3=Qualification, 4=Labeling, 5=Taxonomy)
     enabled_stages: set[int] = Field(
-        default={1, 2, 3, 4, 5, 6},
-        description="Set of enabled stage numbers (1-6)"
+        default={1, 2, 3, 4, 5},
+        description="Set of enabled stage numbers (1-5)"
     )
 
     # Plugin selection
@@ -45,11 +45,7 @@ class PipelineConfig(BaseModel):
     )
     qualifier_options: dict[str, Any] = Field(
         default_factory=dict,
-        description="Options passed to qualifier plugins"
-    )
-    canonicalizer_options: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Options passed to canonicalizer plugins"
+        description="Options passed to qualifier plugins (includes canonicalizers)"
     )
     labeler_options: dict[str, Any] = Field(
         default_factory=dict,
@@ -123,9 +119,8 @@ STAGE_NAMES = {
     1: "splitting",
     2: "extraction",
     3: "qualification",
-    4: "canonicalization",
-    5: "labeling",
-    6: "taxonomy",
+    4: "labeling",
+    5: "taxonomy",
 }
 
 

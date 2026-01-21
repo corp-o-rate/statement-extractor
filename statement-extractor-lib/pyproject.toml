@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corp-extractor"
-version = "0.6.0"
+version = "0.8.0"
 description = "Extract structured statements from text using T5-Gemma 2 and Diverse Beam Search"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,10 +54,12 @@ dependencies = [
     "accelerate>=1.12.0",
     "gguf>=0.17.1",
     "huggingface_hub>=0.20.0",
+    "sqlite-vec>=0.1.6",
     # URL processing
     "httpx>=0.25.0",
     "beautifulsoup4>=4.12.0",
     "PyMuPDF>=1.23.0",
+    "llama-cpp-python>=0.3.16",
 ]
 
 [project.optional-dependencies]

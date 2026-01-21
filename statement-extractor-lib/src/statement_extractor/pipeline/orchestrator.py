@@ -4,9 +4,9 @@ ExtractionPipeline - Main orchestrator for the 5-stage extraction pipeline.
 Coordinates the flow of data through all pipeline stages:
 1. Splitting: Text → RawTriple
 2. Extraction: RawTriple → PipelineStatement
-3. Qualification: Entity → QualifiedEntity
-4. Canonicalization: QualifiedEntity → CanonicalEntity
-5. Labeling: Statement → LabeledStatement
+3. Qualification: Entity → CanonicalEntity
+4. Labeling: Statement → LabeledStatement
+5. Taxonomy: Statement → TaxonomyResult
 """
 
 import logging
@@ -18,7 +18,6 @@ from .config import PipelineConfig, get_stage_name
 from .registry import PluginRegistry
 from ..models import (
     QualifiedEntity,
-    EntityQualifiers,
     CanonicalEntity,
     LabeledStatement,
     TaxonomyResult,
@@ -31,8 +30,12 @@ class ExtractionPipeline:
     """
     Main pipeline orchestrator.
 
-    Coordinates the flow of data through all 5 stages, invoking registered
-    plugins in priority order and accumulating results in PipelineContext.
+    Coordinates the flow of data through all 5 stages:
+    1. Splitting: Text → RawTriple (using splitter plugins)
+    2. Extraction: RawTriple → PipelineStatement (using extractor plugins)
+    3. Qualification: Entity → CanonicalEntity (using qualifier + canonicalizer plugins)
+    4. Labeling: Statement → LabeledStatement (using labeler plugins)
+    5. Taxonomy: Statement → TaxonomyResult (using taxonomy plugins)
     """
 
     def __init__(self, config: Optional[PipelineConfig] = None):
@@ -86,20 +89,16 @@ class ExtractionPipeline:
             if self.config.is_stage_enabled(2):
                 ctx = self._run_extraction(ctx)
 
-            # Stage 3: Qualification
+            # Stage 3: Qualification (runs qualifiers + canonicalizers)
             if self.config.is_stage_enabled(3):
                 ctx = self._run_qualification(ctx)
 
-            # Stage 4: Canonicalization
+            # Stage 4: Labeling
             if self.config.is_stage_enabled(4):
-                ctx = self._run_canonicalization(ctx)
-
-            # Stage 5: Labeling
-            if self.config.is_stage_enabled(5):
                 ctx = self._run_labeling(ctx)
 
-            # Stage 6: Taxonomy classification
-            if self.config.is_stage_enabled(6):
+            # Stage 5: Taxonomy classification
+            if self.config.is_stage_enabled(5):
                 ctx = self._run_taxonomy(ctx)
 
         except Exception as e:
@@ -211,7 +210,12 @@ class ExtractionPipeline:
         return schemas
 
     def _run_qualification(self, ctx: PipelineContext) -> PipelineContext:
-        """Stage 3: Add qualifiers to entities."""
+        """
+        Stage 3: Qualify entities with identifiers, canonical names, and FQNs.
+
+        Runs qualifier plugins for each entity type. Qualifier plugins now return
+        CanonicalEntity directly (with qualifiers, canonical match, and FQN).
+        """
         stage_name = get_stage_name(3)
         logger.debug(f"Running {stage_name} stage")
         start_time = time.time()
@@ -229,14 +233,13 @@ class ExtractionPipeline:
 
         logger.info(f"Stage 3: Qualifying {len(entities_to_qualify)} unique entities")
 
-        # Qualify each entity using applicable plugins
+        # Process each entity through qualifier plugins
         entities_list = list(entities_to_qualify.items())
         for idx, (entity_ref, entity) in enumerate(entities_list, 1):
             logger.info(f"  [{idx}/{len(entities_list)}] Qualifying '{entity.text}' ({entity.type.value})")
-            qualifiers = EntityQualifiers()
-            sources = []
 
-            # Get qualifiers for this entity type
+            # Run qualifier plugins - first one to return a result wins
+            canonical = None
             type_qualifiers = PluginRegistry.get_qualifiers_for_type(entity.type)
 
             for qualifier_plugin in type_qualifiers:
@@ -244,86 +247,36 @@ class ExtractionPipeline:
                     continue
 
                 try:
-                    plugin_qualifiers = qualifier_plugin.qualify(entity, ctx)
-                    if plugin_qualifiers and plugin_qualifiers.has_any_qualifier():
-                        qualifiers = qualifiers.merge_with(plugin_qualifiers)
-                        sources.append(qualifier_plugin.name)
+                    result = qualifier_plugin.qualify(entity, ctx)
+                    if result is not None:
+                        canonical = result
+                        logger.info(f"    Qualified by {qualifier_plugin.name}: {canonical.fqn}")
+                        break  # Use first successful match
                 except Exception as e:
                     logger.error(f"Qualifier {qualifier_plugin.name} failed for {entity.text}: {e}")
                     ctx.add_error(f"Qualifier {qualifier_plugin.name} failed: {str(e)}")
                     if self.config.fail_fast:
                         raise
 
-            # Create QualifiedEntity
-            qualified = QualifiedEntity(
-                entity_ref=entity_ref,
-                original_text=entity.text,
-                entity_type=entity.type,
-                qualifiers=qualifiers,
-                qualification_sources=sources,
-            )
-            ctx.qualified_entities[entity_ref] = qualified
+            # Create fallback CanonicalEntity if no plugin matched
+            if canonical is None:
+                qualified = QualifiedEntity(
+                    entity_ref=entity_ref,
+                    original_text=entity.text,
+                    entity_type=entity.type,
+                )
+                canonical = CanonicalEntity.from_qualified(qualified=qualified)
+                logger.debug(f"    No qualification found, using original text")
 
-        logger.info(f"Qualified {len(ctx.qualified_entities)} entities")
-        ctx.record_timing(stage_name, time.time() - start_time)
-        return ctx
-
-    def _run_canonicalization(self, ctx: PipelineContext) -> PipelineContext:
-        """Stage 4: Resolve entities to canonical forms."""
-        stage_name = get_stage_name(4)
-        logger.debug(f"Running {stage_name} stage")
-        start_time = time.time()
-
-        if not ctx.qualified_entities:
-            # Create basic qualified entities if stage 3 was skipped
-            for stmt in ctx.statements:
-                for entity in [stmt.subject, stmt.object]:
-                    if entity.entity_ref not in ctx.qualified_entities:
-                        ctx.qualified_entities[entity.entity_ref] = QualifiedEntity(
-                            entity_ref=entity.entity_ref,
-                            original_text=entity.text,
-                            entity_type=entity.type,
-                        )
-
-        # Canonicalize each qualified entity
-        for entity_ref, qualified in ctx.qualified_entities.items():
-            canonical_match = None
-            fqn = None
-
-            # Get canonicalizers for this entity type
-            type_canonicalizers = PluginRegistry.get_canonicalizers_for_type(qualified.entity_type)
-
-            for canon_plugin in type_canonicalizers:
-                if not self.config.is_plugin_enabled(canon_plugin.name):
-                    continue
-
-                try:
-                    match = canon_plugin.find_canonical(qualified, ctx)
-                    if match:
-                        canonical_match = match
-                        fqn = canon_plugin.format_fqn(qualified, match)
-                        break  # Use first successful match
-                except Exception as e:
-                    logger.error(f"Canonicalizer {canon_plugin.name} failed for {qualified.original_text}: {e}")
-                    ctx.add_error(f"Canonicalizer {canon_plugin.name} failed: {str(e)}")
-                    if self.config.fail_fast:
-                        raise
-
-            # Create CanonicalEntity
-            canonical = CanonicalEntity.from_qualified(
-                qualified=qualified,
-                canonical_match=canonical_match,
-                fqn=fqn,
-            )
             ctx.canonical_entities[entity_ref] = canonical
 
-        logger.info(f"Canonicalized {len(ctx.canonical_entities)} entities")
+        logger.info(f"Qualified {len(ctx.canonical_entities)} entities")
         ctx.record_timing(stage_name, time.time() - start_time)
         return ctx
 
     def _run_labeling(self, ctx: PipelineContext) -> PipelineContext:
-        """Stage 5: Apply labels to statements."""
-        stage_name = get_stage_name(5)
+        """Stage 4: Apply labels to statements."""
+        stage_name = get_stage_name(4)
         logger.debug(f"Running {stage_name} stage")
         start_time = time.time()
 
@@ -331,9 +284,9 @@ class ExtractionPipeline:
             logger.debug("No statements to label")
             return ctx
 
-        # Ensure canonical entities exist
+        # Ensure canonical entities exist (run qualification if skipped)
         if not ctx.canonical_entities:
-            self._run_canonicalization(ctx)
+            self._run_qualification(ctx)
 
         labelers = PluginRegistry.get_labelers()
 
@@ -395,10 +348,10 @@ class ExtractionPipeline:
         return ctx
 
     def _run_taxonomy(self, ctx: PipelineContext) -> PipelineContext:
-        """Stage 6: Classify statements against taxonomies."""
+        """Stage 5: Classify statements against taxonomies."""
         from ..plugins.base import PluginCapability
 
-        stage_name = get_stage_name(6)
+        stage_name = get_stage_name(5)
         logger.debug(f"Running {stage_name} stage")
         start_time = time.time()
 

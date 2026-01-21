@@ -115,28 +115,41 @@ class LabeledStatement(BaseModel):
         """Format as FQN triple."""
         return f"{self.subject_fqn} --[{self.statement.predicate}]--> {self.object_fqn}"
 
+    def _build_entity_dict(self, canonical: CanonicalEntity, entity_type: str) -> dict:
+        """Build entity dict for serialization."""
+        statement_entity = self.statement.subject if entity_type == "subject" else self.statement.object
+        fqn = self.subject_fqn if entity_type == "subject" else self.object_fqn
+
+        # Get canonical_id from identifiers or canonical_match
+        identifiers = canonical.qualified_entity.qualifiers.identifiers
+        canonical_id = identifiers.get("canonical_id")
+        if not canonical_id and canonical.canonical_match:
+            canonical_id = canonical.canonical_match.canonical_id
+
+        result = {
+            "text": statement_entity.text,
+            "type": statement_entity.type.value,
+            "fqn": fqn,
+            "canonical_id": canonical_id,
+        }
+
+        # Add name if available
+        if canonical.name:
+            result["name"] = canonical.name
+
+        # Add qualifiers if available
+        qualifiers_dict = canonical.qualifiers_dict
+        if qualifiers_dict:
+            result["qualifiers"] = qualifiers_dict
+
+        return result
+
     def as_dict(self) -> dict:
         """Convert to a simplified dictionary representation."""
         return {
-            "subject": {
-                "text": self.statement.subject.text,
-                "type": self.statement.subject.type.value,
-                "fqn": self.subject_fqn,
-                "canonical_id": (
-                    self.subject_canonical.canonical_match.canonical_id
-                    if self.subject_canonical.canonical_match else None
-                ),
-            },
+            "subject": self._build_entity_dict(self.subject_canonical, "subject"),
             "predicate": self.statement.predicate,
-            "object": {
-                "text": self.statement.object.text,
-                "type": self.statement.object.type.value,
-                "fqn": self.object_fqn,
-                "canonical_id": (
-                    self.object_canonical.canonical_match.canonical_id
-                    if self.object_canonical.canonical_match else None
-                ),
-            },
+            "object": self._build_entity_dict(self.object_canonical, "object"),
             "source_text": self.statement.source_text,
             "labels": {
                 label.label_type: label.label_value

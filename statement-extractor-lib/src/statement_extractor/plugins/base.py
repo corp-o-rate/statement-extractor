@@ -4,10 +4,9 @@ Base plugin classes for the extraction pipeline.
 Defines the abstract interfaces for each pipeline stage:
 - BaseSplitterPlugin: Stage 1 - Text → RawTriple
 - BaseExtractorPlugin: Stage 2 - RawTriple → PipelineStatement
-- BaseQualifierPlugin: Stage 3 - Entity → EntityQualifiers
-- BaseCanonicalizerPlugin: Stage 4 - QualifiedEntity → CanonicalMatch
-- BaseLabelerPlugin: Stage 5 - Statement → StatementLabel
-- BaseTaxonomyPlugin: Stage 6 - Statement → TaxonomyResult
+- BaseQualifierPlugin: Stage 3 - Entity → CanonicalEntity
+- BaseLabelerPlugin: Stage 4 - Statement → StatementLabel
+- BaseTaxonomyPlugin: Stage 5 - Statement → TaxonomyResult
 
 Content acquisition plugins (for URL processing):
 - BaseScraperPlugin: Fetch content from URLs
@@ -26,9 +25,6 @@ if TYPE_CHECKING:
         RawTriple,
         PipelineStatement,
         ExtractedEntity,
-        EntityQualifiers,
-        QualifiedEntity,
-        CanonicalMatch,
         CanonicalEntity,
         StatementLabel,
         TaxonomyResult,
@@ -253,10 +249,14 @@ class BaseExtractorPlugin(BasePlugin):
 
 class BaseQualifierPlugin(BasePlugin):
     """
-    Stage 3 plugin: Add qualifiers and identifiers to entities.
+    Stage 3 plugin: Qualify entities with identifiers and canonical forms.
 
-    Processes entities of specific types and adds semantic qualifiers
-    (role, org) or external identifiers (LEI, company number).
+    Processes entities of specific types and adds:
+    - Semantic qualifiers (role, org for PERSON entities)
+    - External identifiers (LEI, company number, SEC CIK)
+    - Canonical name and FQN (fully qualified name)
+
+    Returns a CanonicalEntity ready for use in labeled statements.
     """
 
     @property
@@ -288,65 +288,24 @@ class BaseQualifierPlugin(BasePlugin):
         self,
         entity: "ExtractedEntity",
         context: "PipelineContext",
-    ) -> "EntityQualifiers | None":
+    ) -> "CanonicalEntity | None":
         """
-        Add qualifiers to an entity.
+        Qualify an entity and return its canonical form.
+
+        This method should:
+        1. Look up identifiers (LEI, CIK, company number, etc.)
+        2. Find the canonical name if available
+        3. Generate the FQN (fully qualified name)
+        4. Return a CanonicalEntity with all information
 
         Args:
             entity: The entity to qualify
             context: Pipeline context (for accessing source text, other entities)
 
         Returns:
-            EntityQualifiers with added information, or None if nothing to add
+            CanonicalEntity with qualifiers and FQN, or None if entity not found
         """
         ...
-
-
-class BaseCanonicalizerPlugin(BasePlugin):
-    """
-    Stage 4 plugin: Resolve entities to canonical forms.
-
-    Takes qualified entities and finds their canonical representations
-    using various matching strategies (identifier, name, fuzzy, LLM).
-    """
-
-    @property
-    @abstractmethod
-    def supported_entity_types(self) -> set["EntityType"]:
-        """Entity types this plugin can canonicalize."""
-        ...
-
-    @abstractmethod
-    def find_canonical(
-        self,
-        entity: "QualifiedEntity",
-        context: "PipelineContext",
-    ) -> "CanonicalMatch | None":
-        """
-        Find canonical form for an entity.
-
-        Args:
-            entity: Qualified entity to canonicalize
-            context: Pipeline context
-
-        Returns:
-            CanonicalMatch if found, None otherwise
-        """
-        ...
-
-    def format_fqn(
-        self,
-        entity: "QualifiedEntity",
-        match: "CanonicalMatch | None",
-    ) -> str:
-        """
-        Format the fully qualified name for display.
-
-        Can be overridden by subclasses for custom formatting.
-        Default implementation uses CanonicalEntity._generate_fqn.
-        """
-        from ..models import CanonicalEntity
-        return CanonicalEntity._generate_fqn(entity, match)
 
 
 class ClassificationSchema:
@@ -430,7 +389,7 @@ class TaxonomySchema:
 
 class BaseLabelerPlugin(BasePlugin):
     """
-    Stage 5 plugin: Apply labels to statements.
+    Stage 4 plugin: Apply labels to statements.
 
     Adds classification labels (sentiment, relation type, confidence)
     to the final labeled statements.
@@ -501,7 +460,7 @@ class BaseLabelerPlugin(BasePlugin):
 
 class BaseTaxonomyPlugin(BasePlugin):
     """
-    Stage 6 plugin: Classify statements against a taxonomy.
+    Stage 5 plugin: Classify statements against a taxonomy.
 
     Taxonomy classification is separate from labeling because:
     - It operates on large taxonomies (100s-1000s of labels)

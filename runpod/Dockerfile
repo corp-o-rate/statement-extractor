@@ -53,7 +53,15 @@ RUN python -c "from huggingface_hub import hf_hub_download; \
     print(f'Gemma3 GGUF model downloaded to {path}')"
 
 # Install corp-extractor library
-RUN pip install --no-cache-dir --no-deps corp-extractor==0.6.0
+RUN pip install --no-cache-dir --no-deps corp-extractor==0.8.0
+
+# Verify imports work correctly
+RUN python -c "from statement_extractor.plugins import BaseQualifierPlugin, BaseLabelerPlugin, BaseTaxonomyPlugin; \
+    from statement_extractor.pipeline import ExtractionPipeline, PipelineConfig; \
+    from statement_extractor.pipeline.registry import PluginRegistry; \
+    plugins = PluginRegistry.list_plugins(); \
+    print(f'Loaded {len(plugins)} plugins'); \
+    print('Imports verified successfully')"
 
 # Download models at build time for faster cold starts
 RUN python -c "from statement_extractor import StatementExtractor; \
@@ -64,6 +72,11 @@ RUN python -c "from statement_extractor import StatementExtractor; \
 RUN python -c "from statement_extractor.database.hub import download_database; \
     path = download_database(filename='companies-lite.db'); \
     print(f'Company database (lite) downloaded to {path}')"
+
+# Verify document pipeline imports
+RUN python -c "from statement_extractor.document import DocumentPipeline, DocumentPipelineConfig, URLLoaderConfig; \
+    from statement_extractor.models.document import ChunkingConfig; \
+    print('Document pipeline imports verified')"
 
 # Copy handler
 COPY handler.py /app/handler.py

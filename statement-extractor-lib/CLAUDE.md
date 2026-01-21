@@ -49,7 +49,7 @@ uv run corp-extractor document chunk article.txt --max-tokens 500
 
 ## Architecture
 
-### 6-Stage Pipeline
+### 5-Stage Pipeline
 
 The extraction pipeline processes text through sequential stages, each with its own plugin type:
 
@@ -57,10 +57,9 @@ The extraction pipeline processes text through sequential stages, each with its 
 |-------|-------------|---------|-----------|
 | 1 | `BaseSplitterPlugin` | Text → `RawTriple[]` | `split(text, ctx)` |
 | 2 | `BaseExtractorPlugin` | `RawTriple[]` → `PipelineStatement[]` | `extract(triples, ctx)` |
-| 3 | `BaseQualifierPlugin` | Entity → `EntityQualifiers` | `qualify(entity, ctx)` |
-| 4 | `BaseCanonicalizerPlugin` | `QualifiedEntity` → `CanonicalMatch` | `find_canonical(entity, ctx)` |
-| 5 | `BaseLabelerPlugin` | Statement → `StatementLabel` | `label(stmt, subj, obj, ctx)` |
-| 6 | `BaseTaxonomyPlugin` | Statement → `TaxonomyResult[]` | `classify(stmt, subj, obj, ctx)` |
+| 3 | `BaseQualifierPlugin` | Entity → `CanonicalEntity` | `qualify(entity, ctx)` |
+| 4 | `BaseLabelerPlugin` | Statement → `StatementLabel` | `label(stmt, subj, obj, ctx)` |
+| 5 | `BaseTaxonomyPlugin` | Statement → `TaxonomyResult[]` | `classify(stmt, subj, obj, ctx)` |
 
 ### Plugin Registration
 
@@ -90,7 +89,7 @@ Plugins are sorted by `priority` property (lower = runs first). Default is 100.
 - `pipeline/context.py` - `PipelineContext` that flows through all stages
 - `plugins/base.py` - Abstract base classes for all plugin types
 - `plugins/extractors/gliner2.py` - GLiNER2 entity/relation extraction (Stage 2)
-- `plugins/taxonomy/embedding.py` - Embedding-based taxonomy classification (Stage 6)
+- `plugins/taxonomy/embedding.py` - Embedding-based taxonomy classification (Stage 5)
 - `cli.py` - CLI entry point (`corp-extractor` command)
 
 ### Company Database Module

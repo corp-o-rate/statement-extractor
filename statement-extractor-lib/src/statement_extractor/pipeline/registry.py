@@ -14,7 +14,6 @@ if TYPE_CHECKING:
         BaseSplitterPlugin,
         BaseExtractorPlugin,
         BaseQualifierPlugin,
-        BaseCanonicalizerPlugin,
         BaseLabelerPlugin,
         BaseTaxonomyPlugin,
         BaseScraperPlugin,
@@ -39,7 +38,6 @@ class PluginRegistry:
     _splitters: list["BaseSplitterPlugin"] = []
     _extractors: list["BaseExtractorPlugin"] = []
     _qualifiers: list["BaseQualifierPlugin"] = []
-    _canonicalizers: list["BaseCanonicalizerPlugin"] = []
     _labelers: list["BaseLabelerPlugin"] = []
     _taxonomy_classifiers: list["BaseTaxonomyPlugin"] = []
 
@@ -49,7 +47,6 @@ class PluginRegistry:
 
     # Index by entity type for quick lookup
     _qualifiers_by_type: dict["EntityType", list["BaseQualifierPlugin"]] = {}
-    _canonicalizers_by_type: dict["EntityType", list["BaseCanonicalizerPlugin"]] = {}
 
     # Index by name for CLI lookup
     _all_plugins: dict[str, "BasePlugin"] = {}
@@ -60,13 +57,11 @@ class PluginRegistry:
         cls._splitters = []
         cls._extractors = []
         cls._qualifiers = []
-        cls._canonicalizers = []
         cls._labelers = []
         cls._taxonomy_classifiers = []
         cls._scrapers = []
         cls._pdf_parsers = []
         cls._qualifiers_by_type = {}
-        cls._canonicalizers_by_type = {}
         cls._all_plugins = {}
 
     # =========================================================================
@@ -105,25 +100,6 @@ class PluginRegistry:
 
         logger.debug(
             f"Registered qualifier: {plugin.name} "
-            f"(priority={plugin.priority}, types={[t.value for t in plugin.supported_entity_types]})"
-        )
-
-    @classmethod
-    def register_canonicalizer(cls, plugin: "BaseCanonicalizerPlugin") -> None:
-        """Register a canonicalizer plugin."""
-        cls._canonicalizers.append(plugin)
-        cls._canonicalizers.sort(key=lambda p: p.priority)
-        cls._all_plugins[plugin.name] = plugin
-
-        # Index by entity type
-        for entity_type in plugin.supported_entity_types:
-            if entity_type not in cls._canonicalizers_by_type:
-                cls._canonicalizers_by_type[entity_type] = []
-            cls._canonicalizers_by_type[entity_type].append(plugin)
-            cls._canonicalizers_by_type[entity_type].sort(key=lambda p: p.priority)
-
-        logger.debug(
-            f"Registered canonicalizer: {plugin.name} "
             f"(priority={plugin.priority}, types={[t.value for t in plugin.supported_entity_types]})"
         )
 
@@ -182,12 +158,6 @@ class PluginRegistry:
         return plugin_class
 
     @classmethod
-    def canonicalizer(cls, plugin_class: Type[T]) -> Type[T]:
-        """Decorator to register a canonicalizer plugin class."""
-        cls.register_canonicalizer(plugin_class())
-        return plugin_class
-
-    @classmethod
     def labeler(cls, plugin_class: Type[T]) -> Type[T]:
         """Decorator to register a labeler plugin class."""
         cls.register_labeler(plugin_class())
@@ -236,16 +206,6 @@ class PluginRegistry:
         return cls._qualifiers_by_type.get(entity_type, []).copy()
 
     @classmethod
-    def get_canonicalizers(cls) -> list["BaseCanonicalizerPlugin"]:
-        """Get all registered canonicalizer plugins (sorted by priority)."""
-        return cls._canonicalizers.copy()
-
-    @classmethod
-    def get_canonicalizers_for_type(cls, entity_type: "EntityType") -> list["BaseCanonicalizerPlugin"]:
-        """Get canonicalizer plugins that support a specific entity type."""
-        return cls._canonicalizers_by_type.get(entity_type, []).copy()
-
-    @classmethod
     def get_labelers(cls) -> list["BaseLabelerPlugin"]:
         """Get all registered labeler plugins (sorted by priority)."""
         return cls._labelers.copy()
@@ -285,10 +245,8 @@ class PluginRegistry:
         elif stage == 3:
             return cls._qualifiers.copy()
         elif stage == 4:
-            return cls._canonicalizers.copy()
-        elif stage == 5:
             return cls._labelers.copy()
-        elif stage == 6:
+        elif stage == 5:
             return cls._taxonomy_classifiers.copy()
         return []
 
@@ -313,9 +271,8 @@ class PluginRegistry:
             (1, "splitting", cls._splitters),
             (2, "extraction", cls._extractors),
             (3, "qualification", cls._qualifiers),
-            (4, "canonicalization", cls._canonicalizers),
-            (5, "labeling", cls._labelers),
-            (6, "taxonomy", cls._taxonomy_classifiers),
+            (4, "labeling", cls._labelers),
+            (5, "taxonomy", cls._taxonomy_classifiers),
             # Content acquisition plugins (stage 0)
             (0, "scraper", cls._scrapers),
             (-1, "pdf_parser", cls._pdf_parsers),
