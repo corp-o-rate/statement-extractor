@@ -219,7 +219,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         logger.info(f"    Found {len(results)} candidates for '{entity.text}':")
         for i, (record, sim) in enumerate(results[:10], 1):
             region_str = f" [{record.region}]" if record.region else ""
-            logger.info(f"      {i}. {record.legal_name}{region_str} (sim={sim:.3f}, source={record.source})")
+            logger.info(f"      {i}. {record.name}{region_str} (sim={sim:.3f}, source={record.source})")
 
         # Get best match (optionally with LLM confirmation)
         logger.info(f"    Selecting best match (LLM={self._use_llm_confirmation})...")
@@ -231,7 +231,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
             return None
 
         record, similarity = best_match
-        logger.info(f"    Matched: '{record.legal_name}' (source={record.source}, similarity={similarity:.3f})")
+        logger.info(f"    Matched: '{record.name}' (source={record.source}, similarity={similarity:.3f})")
 
         # Build CanonicalEntity from matched record
         canonical = self._build_canonical_entity(entity, record, similarity)
@@ -255,7 +255,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
 
         # If only one strong match, use it directly
         if len(candidates) == 1 and candidates[0][1] >= 0.9:
-            logger.info(f"    Single strong match: '{candidates[0][0].legal_name}' (sim={candidates[0][1]:.3f})")
+            logger.info(f"    Single strong match: '{candidates[0][0].name}' (sim={candidates[0][1]:.3f})")
             return candidates[0]
 
         # Try LLM confirmation
@@ -269,7 +269,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         # Fallback: use top match if similarity is high enough
         top_record, top_similarity = candidates[0]
         if top_similarity >= 0.85:
-            logger.info(f"    No LLM, using top match: '{top_record.legal_name}' (sim={top_similarity:.3f})")
+            logger.info(f"    No LLM, using top match: '{top_record.name}' (sim={top_similarity:.3f})")
             return candidates[0]
 
         logger.info(f"    No confident match for '{query_name}' (top sim={top_similarity:.3f} < 0.85)")
@@ -287,7 +287,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         for i, (record, similarity) in enumerate(candidates[:10], 1):  # Limit to top 10
             region_str = f", region: {record.region}" if record.region else ""
             candidate_lines.append(
-                f"{i}. {record.legal_name} (source: {record.source}{region_str}, similarity: {similarity:.3f})"
+                f"{i}. {record.name} (source: {record.source}{region_str}, similarity: {similarity:.3f})"
             )
 
         # Build context line from source text if available
@@ -318,14 +318,14 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
             idx = int(response) - 1
             if 0 <= idx < len(candidates):
                 chosen = candidates[idx]
-                logger.info(f"    LLM chose: #{idx + 1} '{chosen[0].legal_name}' (sim={chosen[1]:.3f})")
+                logger.info(f"    LLM chose: #{idx + 1} '{chosen[0].name}' (sim={chosen[1]:.3f})")
                 return chosen
         except ValueError:
             logger.warning(f"    LLM response '{response}' could not be parsed as number")
 
         # Fallback to top match if LLM response is unclear
         if candidates[0][1] >= 0.8:
-            logger.info(f"    Fallback to top match: '{candidates[0][0].legal_name}' (sim={candidates[0][1]:.3f})")
+            logger.info(f"    Fallback to top match: '{candidates[0][0].name}' (sim={candidates[0][1]:.3f})")
             return candidates[0]
 
         logger.info(f"    No confident match (top sim={candidates[0][1]:.3f} < 0.8)")
@@ -375,7 +375,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
 
         # Build qualifiers
         qualifiers = EntityQualifiers(
-            legal_name=record.legal_name,
+            legal_name=record.name,
             region=region,
             jurisdiction=jurisdiction,
             country=country,
@@ -396,14 +396,15 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         fqn_parts = [source_prefix]
         if region:
             fqn_parts.append(region)
-        fqn = f"{record.legal_name} ({','.join(fqn_parts)})"
+        fqn = f"{record.name} ({','.join(fqn_parts)})"
 
-        # Create canonical match
+        # Create canonical match (clamp confidence to [0, 1] for float precision)
+        clamped_confidence = min(max(similarity, 0.0), 1.0)
         canonical_match = CanonicalMatch(
             canonical_id=f"{source_prefix}:{source_id}",
-            canonical_name=record.legal_name,
+            canonical_name=record.name,
             match_method="embedding",
-            match_confidence=similarity,
+            match_confidence=clamped_confidence,
             match_details={"source": source, "similarity": similarity},
         )
 

@@ -24,8 +24,8 @@ The `corp-extractor` CLI provides commands for extraction, document processing, 
     </tr>
     <tr>
       <td><code>pipeline</code></td>
-      <td>Full 6-stage pipeline</td>
-      <td>Entity resolution, canonicalization, labeling, taxonomy</td>
+      <td>Full 5-stage pipeline</td>
+      <td>Entity resolution, labeling, taxonomy</td>
     </tr>
     <tr>
       <td><code>document</code></td>
@@ -35,7 +35,7 @@ The `corp-extractor` CLI provides commands for extraction, document processing, 
     <tr>
       <td><code>db</code></td>
       <td>Database management</td>
-      <td>Import, search, upload/download company database</td>
+      <td>Import, search, upload/download entity database</td>
     </tr>
     <tr>
       <td><code>plugins</code></td>
@@ -177,10 +177,10 @@ corp-extractor split -f article.txt --beams 8
 
 <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
 
-The `pipeline` command runs the full 6-stage extraction pipeline for comprehensive entity resolution and taxonomy classification.
+The `pipeline` command runs the full 5-stage extraction pipeline for comprehensive entity resolution and taxonomy classification.
 
 ```bash
-# Run all 6 stages
+# Run all 5 stages
 corp-extractor pipeline "Amazon CEO Andy Jassy announced plans to hire workers."
 
 # Run from file
@@ -228,21 +228,16 @@ corp-extractor pipeline "..." -o triples
     </tr>
     <tr>
       <td>3</td>
-      <td>Qualification</td>
-      <td>Add qualifiers and identifiers (roles, LEI, etc.)</td>
+      <td>Entity Qualification</td>
+      <td>Add identifiers (LEI, CIK, etc.) and canonical names via embedding DB</td>
     </tr>
     <tr>
       <td>4</td>
-      <td>Canonicalization</td>
-      <td>Resolve to canonical forms</td>
-    </tr>
-    <tr>
-      <td>5</td>
       <td>Labeling</td>
       <td>Apply sentiment, relation type, confidence</td>
     </tr>
     <tr>
-      <td>6</td>
+      <td>5</td>
       <td>Taxonomy</td>
       <td>Classify against large taxonomies (MNLI/embeddings)</td>
     </tr>
@@ -326,21 +321,18 @@ Stage 2: Extraction
 ----------------------------------------
   gliner2_extractor  [priority: 100]
 
-Stage 3: Qualification
+Stage 3: Entity Qualification
 ----------------------------------------
   person_qualifier (PERSON)  [priority: 100]
   embedding_company_qualifier (ORG)  [priority: 5]
 
-Stage 4: Canonicalization
-----------------------------------------
-  organization_canonicalizer (ORG)  [priority: 100]
-  person_canonicalizer (PERSON)  [priority: 100]
-
-Stage 5: Labeling
+Stage 4: Labeling
 ----------------------------------------
   sentiment_labeler  [priority: 100]
+  confidence_labeler  [priority: 100]
+  relation_type_labeler  [priority: 100]
 
-Stage 6: Taxonomy
+Stage 5: Taxonomy
 ----------------------------------------
   embedding_taxonomy_classifier  [priority: 100]
 ```
@@ -486,7 +478,7 @@ corp-extractor document process article.txt -o triples
     <tr>
       <td><code>--stages</code></td>
       <td>Pipeline stages to run</td>
-      <td>1-6</td>
+      <td>1-5</td>
     </tr>
   </tbody>
 </table>
@@ -499,13 +491,13 @@ corp-extractor document process article.txt -o triples
 
 <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.6.0</span>
 
-The `db` command group manages the company embedding database used for entity qualification.
+The `db` command group manages the entity embedding database used for organization qualification.
 
 ```bash
 # Show database status
 corp-extractor db status
 
-# Search for a company
+# Search for an organization
 corp-extractor db search "Microsoft"
 corp-extractor db search "Barclays" --source companies_house
 
@@ -520,9 +512,12 @@ corp-extractor db download                        # Lite version (default)
 corp-extractor db download --full                 # Full version with metadata
 corp-extractor db upload                          # Upload with all variants
 
+# Migrate from old schema (companies.db → entities.db)
+corp-extractor db migrate companies.db --rename-file
+
 # Local database management
-corp-extractor db create-lite companies.db        # Create lite version
-corp-extractor db compress companies.db           # Compress with gzip
+corp-extractor db create-lite entities.db         # Create lite version
+corp-extractor db compress entities.db            # Compress with gzip
 ```
 
 #### Data Sources
@@ -576,12 +571,12 @@ corp-extractor db compress companies.db           # Compress with gzip
   </thead>
   <tbody>
     <tr>
-      <td><code>companies-lite.db</code></td>
+      <td><code>entities-lite.db</code></td>
       <td>Core fields + embeddings only</td>
       <td>Default download, fast searches</td>
     </tr>
     <tr>
-      <td><code>companies.db</code></td>
+      <td><code>entities.db</code></td>
       <td>Full database with source metadata</td>
       <td>When you need complete record data</td>
     </tr>
@@ -607,7 +602,7 @@ corp-extractor db compress companies.db           # Compress with gzip
     <tr>
       <td><code>--db PATH</code></td>
       <td>Database file path</td>
-      <td>~/.cache/corp-extractor/companies.db</td>
+      <td>~/.cache/corp-extractor/entities.db</td>
     </tr>
     <tr>
       <td><code>--limit N</code></td>

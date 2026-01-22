@@ -467,7 +467,7 @@ print(match.matched)      # True
 
 <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
 
-The pipeline API provides comprehensive entity resolution and taxonomy classification through a 6-stage plugin architecture.
+The pipeline API provides comprehensive entity resolution and taxonomy classification through a 5-stage plugin architecture.
 
 #### ExtractionPipeline
 
@@ -519,7 +519,7 @@ Configuration for stage and plugin selection.
 from statement_extractor.pipeline import PipelineConfig
 
 class PipelineConfig(BaseModel):
-    enabled_stages: set[int] = {1, 2, 3, 4, 5, 6}  # Stages to run (1-6)
+    enabled_stages: set[int] = {1, 2, 3, 4, 5}  # Stages to run (1-5)
     enabled_plugins: Optional[set[str]] = None   # Plugins to enable (None = all)
     disabled_plugins: set[str] = set()           # Plugins to disable
     fail_fast: bool = False                       # Stop on first error
@@ -530,7 +530,6 @@ class PipelineConfig(BaseModel):
     splitter_options: dict = {}
     extractor_options: dict = {}
     qualifier_options: dict = {}
-    canonicalizer_options: dict = {}
     labeler_options: dict = {}
     taxonomy_options: dict = {}
 
@@ -577,10 +576,9 @@ class PipelineContext(BaseModel):
     # Stage outputs
     raw_triples: list[RawTriple] = []                   # Stage 1 output
     statements: list[PipelineStatement] = []           # Stage 2 output
-    qualified_entities: dict[str, QualifiedEntity] = {} # Stage 3 output
-    canonical_entities: dict[str, CanonicalEntity] = {} # Stage 4 output
-    labeled_statements: list[LabeledStatement] = []    # Stage 5 output
-    taxonomy_results: dict[tuple, list[TaxonomyResult]] = {}  # Stage 6 output (multiple labels per statement)
+    canonical_entities: dict[str, CanonicalEntity] = {} # Stage 3 output
+    labeled_statements: list[LabeledStatement] = []    # Stage 4 output
+    taxonomy_results: dict[tuple, list[TaxonomyResult]] = {}  # Stage 5 output (multiple labels per statement)
 
     # Processing metadata
     processing_errors: list[str] = []
@@ -717,30 +715,15 @@ class EntityQualifiers(BaseModel):
 
 ---
 
-#### QualifiedEntity
-
-Output of Stage 3 (Qualification).
-
-```python
-class QualifiedEntity(BaseModel):
-    entity_ref: str                      # Reference to original entity
-    original_text: str                   # Original entity text
-    entity_type: EntityType              # Entity type
-    qualifiers: EntityQualifiers         # Qualifiers and identifiers
-    qualification_sources: list[str]     # Plugins that contributed
-```
-
----
-
 #### CanonicalMatch
 
-Result of canonical matching in Stage 4.
+Result of canonical matching in Stage 3.
 
 ```python
 class CanonicalMatch(BaseModel):
     canonical_id: Optional[str]          # ID in canonical database
     canonical_name: Optional[str]        # Canonical name/label
-    match_method: str                    # identifier, name_exact, name_fuzzy, llm_verified
+    match_method: str                    # identifier, name_exact, name_fuzzy, embedding
     match_confidence: float = 1.0        # Confidence in match (0-1)
     match_details: Optional[dict]        # Additional match details
 ```
@@ -749,25 +732,24 @@ class CanonicalMatch(BaseModel):
 
 #### CanonicalEntity
 
-Output of Stage 4 (Canonicalization).
+Output of Stage 3 (Entity Qualification).
 
 ```python
 class CanonicalEntity(BaseModel):
     entity_ref: str                      # Reference to original entity
-    qualified_entity: QualifiedEntity    # Qualified entity from Stage 3
+    original_text: str                   # Original entity text
+    entity_type: EntityType              # Entity type
+    qualifiers: EntityQualifiers         # Qualifiers and identifiers
     canonical_match: Optional[CanonicalMatch]  # Canonical match if found
     fqn: str                             # Fully Qualified Name
-
-    @classmethod
-    def from_qualified(cls, qualified: QualifiedEntity, ...) -> "CanonicalEntity":
-        """Create from QualifiedEntity."""
+    qualification_sources: list[str]     # Plugins that contributed
 ```
 
 ---
 
 #### StatementLabel
 
-A label applied in Stage 5.
+A label applied in Stage 4.
 
 ```python
 class StatementLabel(BaseModel):
@@ -781,7 +763,7 @@ class StatementLabel(BaseModel):
 
 #### LabeledStatement
 
-Final output from Stage 5 (Labeling).
+Final output from Stage 4 (Labeling).
 
 ```python
 class LabeledStatement(BaseModel):
@@ -826,7 +808,7 @@ for stmt in ctx.labeled_statements:
 
 #### TaxonomyResult
 
-Output of Stage 6 (Taxonomy) classification.
+Output of Stage 5 (Taxonomy) classification.
 
 ```python
 class TaxonomyResult(BaseModel):

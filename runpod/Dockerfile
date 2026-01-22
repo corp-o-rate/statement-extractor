@@ -1,27 +1,13 @@
+# syntax=docker/dockerfile:1
 # RunPod Serverless Dockerfile for Statement Extractor
-# syntax=docker/dockerfile:1.4
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+# Uses pre-built base image with PyTorch 2.6.0 and llama-cpp-python
+FROM neilellis/pytorch-base:2.6.0-cu124
 
-# HuggingFace token for gated models (pass with --build-arg HF_TOKEN=...)
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
-
-# Set working directory
 WORKDIR /app
-
-# Upgrade PyTorch to 2.6+ (required for T5Gemma2 masking_utils)
-# Using BuildKit cache mount to persist pip cache across builds
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade \
-    torch==2.6.0 \
-    torchvision \
-    torchaudio \
-    --index-url https://download.pytorch.org/whl/cu124
 
 # Install Python dependencies
 # NOTE: T5Gemma2 requires the dev version of transformers from GitHub
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install \
+RUN pip install --no-cache-dir \
     runpod \
     accelerate \
     safetensors \
@@ -30,12 +16,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     sentence-transformers \
     gliner2 \
     huggingface_hub \
+    sqlite-vec \
     "transformers @ git+https://github.com/huggingface/transformers.git"
-
-# Install llama-cpp-python with CUDA support for GGUF models
-ENV CMAKE_ARGS="-DGGML_CUDA=on"
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install llama-cpp-python
 
 # Pre-download embedding models (downloads on CPU during build, will use GPU at runtime)
 RUN python -c "from sentence_transformers import SentenceTransformer; \
@@ -43,8 +25,11 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
     print('MiniLM embedding model downloaded')"
 
 # Pre-download EmbeddingGemma model for taxonomy classification (gated model requires auth)
-RUN python -c "import os; from huggingface_hub import login; \
-    token = os.environ.get('HF_TOKEN'); \
+# Uses BuildKit secrets to avoid baking token into image layers
+RUN --mount=type=secret,id=hf_token \
+    python -c "from huggingface_hub import login; \
+    from pathlib import Path; \
+    token = Path('/run/secrets/hf_token').read_text().strip() if Path('/run/secrets/hf_token').exists() else None; \
     token and login(token=token); \
     from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('google/embeddinggemma-300m'); \
@@ -55,14 +40,17 @@ RUN python -c "from gliner2 import GLiNER2; \
     model = GLiNER2.from_pretrained('fastino/gliner2-base-v1'); \
     print('GLiNER2 model downloaded')"
 
-# Pre-download Gemma3 GGUF model for person qualification
-RUN python -c "from huggingface_hub import hf_hub_download; \
+# Pre-download Gemma3 GGUF model for person qualification (gated model requires auth)
+RUN --mount=type=secret,id=hf_token \
+    python -c "from huggingface_hub import login, hf_hub_download; \
+    from pathlib import Path; \
+    token = Path('/run/secrets/hf_token').read_text().strip() if Path('/run/secrets/hf_token').exists() else None; \
+    token and login(token=token); \
     path = hf_hub_download(repo_id='google/gemma-3-12b-it-qat-q4_0-gguf', filename='gemma-3-12b-it-q4_0.gguf'); \
     print(f'Gemma3 GGUF model downloaded to {path}')"
 
 # Install corp-extractor library
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-deps corp-extractor==0.8.0
+RUN pip install --no-cache-dir --no-deps corp-extractor==0.8.0
 
 # Verify imports work correctly
 RUN python -c "from statement_extractor.plugins import BaseQualifierPlugin, BaseLabelerPlugin, BaseTaxonomyPlugin; \
@@ -72,15 +60,20 @@ RUN python -c "from statement_extractor.plugins import BaseQualifierPlugin, Base
     print(f'Loaded {len(plugins)} plugins'); \
     print('Imports verified successfully')"
 
-# Download models at build time for faster cold starts
-RUN python -c "from statement_extractor import StatementExtractor; \
+# Download models at build time for faster cold starts (T5-Gemma2 may require auth)
+RUN --mount=type=secret,id=hf_token \
+    python -c "from huggingface_hub import login; \
+    from pathlib import Path; \
+    token = Path('/run/secrets/hf_token').read_text().strip() if Path('/run/secrets/hf_token').exists() else None; \
+    token and login(token=token); \
+    from statement_extractor import StatementExtractor; \
     extractor = StatementExtractor(); \
     print(f'T5-Gemma2 model loaded on {extractor.device}')"
 
-# Pre-download company embedding database from HuggingFace (lite version for smaller image)
+# Pre-download entity embedding database from HuggingFace (lite version for smaller image)
 RUN python -c "from statement_extractor.database.hub import download_database; \
-    path = download_database(filename='companies-lite.db'); \
-    print(f'Company database (lite) downloaded to {path}')"
+    path = download_database(filename='entities-lite.db'); \
+    print(f'Entity database (lite) downloaded to {path}')"
 
 # Verify document pipeline imports
 RUN python -c "from statement_extractor.document import DocumentPipeline, DocumentPipelineConfig, URLLoaderConfig; \

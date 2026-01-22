@@ -89,7 +89,7 @@ def main():
         pipeline   Run the full 6-stage extraction pipeline
         document   Process documents with chunking and citations
         plugins    List or inspect available plugins
-        db         Manage company embedding database
+        db         Manage entity/organization embedding database
 
     \b
     Examples:
@@ -646,8 +646,9 @@ def _load_all_plugins():
     """Load all plugins by importing their modules."""
     # Import all plugin modules to trigger registration
     try:
-        from .plugins import splitters, extractors, qualifiers, canonicalizers, labelers, taxonomy
+        from .plugins import splitters, extractors, qualifiers, labelers, taxonomy
         # The @PluginRegistry decorators will register plugins on import
+        _ = splitters, extractors, qualifiers, labelers, taxonomy  # Silence unused warnings
     except ImportError as e:
         logging.debug(f"Some plugins failed to load: {e}")
 
@@ -659,16 +660,16 @@ def _load_all_plugins():
 @main.group("db")
 def db_cmd():
     """
-    Manage company embedding database.
+    Manage entity/organization embedding database.
 
     \b
     Commands:
         import-gleif           Import GLEIF LEI data (~3M records)
         import-sec             Import SEC Edgar bulk data (~100K+ filers)
         import-companies-house Import UK Companies House (~5M records)
-        import-wikidata        Import Wikidata companies
+        import-wikidata        Import Wikidata organizations
         status                 Show database status
-        search                 Search for a company
+        search                 Search for an organization
         download               Download database from HuggingFace
         upload                 Upload database with lite/compressed variants
         create-lite            Create lite version (no record data)
@@ -680,7 +681,7 @@ def db_cmd():
         corp-extractor db import-gleif --download --limit 100000
         corp-extractor db status
         corp-extractor db search "Apple Inc"
-        corp-extractor db upload companies.db
+        corp-extractor db upload entities.db
     """
     pass
 
@@ -726,13 +727,13 @@ def db_gleif_info():
 @click.argument("file_path", type=click.Path(exists=True), required=False)
 @click.option("--download", is_flag=True, help="Download latest GLEIF file before importing")
 @click.option("--force", is_flag=True, help="Force re-download even if cached")
-@click.option("--db", "db_path", type=click.Path(), help="Database path (default: ~/.cache/corp-extractor/companies.db)")
+@click.option("--db", "db_path", type=click.Path(), help="Database path (default: ~/.cache/corp-extractor/entities.db)")
 @click.option("--limit", type=int, help="Limit number of records to import")
 @click.option("--batch-size", type=int, default=50000, help="Batch size for commits (default: 50000)")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_path: Optional[str], limit: Optional[int], batch_size: int, verbose: bool):
     """
-    Import GLEIF LEI data into the company database.
+    Import GLEIF LEI data into the entity database.
 
     If no file path is provided and --download is set, downloads the latest
     GLEIF data file automatically. Downloaded files are cached and reused
@@ -747,7 +748,7 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
     """
     _configure_logging(verbose)
 
-    from .database import CompanyDatabase, CompanyEmbedder
+    from .database import OrganizationDatabase, CompanyEmbedder
     from .database.importers import GleifImporter
 
     importer = GleifImporter()
@@ -766,7 +767,7 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
 
     # Initialize components
     embedder = CompanyEmbedder()
-    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
 
     # Import records in batches
     records = []
@@ -777,7 +778,7 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
 
         if len(records) >= batch_size:
             # Embed and insert batch
-            names = [r.embedding_name for r in records]
+            names = [r.name for r in records]
             embeddings = embedder.embed_batch(names)
             database.insert_batch(records, embeddings)
             count += len(records)
@@ -786,7 +787,7 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
 
     # Final batch
     if records:
-        names = [r.embedding_name for r in records]
+        names = [r.name for r in records]
         embeddings = embedder.embed_batch(names)
         database.insert_batch(records, embeddings)
         count += len(records)
@@ -804,7 +805,7 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[str], limit: Optional[int], batch_size: int, verbose: bool):
     """
-    Import SEC Edgar company data into the company database.
+    Import SEC Edgar data into the entity database.
 
     By default, downloads the bulk submissions.zip file which contains
     ALL SEC filers (~100K+), not just companies with ticker symbols (~10K).
@@ -818,7 +819,7 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
     """
     _configure_logging(verbose)
 
-    from .database import CompanyDatabase, CompanyEmbedder
+    from .database import OrganizationDatabase, CompanyEmbedder
     from .database.importers import SecEdgarImporter
 
     if not download and not file_path:
@@ -826,7 +827,7 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
 
     # Initialize components
     embedder = CompanyEmbedder()
-    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
     importer = SecEdgarImporter()
 
     # Get records
@@ -845,7 +846,7 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
         records.append(record)
 
         if len(records) >= batch_size:
-            names = [r.embedding_name for r in records]
+            names = [r.name for r in records]
             embeddings = embedder.embed_batch(names)
             database.insert_batch(records, embeddings)
             count += len(records)
@@ -854,7 +855,7 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
 
     # Final batch
     if records:
-        names = [r.embedding_name for r in records]
+        names = [r.name for r in records]
         embeddings = embedder.embed_batch(names)
         database.insert_batch(records, embeddings)
         count += len(records)
@@ -866,43 +867,56 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
 @db_cmd.command("import-wikidata")
 @click.option("--db", "db_path", type=click.Path(), help="Database path")
 @click.option("--limit", type=int, help="Limit number of records")
-@click.option("--batch-size", type=int, default=5000, help="Batch size for commits (default: 5000)")
-@click.option("--notable-only/--all", default=True, help="Only import notable companies with tickers/LEI (default: notable-only)")
+@click.option("--batch-size", type=int, default=1000, help="Batch size for commits (default: 1000)")
+@click.option("--type", "query_type", type=click.Choice(["lei", "ticker", "public", "business", "organization", "nonprofit", "government"]), default="lei",
+              help="Query type to use for fetching data")
+@click.option("--all", "import_all", is_flag=True, help="Run all query types sequentially")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size: int, notable_only: bool, verbose: bool):
+def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size: int, query_type: str, import_all: bool, verbose: bool):
     """
-    Import company data from Wikidata via SPARQL.
+    Import organization data from Wikidata via SPARQL.
 
-    Queries Wikidata for companies with stock tickers, LEI codes, etc.
-    Uses the public Wikidata Query Service endpoint.
+    Uses simplified SPARQL queries that avoid timeouts on Wikidata's endpoint.
+    Query types target different organization categories.
+
+    \b
+    Query types:
+        lei          Companies with LEI codes (fastest, most reliable)
+        ticker       Companies listed on stock exchanges
+        public       Direct instances of "public company" (Q891723)
+        business     Direct instances of "business enterprise" (Q4830453)
+        organization All organizations (Q43229) - NGOs, associations, etc.
+        nonprofit    Non-profit organizations (Q163740)
+        government   Government agencies (Q327333)
 
     \b
     Examples:
-        corp-extractor db import-wikidata
-        corp-extractor db import-wikidata --limit 10000
-        corp-extractor db import-wikidata --all  # Include all companies
+        corp-extractor db import-wikidata --limit 10
+        corp-extractor db import-wikidata --type organization --limit 1000
+        corp-extractor db import-wikidata --type nonprofit --limit 5000
+        corp-extractor db import-wikidata --all --limit 10000
     """
     _configure_logging(verbose)
 
-    from .database import CompanyDatabase, CompanyEmbedder
+    from .database import OrganizationDatabase, CompanyEmbedder
     from .database.importers import WikidataImporter
 
-    click.echo("Importing Wikidata company data via SPARQL...", err=True)
+    click.echo(f"Importing Wikidata organization data via SPARQL (type={query_type}, all={import_all})...", err=True)
 
     # Initialize components
     embedder = CompanyEmbedder()
-    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
-    importer = WikidataImporter()
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    importer = WikidataImporter(batch_size=500)  # Smaller SPARQL batch size for reliability
 
     # Import records in batches
     records = []
     count = 0
 
-    for record in importer.import_from_sparql(limit=limit, notable_only=notable_only):
+    for record in importer.import_from_sparql(limit=limit, query_type=query_type, import_all=import_all):
         records.append(record)
 
         if len(records) >= batch_size:
-            names = [r.embedding_name for r in records]
+            names = [r.name for r in records]
             embeddings = embedder.embed_batch(names)
             database.insert_batch(records, embeddings)
             count += len(records)
@@ -911,7 +925,7 @@ def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size:
 
     # Final batch
     if records:
-        names = [r.embedding_name for r in records]
+        names = [r.name for r in records]
         embeddings = embedder.embed_batch(names)
         database.insert_batch(records, embeddings)
         count += len(records)
@@ -940,7 +954,7 @@ def db_import_companies_house(
     verbose: bool,
 ):
     """
-    Import UK Companies House data into the company database.
+    Import UK Companies House data into the entity database.
 
     \b
     Options:
@@ -957,7 +971,7 @@ def db_import_companies_house(
     """
     _configure_logging(verbose)
 
-    from .database import CompanyDatabase, CompanyEmbedder
+    from .database import OrganizationDatabase, CompanyEmbedder
     from .database.importers import CompaniesHouseImporter
 
     if not file_path and not search_terms and not download:
@@ -967,7 +981,7 @@ def db_import_companies_house(
 
     # Initialize components
     embedder = CompanyEmbedder()
-    database = CompanyDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
     importer = CompaniesHouseImporter()
 
     # Get records
@@ -995,7 +1009,7 @@ def db_import_companies_house(
         records.append(record)
 
         if len(records) >= batch_size:
-            names = [r.embedding_name for r in records]
+            names = [r.name for r in records]
             embeddings = embedder.embed_batch(names)
             database.insert_batch(records, embeddings)
             count += len(records)
@@ -1004,7 +1018,7 @@ def db_import_companies_house(
 
     # Final batch
     if records:
-        names = [r.embedding_name for r in records]
+        names = [r.name for r in records]
         embeddings = embedder.embed_batch(names)
         database.insert_batch(records, embeddings)
         count += len(records)
@@ -1022,19 +1036,25 @@ def db_status(db_path: Optional[str]):
     \b
     Examples:
         corp-extractor db status
-        corp-extractor db status --db /path/to/companies.db
+        corp-extractor db status --db /path/to/entities.db
     """
-    from .database import CompanyDatabase
+    from .database import OrganizationDatabase
 
     try:
-        database = CompanyDatabase(db_path=db_path)
+        database = OrganizationDatabase(db_path=db_path)
         stats = database.get_stats()
 
-        click.echo("\nCompany Database Status")
+        click.echo("\nEntity Database Status")
         click.echo("=" * 40)
         click.echo(f"Total records: {stats.total_records:,}")
         click.echo(f"Embedding dimension: {stats.embedding_dimension}")
         click.echo(f"Database size: {stats.database_size_bytes / 1024 / 1024:.2f} MB")
+
+        # Check for missing embeddings
+        missing_embeddings = database.get_missing_embedding_count()
+        if missing_embeddings > 0:
+            click.echo(f"\n⚠️  Missing embeddings: {missing_embeddings:,}")
+            click.echo("   Run 'corp-extractor db repair-embeddings' to fix")
 
         if stats.by_source:
             click.echo("\nRecords by source:")
@@ -1055,7 +1075,7 @@ def db_status(db_path: Optional[str]):
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 def db_search(query: str, db_path: Optional[str], top_k: int, source: Optional[str], verbose: bool):
     """
-    Search for a company in the database.
+    Search for an organization in the database.
 
     \b
     Examples:
@@ -1064,10 +1084,10 @@ def db_search(query: str, db_path: Optional[str], top_k: int, source: Optional[s
     """
     _configure_logging(verbose)
 
-    from .database import CompanyDatabase, CompanyEmbedder
+    from .database import OrganizationDatabase, CompanyEmbedder
 
     embedder = CompanyEmbedder()
-    database = CompanyDatabase(db_path=db_path)
+    database = OrganizationDatabase(db_path=db_path)
 
     click.echo(f"Searching for: {query}", err=True)
 
@@ -1100,7 +1120,7 @@ def db_search(query: str, db_path: Optional[str], top_k: int, source: Optional[s
 
 
 @db_cmd.command("download")
-@click.option("--repo", type=str, default="Corp-o-Rate-Community/company-embeddings", help="HuggingFace repo ID")
+@click.option("--repo", type=str, default="Corp-o-Rate-Community/entity-references", help="HuggingFace repo ID")
 @click.option("--db", "db_path", type=click.Path(), help="Output path for database")
 @click.option("--full", is_flag=True, help="Download full version (larger, includes record metadata)")
 @click.option("--no-compress", is_flag=True, help="Download uncompressed version (slower)")
@@ -1108,7 +1128,7 @@ def db_search(query: str, db_path: Optional[str], top_k: int, source: Optional[s
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 def db_download(repo: str, db_path: Optional[str], full: bool, no_compress: bool, force: bool, verbose: bool):
     """
-    Download company database from HuggingFace Hub.
+    Download entity database from HuggingFace Hub.
 
     By default downloads the lite version (smaller, without record metadata).
     Use --full for the complete database with all source record data.
@@ -1117,12 +1137,12 @@ def db_download(repo: str, db_path: Optional[str], full: bool, no_compress: bool
     Examples:
         corp-extractor db download
         corp-extractor db download --full
-        corp-extractor db download --repo my-org/my-company-db
+        corp-extractor db download --repo my-org/my-entity-db
     """
     _configure_logging(verbose)
     from .database.hub import download_database
 
-    filename = "companies.db" if full else "companies-lite.db"
+    filename = "entities.db" if full else "entities-lite.db"
     click.echo(f"Downloading {'full ' if full else 'lite '}database from {repo}...", err=True)
 
     try:
@@ -1139,31 +1159,31 @@ def db_download(repo: str, db_path: Optional[str], full: bool, no_compress: bool
 
 @db_cmd.command("upload")
 @click.argument("db_path", type=click.Path(exists=True), required=False)
-@click.option("--repo", type=str, default="Corp-o-Rate-Community/company-embeddings", help="HuggingFace repo ID")
-@click.option("--message", type=str, default="Update company database", help="Commit message")
+@click.option("--repo", type=str, default="Corp-o-Rate-Community/entity-references", help="HuggingFace repo ID")
+@click.option("--message", type=str, default="Update entity database", help="Commit message")
 @click.option("--no-lite", is_flag=True, help="Skip creating lite version (without record data)")
 @click.option("--no-compress", is_flag=True, help="Skip creating compressed versions")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 def db_upload(db_path: Optional[str], repo: str, message: str, no_lite: bool, no_compress: bool, verbose: bool):
     """
-    Upload company database to HuggingFace Hub with variants.
+    Upload entity database to HuggingFace Hub with variants.
 
     If no path is provided, uploads from the default cache location.
 
     By default uploads:
-    - companies.db (full database)
-    - companies-lite.db (without record data, smaller)
-    - companies.db.gz (compressed full)
-    - companies-lite.db.gz (compressed lite)
+    - entities.db (full database)
+    - entities-lite.db (without record data, smaller)
+    - entities.db.gz (compressed full)
+    - entities-lite.db.gz (compressed lite)
 
     Requires HF_TOKEN environment variable to be set.
 
     \b
     Examples:
         corp-extractor db upload
-        corp-extractor db upload /path/to/companies.db
+        corp-extractor db upload /path/to/entities.db
         corp-extractor db upload --no-lite --no-compress
-        corp-extractor db upload --repo my-org/my-company-db
+        corp-extractor db upload --repo my-org/my-entity-db
     """
     _configure_logging(verbose)
     from .database.hub import upload_database_with_variants, DEFAULT_CACHE_DIR, DEFAULT_DB_FULL_FILENAME
@@ -1212,8 +1232,8 @@ def db_create_lite(db_path: str, output: Optional[str], verbose: bool):
 
     \b
     Examples:
-        corp-extractor db create-lite companies.db
-        corp-extractor db create-lite companies.db -o companies-lite.db
+        corp-extractor db create-lite entities.db
+        corp-extractor db create-lite entities.db -o entities-lite.db
     """
     _configure_logging(verbose)
     from .database.hub import create_lite_database
@@ -1237,8 +1257,8 @@ def db_compress(db_path: str, output: Optional[str], verbose: bool):
 
     \b
     Examples:
-        corp-extractor db compress companies.db
-        corp-extractor db compress companies.db -o companies.db.gz
+        corp-extractor db compress entities.db
+        corp-extractor db compress entities.db -o entities.db.gz
     """
     _configure_logging(verbose)
     from .database.hub import compress_database
@@ -1250,6 +1270,130 @@ def db_compress(db_path: str, output: Optional[str], verbose: bool):
         click.echo(f"Compressed database created: {compressed_path}")
     except Exception as e:
         raise click.ClickException(f"Compression failed: {e}")
+
+
+@db_cmd.command("repair-embeddings")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--batch-size", type=int, default=1000, help="Batch size for embedding generation (default: 1000)")
+@click.option("--source", type=str, help="Only repair specific source (gleif, sec_edgar, etc.)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_repair_embeddings(db_path: Optional[str], batch_size: int, source: Optional[str], verbose: bool):
+    """
+    Generate missing embeddings for organizations in the database.
+
+    This repairs databases where organizations were imported without embeddings
+    being properly stored in the organization_embeddings table.
+
+    \b
+    Examples:
+        corp-extractor db repair-embeddings
+        corp-extractor db repair-embeddings --source wikipedia
+        corp-extractor db repair-embeddings --batch-size 500
+    """
+    _configure_logging(verbose)
+
+    from .database import OrganizationDatabase, CompanyEmbedder
+
+    database = OrganizationDatabase(db_path=db_path)
+    embedder = CompanyEmbedder()
+
+    # Check how many need repair
+    missing_count = database.get_missing_embedding_count()
+    if missing_count == 0:
+        click.echo("All organizations have embeddings. Nothing to repair.")
+        database.close()
+        return
+
+    click.echo(f"Found {missing_count:,} organizations without embeddings.", err=True)
+    click.echo("Generating embeddings...", err=True)
+
+    # Process in batches
+    org_ids = []
+    names = []
+    count = 0
+
+    for org_id, name in database.get_organizations_without_embeddings(batch_size=batch_size, source=source):
+        org_ids.append(org_id)
+        names.append(name)
+
+        if len(names) >= batch_size:
+            # Generate embeddings
+            embeddings = embedder.embed_batch(names)
+            database.insert_embeddings_batch(org_ids, embeddings)
+            count += len(names)
+            click.echo(f"Repaired {count:,} / {missing_count:,} embeddings...", err=True)
+            org_ids = []
+            names = []
+
+    # Final batch
+    if names:
+        embeddings = embedder.embed_batch(names)
+        database.insert_embeddings_batch(org_ids, embeddings)
+        count += len(names)
+
+    click.echo(f"\nRepaired {count:,} embeddings successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("migrate")
+@click.argument("db_path", type=click.Path(exists=True))
+@click.option("--rename-file", is_flag=True, help="Also rename companies.db to entities.db")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_migrate(db_path: str, rename_file: bool, yes: bool, verbose: bool):
+    """
+    Migrate database from legacy schema to new schema.
+
+    Migrates from old naming (companies/company_embeddings tables)
+    to new naming (organizations/organization_embeddings tables).
+
+    \b
+    What this does:
+    - Renames 'companies' table to 'organizations'
+    - Renames 'company_embeddings' table to 'organization_embeddings'
+    - Updates all indexes
+
+    \b
+    Examples:
+        corp-extractor db migrate companies.db
+        corp-extractor db migrate companies.db --rename-file
+        corp-extractor db migrate ~/.cache/corp-extractor/companies.db --yes
+    """
+    _configure_logging(verbose)
+
+    from pathlib import Path
+    from .database import OrganizationDatabase
+
+    db_path_obj = Path(db_path)
+
+    if not yes:
+        click.confirm(
+            f"This will migrate {db_path} from legacy schema (companies) to new schema (organizations).\n"
+            "This operation cannot be undone. Continue?",
+            abort=True
+        )
+
+    try:
+        database = OrganizationDatabase(db_path=db_path)
+        migrations = database.migrate_from_legacy_schema()
+        database.close()
+
+        if migrations:
+            click.echo("Migration completed:")
+            for table, action in migrations.items():
+                click.echo(f"  {table}: {action}")
+        else:
+            click.echo("No migration needed. Database already uses new schema.")
+
+        # Optionally rename the file
+        if rename_file and db_path_obj.name.startswith("companies"):
+            new_name = db_path_obj.name.replace("companies", "entities")
+            new_path = db_path_obj.parent / new_name
+            db_path_obj.rename(new_path)
+            click.echo(f"Renamed file: {db_path} -> {new_path}")
+
+    except Exception as e:
+        raise click.ClickException(f"Migration failed: {e}")
 
 
 # =============================================================================

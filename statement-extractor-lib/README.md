@@ -10,7 +10,7 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 - **5-Stage Pipeline** *(v0.8.0)*: Modular plugin-based architecture for full entity resolution
 - **Document Processing** *(v0.7.0)*: Process documents, URLs, and PDFs with chunking and deduplication
-- **Company Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (~100K+ SEC, ~3M GLEIF, ~5M UK companies)
+- **Entity Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (~100K+ SEC, ~3M GLEIF, ~5M UK organizations)
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
 - **Entity Qualification** *(v0.8.0)*: Adds identifiers (LEI, ticker, company numbers), canonical names, and FQN via embedding database
@@ -101,7 +101,7 @@ The CLI provides three main commands: `split`, `pipeline`, and `plugins`.
 corp-extractor split "Apple Inc. announced the iPhone 15."
 corp-extractor split -f article.txt --json
 
-# Full 6-stage pipeline (entity resolution, canonicalization, labeling, taxonomy)
+# Full 5-stage pipeline (entity resolution, labeling, taxonomy)
 corp-extractor pipeline "Amazon CEO Andy Jassy announced plans to hire workers."
 corp-extractor pipeline -f article.txt --stages 1-3
 corp-extractor pipeline "..." --disable-plugins sec_edgar
@@ -296,8 +296,8 @@ from statement_extractor.pipeline import PipelineConfig, ExtractionPipeline
 
 # Run only specific stages
 config = PipelineConfig(
-    enabled_stages={1, 2, 3},  # Skip canonicalization and labeling
-    disabled_plugins={"sec_edgar_qualifier"},  # Disable specific plugins
+    enabled_stages={1, 2, 3},  # Skip labeling and taxonomy
+    disabled_plugins={"person_qualifier"},  # Disable specific plugins
 )
 pipeline = ExtractionPipeline(config)
 ctx = pipeline.process(text)
@@ -320,6 +320,8 @@ config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
 
 **Labelers (Stage 4):**
 - `sentiment_labeler` - Statement sentiment analysis
+- `confidence_labeler` - Confidence scoring
+- `relation_type_labeler` - Relation type classification
 
 **Taxonomy Classifiers (Stage 5):**
 - `mnli_taxonomy_classifier` - MNLI zero-shot classification against ESG taxonomy
@@ -327,18 +329,29 @@ config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
 
 Taxonomy classifiers return **multiple labels** per statement above the confidence threshold.
 
-## New in v0.6.0: Company Embedding Database
+## New in v0.6.0: Entity Embedding Database
 
-v0.6.0 introduces a **company embedding database** for fast entity qualification using vector similarity search.
+v0.6.0 introduces an **entity embedding database** for fast entity qualification using vector similarity search.
 
 ### Data Sources
 
-| Source | Records | Identifier |
-|--------|---------|------------|
-| GLEIF | ~3.2M | LEI (Legal Entity Identifier) |
-| SEC Edgar | ~100K+ | CIK (Central Index Key) - all filers, not just tickers |
-| Companies House | ~5M | UK Company Number |
-| Wikidata | Variable | Wikidata QID |
+| Source | Records | Identifier | EntityType Mapping |
+|--------|---------|------------|-------------------|
+| GLEIF | ~3.2M | LEI (Legal Entity Identifier) | GENERAL→business, FUND→fund, BRANCH→branch, INTERNATIONAL_ORGANIZATION→international_org |
+| SEC Edgar | ~100K+ | CIK (Central Index Key) | business (or fund via SIC codes) |
+| Companies House | ~5M | UK Company Number | Maps company_type to business/nonprofit |
+| Wikidata | Variable | Wikidata QID | 35+ query types mapped to EntityType |
+
+### EntityType Classification
+
+Each organization record is classified with an `entity_type` field:
+
+| Category | Types |
+|----------|-------|
+| Business | `business`, `fund`, `branch` |
+| Non-profit | `nonprofit`, `ngo`, `foundation`, `trade_union` |
+| Government | `government`, `international_org`, `political_party` |
+| Other | `educational`, `research`, `healthcare`, `media`, `sports`, `religious`, `unknown` |
 
 ### Building the Database
 
@@ -352,7 +365,7 @@ corp-extractor db import-wikidata --limit 50000
 # Check status
 corp-extractor db status
 
-# Search for a company
+# Search for an organization
 corp-extractor db search "Microsoft"
 ```
 
@@ -376,7 +389,7 @@ for stmt in ctx.labeled_statements:
 # Upload database with all variants (full, lite, compressed)
 export HF_TOKEN="hf_..."
 corp-extractor db upload                     # Uses default cache location
-corp-extractor db upload companies.db        # Or specify path
+corp-extractor db upload entities.db         # Or specify path
 corp-extractor db upload --no-lite           # Skip lite version
 corp-extractor db upload --no-compress       # Skip compressed versions
 
@@ -385,8 +398,8 @@ corp-extractor db download                   # Lite version (smaller, faster)
 corp-extractor db download --full            # Full version with all metadata
 
 # Local database management
-corp-extractor db create-lite companies.db   # Create lite version
-corp-extractor db compress companies.db      # Compress with gzip
+corp-extractor db create-lite entities.db    # Create lite version
+corp-extractor db compress entities.db       # Compress with gzip
 ```
 
 See [COMPANY_DB.md](../COMPANY_DB.md) for complete build and publish instructions.

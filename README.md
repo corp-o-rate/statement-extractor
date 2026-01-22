@@ -5,8 +5,9 @@ A web demo for the T5-Gemma 2 statement extraction model from [corp-o-rate.com](
 ## Features
 
 - **Statement Extraction**: Transform unstructured text into structured subject-predicate-object triples
-- **6-Stage Pipeline** *(v0.5.0)*: Plugin-based architecture with entity qualification, canonicalization, labeling, and taxonomy classification
-- **Company Database** *(v0.6.0)*: Embedding-based entity matching against GLEIF, SEC Edgar, Companies House, and Wikidata (~8M+ companies)
+- **5-Stage Pipeline** *(v0.8.0)*: Plugin-based architecture with entity qualification, labeling, and taxonomy classification
+- **Entity Database** *(v0.6.0)*: Embedding-based entity matching against GLEIF, SEC Edgar, Companies House, and Wikidata (~8M+ organizations)
+- **EntityType Classification** *(v0.8.0)*: Classify organizations as business, nonprofit, government, educational, etc.
 - **Entity Recognition**: Automatic identification of entity types (ORG, PERSON, GPE, EVENT, etc.)
 - **Relationship Graph**: Interactive D3.js visualization of entity relationships
 - **Coreference Resolution**: Pronouns are resolved to their referenced entities
@@ -62,7 +63,7 @@ pip install corp-extractor
 # Simple extraction (fast)
 corp-extractor split "Apple Inc. announced a new iPhone."
 
-# Full 6-stage pipeline with entity resolution (v0.5.0)
+# Full 5-stage pipeline with entity resolution
 corp-extractor pipeline "Apple CEO Tim Cook announced..."
 corp-extractor pipeline -f article.txt --stages 1-3
 
@@ -91,16 +92,16 @@ for stmt in ctx.labeled_statements:
 
 See [statement-extractor-lib/README.md](statement-extractor-lib/README.md) for full pipeline documentation.
 
-### Company Database (v0.6.0)
+### Entity Database (v0.6.0)
 
-Build a company embedding database for fast entity qualification:
+Build an entity embedding database for fast organization qualification:
 
 ```bash
 # Import from authoritative sources
-corp-extractor db import-gleif --download      # 3.2M global companies (LEI)
-corp-extractor db import-sec                   # 10K US public companies (CIK)
+corp-extractor db import-gleif --download      # 3.2M global entities (LEI)
+corp-extractor db import-sec --download        # 100K+ US SEC filers (CIK)
 corp-extractor db import-companies-house --download  # 5M UK companies
-corp-extractor db import-wikidata --limit 50000  # Notable companies
+corp-extractor db import-wikidata --limit 50000  # Notable organizations
 
 # Search
 corp-extractor db search "Microsoft"

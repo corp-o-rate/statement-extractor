@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from ..models import CompanyRecord
+from ..models import CompanyRecord, EntityType
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,15 @@ LEI_NAMESPACES = {
     'lei': 'http://www.gleif.org/data/schema/leidata/2016',
 }
 
-# EntityCategory values that represent operating companies (exclude funds, branches, etc.)
+# Mapping from GLEIF EntityCategory to our EntityType
 # See: https://www.gleif.org/en/about-lei/common-data-file-format
-ALLOWED_ENTITY_CATEGORIES = {
-    "GENERAL",  # Regular legal entities (companies)
-    "",  # Empty/unset - include for backwards compatibility
+GLEIF_CATEGORY_TO_ENTITY_TYPE: dict[str, EntityType] = {
+    "GENERAL": EntityType.BUSINESS,  # Regular legal entities (companies)
+    "FUND": EntityType.FUND,  # Investment funds, ETFs, mutual funds
+    "BRANCH": EntityType.BRANCH,  # Branch offices of companies
+    "SOLE_PROPRIETOR": EntityType.BUSINESS,  # Sole proprietorships (still a business)
+    "INTERNATIONAL_ORGANIZATION": EntityType.INTERNATIONAL_ORG,  # UN, WHO, IMF, etc.
+    "": EntityType.UNKNOWN,  # Empty/unset
 }
 
 
@@ -41,8 +45,12 @@ class GleifImporter:
     - Individual JSON records
     - Streaming import for large files
 
-    Filters to only include GENERAL category entities (excludes FUND, BRANCH,
-    SOLE_PROPRIETOR, INTERNATIONAL_ORGANIZATION).
+    Maps GLEIF EntityCategory to EntityType:
+    - GENERAL -> BUSINESS
+    - FUND -> FUND
+    - BRANCH -> BRANCH
+    - SOLE_PROPRIETOR -> BUSINESS
+    - INTERNATIONAL_ORGANIZATION -> INTERNATIONAL_ORG
     """
 
     def __init__(self, active_only: bool = True):
@@ -235,10 +243,12 @@ class GleifImporter:
             if self._active_only and status and status.upper() != 'ACTIVE':
                 return None
 
-            # Get entity category - filter to only GENERAL entities (exclude FUND, BRANCH, etc.)
+            # Get entity category and map to EntityType
             entity_category = find_text(entity_elem, 'EntityCategory') or ""
-            if entity_category.upper() not in ALLOWED_ENTITY_CATEGORIES and entity_category not in ALLOWED_ENTITY_CATEGORIES:
-                return None
+            entity_type = GLEIF_CATEGORY_TO_ENTITY_TYPE.get(
+                entity_category.upper(),
+                GLEIF_CATEGORY_TO_ENTITY_TYPE.get(entity_category, EntityType.UNKNOWN)
+            )
 
             # Get jurisdiction
             jurisdiction = find_text(entity_elem, 'LegalJurisdiction')
@@ -268,16 +278,16 @@ class GleifImporter:
                 "jurisdiction": jurisdiction,
                 "country": country,
                 "city": city,
+                "entity_category": entity_category,
                 "other_names": other_names,
             }
 
             return CompanyRecord(
                 name=name,
-                embedding_name=name,
-                legal_name=legal_name,
                 source="gleif",
                 source_id=lei,
                 region=country,
+                entity_type=entity_type,
                 record=record_data,
             )
 
@@ -302,10 +312,12 @@ class GleifImporter:
             if self._active_only and status and status.upper() != "ACTIVE":
                 return None
 
-            # Get entity category - filter to only GENERAL entities (exclude FUND, BRANCH, etc.)
+            # Get entity category and map to EntityType
             entity_category = entity.get("category") or entity.get("EntityCategory") or ""
-            if entity_category.upper() not in ALLOWED_ENTITY_CATEGORIES and entity_category not in ALLOWED_ENTITY_CATEGORIES:
-                return None
+            entity_type = GLEIF_CATEGORY_TO_ENTITY_TYPE.get(
+                entity_category.upper(),
+                GLEIF_CATEGORY_TO_ENTITY_TYPE.get(entity_category, EntityType.UNKNOWN)
+            )
 
             # Get LEI
             lei = raw.get("id") or attrs.get("lei") or raw.get("LEI")
@@ -339,7 +351,6 @@ class GleifImporter:
 
             # Use legal name as primary, but store others in record
             name = legal_name.strip()
-            embedding_name = name  # Could be customized for better matching
 
             # Get jurisdiction and address info
             jurisdiction = entity.get("jurisdiction") or entity.get("LegalJurisdiction")
@@ -359,16 +370,16 @@ class GleifImporter:
                 "jurisdiction": jurisdiction,
                 "country": country,
                 "city": city,
+                "entity_category": entity_category,
                 "other_names": other_names,
             }
 
             return CompanyRecord(
                 name=name,
-                embedding_name=embedding_name,
-                legal_name=legal_name,
                 source="gleif",
                 source_id=lei,
                 region=country,
+                entity_type=entity_type,
                 record=record_data,
             )
 

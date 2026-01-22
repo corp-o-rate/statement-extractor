@@ -1,5 +1,5 @@
 """
-Company database with sqlite-vec for vector search.
+Entity/Organization database with sqlite-vec for vector search.
 
 Uses a hybrid approach:
 1. Text-based filtering to narrow candidates (Levenshtein-like)
@@ -17,15 +17,15 @@ from typing import Iterator, Optional
 import numpy as np
 import sqlite_vec
 
-from .models import CompanyRecord, DatabaseStats
+from .models import CompanyRecord, DatabaseStats, EntityType
 
 logger = logging.getLogger(__name__)
 
 # Default database location
-DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "companies.db"
+DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "entities.db"
 
-# Module-level singleton for CompanyDatabase to prevent multiple loads
-_database_instances: dict[str, "CompanyDatabase"] = {}
+# Module-level singleton for OrganizationDatabase to prevent multiple loads
+_database_instances: dict[str, "OrganizationDatabase"] = {}
 
 # Comprehensive set of corporate legal suffixes (international)
 COMPANY_SUFFIXES: set[str] = {
@@ -47,9 +47,9 @@ _SUFFIX_PATTERN = re.compile(
 )
 
 
-def _clean_company_name(name: str | None) -> str:
+def _clean_org_name(name: str | None) -> str:
     """
-    Remove special characters and formatting from company name.
+    Remove special characters and formatting from organization name.
 
     Removes brackets, parentheses, quotes, and other formatting artifacts.
     """
@@ -59,7 +59,7 @@ def _clean_company_name(name: str | None) -> str:
     cleaned = re.sub(r'[•;:\'"\[\](){}<>`~!@#$%^&*\-_=+\\|/?!`~]+', ' ', name)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     # Recurse if changes were made (handles nested special chars)
-    return _clean_company_name(cleaned) if cleaned != name else cleaned
+    return _clean_org_name(cleaned) if cleaned != name else cleaned
 
 
 def _remove_suffix(name: str) -> str:
@@ -104,7 +104,7 @@ def _normalize_name(name: str) -> str:
     # Remove possessive 's first (before cleaning removes the apostrophe)
     normalized = re.sub(r"'s\b", "", name)
     # Clean special characters
-    cleaned = _clean_company_name(normalized)
+    cleaned = _clean_org_name(normalized)
     # Remove legal suffixes
     normalized = _remove_suffix(cleaned)
     # Lowercase for matching
@@ -134,27 +134,27 @@ def _extract_search_terms(query: str) -> list[str]:
     return words[:3]  # Limit to top 3 terms
 
 
-def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "CompanyDatabase":
+def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "OrganizationDatabase":
     """
-    Get a singleton CompanyDatabase instance for the given path.
+    Get a singleton OrganizationDatabase instance for the given path.
 
     Args:
         db_path: Path to database file
         embedding_dim: Dimension of embeddings
 
     Returns:
-        Shared CompanyDatabase instance
+        Shared OrganizationDatabase instance
     """
     path_key = str(db_path or DEFAULT_DB_PATH)
     if path_key not in _database_instances:
-        logger.debug(f"Creating new CompanyDatabase instance for {path_key}")
-        _database_instances[path_key] = CompanyDatabase(db_path=db_path, embedding_dim=embedding_dim)
+        logger.debug(f"Creating new OrganizationDatabase instance for {path_key}")
+        _database_instances[path_key] = OrganizationDatabase(db_path=db_path, embedding_dim=embedding_dim)
     return _database_instances[path_key]
 
 
-class CompanyDatabase:
+class OrganizationDatabase:
     """
-    SQLite database with sqlite-vec for company vector search.
+    SQLite database with sqlite-vec for organization vector search.
 
     Uses hybrid text + vector search:
     1. Text filtering with Levenshtein distance to reduce candidates
@@ -167,7 +167,7 @@ class CompanyDatabase:
         embedding_dim: int = 768,  # Default for embeddinggemma-300m
     ):
         """
-        Initialize the company database.
+        Initialize the organization database.
 
         Args:
             db_path: Path to database file (creates if not exists)
@@ -205,17 +205,16 @@ class CompanyDatabase:
         conn = self._conn
         assert conn is not None
 
-        # Main company records table
+        # Main organization records table
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS companies (
+            CREATE TABLE IF NOT EXISTS organizations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 name_normalized TEXT NOT NULL,
-                embedding_name TEXT NOT NULL,
-                legal_name TEXT NOT NULL,
                 source TEXT NOT NULL,
                 source_id TEXT NOT NULL,
                 region TEXT NOT NULL DEFAULT '',
+                entity_type TEXT NOT NULL DEFAULT 'unknown',
                 record TEXT NOT NULL,
                 UNIQUE(source, source_id)
             )
@@ -223,24 +222,32 @@ class CompanyDatabase:
 
         # Add region column if it doesn't exist (migration for existing DBs)
         try:
-            conn.execute("ALTER TABLE companies ADD COLUMN region TEXT NOT NULL DEFAULT ''")
-            logger.info("Added region column to companies table")
+            conn.execute("ALTER TABLE organizations ADD COLUMN region TEXT NOT NULL DEFAULT ''")
+            logger.info("Added region column to organizations table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add entity_type column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE organizations ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'unknown'")
+            logger.info("Added entity_type column to organizations table")
         except sqlite3.OperationalError:
             pass  # Column already exists
 
         # Create indexes on main table
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_name ON companies(name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_name_normalized ON companies(name_normalized)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_source ON companies(source)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_source_id ON companies(source, source_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_region ON companies(region)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_companies_name_region_source ON companies(name, region, source)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_name ON organizations(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_name_normalized ON organizations(name_normalized)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_source ON organizations(source)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_source_id ON organizations(source, source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_region ON organizations(region)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_entity_type ON organizations(entity_type)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_name_region_source ON organizations(name, region, source)")
 
         # Create sqlite-vec virtual table for embeddings
         # vec0 is the recommended virtual table type
         conn.execute(f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS company_embeddings USING vec0(
-                company_id INTEGER PRIMARY KEY,
+            CREATE VIRTUAL TABLE IF NOT EXISTS organization_embeddings USING vec0(
+                org_id INTEGER PRIMARY KEY,
                 embedding float[{self._embedding_dim}]
             )
         """)
@@ -255,11 +262,11 @@ class CompanyDatabase:
 
     def insert(self, record: CompanyRecord, embedding: np.ndarray) -> int:
         """
-        Insert a company record with its embedding.
+        Insert an organization record with its embedding.
 
         Args:
-            record: Company record to insert
-            embedding: Embedding vector for the company name
+            record: Organization record to insert
+            embedding: Embedding vector for the organization name
 
         Returns:
             Row ID of inserted record
@@ -271,17 +278,16 @@ class CompanyDatabase:
         name_normalized = _normalize_name(record.name)
 
         cursor = conn.execute("""
-            INSERT OR REPLACE INTO companies
-            (name, name_normalized, embedding_name, legal_name, source, source_id, region, record)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO organizations
+            (name, name_normalized, source, source_id, region, entity_type, record)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             record.name,
             name_normalized,
-            record.embedding_name,
-            record.legal_name,
             record.source,
             record.source_id,
             record.region,
+            record.entity_type.value,
             record_json,
         ))
 
@@ -292,7 +298,7 @@ class CompanyDatabase:
         # sqlite-vec expects the embedding as a blob
         embedding_blob = embedding.astype(np.float32).tobytes()
         conn.execute("""
-            INSERT OR REPLACE INTO company_embeddings (company_id, embedding)
+            INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
             VALUES (?, ?)
         """, (row_id, embedding_blob))
 
@@ -306,10 +312,10 @@ class CompanyDatabase:
         batch_size: int = 1000,
     ) -> int:
         """
-        Insert multiple company records with embeddings.
+        Insert multiple organization records with embeddings.
 
         Args:
-            records: List of company records
+            records: List of organization records
             embeddings: Matrix of embeddings (N x dim)
             batch_size: Commit batch size
 
@@ -324,17 +330,16 @@ class CompanyDatabase:
             name_normalized = _normalize_name(record.name)
 
             cursor = conn.execute("""
-                INSERT OR REPLACE INTO companies
-                (name, name_normalized, embedding_name, legal_name, source, source_id, region, record)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO organizations
+                (name, name_normalized, source, source_id, region, entity_type, record)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.name,
                 name_normalized,
-                record.embedding_name,
-                record.legal_name,
                 record.source,
                 record.source_id,
                 record.region,
+                record.entity_type.value,
                 record_json,
             ))
 
@@ -344,7 +349,7 @@ class CompanyDatabase:
             # Insert embedding
             embedding_blob = embedding.astype(np.float32).tobytes()
             conn.execute("""
-                INSERT OR REPLACE INTO company_embeddings (company_id, embedding)
+                INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
                 VALUES (?, ?)
             """, (row_id, embedding_blob))
 
@@ -366,7 +371,7 @@ class CompanyDatabase:
         max_text_candidates: int = 5000,
     ) -> list[tuple[CompanyRecord, float]]:
         """
-        Search for similar companies using hybrid text + vector search.
+        Search for similar organizations using hybrid text + vector search.
 
         Two-stage approach:
         1. If query_text provided, use SQL LIKE to find candidates containing search terms
@@ -409,17 +414,7 @@ class CompanyDatabase:
             # No text matches, return empty
             return []
 
-        # Check if sqlite-vec table has data (for backwards compatibility with old DBs)
-        cursor = self._conn.execute("SELECT COUNT(*) FROM company_embeddings")
-        vec_count = cursor.fetchone()[0]
-
-        if vec_count == 0:
-            # Old database format - use BLOB embeddings directly
-            logger.debug("Using legacy BLOB embedding search (sqlite-vec table empty)")
-            results = self._vector_search_legacy(
-                query_normalized, candidate_ids, top_k, source_filter
-            )
-        elif candidate_ids is not None:
+        if candidate_ids is not None:
             # Search within text-filtered candidates
             results = self._vector_search_filtered(
                 query_blob, candidate_ids, top_k, source_filter
@@ -442,7 +437,7 @@ class CompanyDatabase:
         Filter candidates using SQL LIKE for fast text matching.
 
         This is a generous pre-filter to reduce the embedding search space.
-        Returns set of company IDs that contain any search term.
+        Returns set of organization IDs that contain any search term.
         Uses `name_normalized` column for consistent matching.
         """
         conn = self._conn
@@ -468,14 +463,14 @@ class CompanyDatabase:
         # Add source filter if specified
         if source_filter:
             query = f"""
-                SELECT id FROM companies
+                SELECT id FROM organizations
                 WHERE ({where_clause}) AND source = ?
                 LIMIT ?
             """
             params.append(source_filter)
         else:
             query = f"""
-                SELECT id FROM companies
+                SELECT id FROM organizations
                 WHERE {where_clause}
                 LIMIT ?
             """
@@ -484,88 +479,6 @@ class CompanyDatabase:
 
         cursor = conn.execute(query, params)
         return set(row["id"] for row in cursor)
-
-    def _vector_search_legacy(
-        self,
-        query_normalized: np.ndarray,
-        candidate_ids: Optional[set[int]],
-        top_k: int,
-        source_filter: Optional[str],
-    ) -> list[tuple[CompanyRecord, float]]:
-        """
-        Legacy vector search using BLOB embeddings in companies table.
-
-        Used for backwards compatibility with databases that don't have
-        the sqlite-vec virtual table populated.
-        """
-        conn = self._conn
-        assert conn is not None
-
-        # Build query to fetch embeddings
-        if candidate_ids is not None:
-            placeholders = ",".join("?" * len(candidate_ids))
-            if source_filter:
-                query = f"""
-                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
-                    FROM companies
-                    WHERE id IN ({placeholders}) AND source = ? AND embedding IS NOT NULL
-                """
-                params = list(candidate_ids) + [source_filter]
-            else:
-                query = f"""
-                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
-                    FROM companies
-                    WHERE id IN ({placeholders}) AND embedding IS NOT NULL
-                """
-                params = list(candidate_ids)
-        else:
-            if source_filter:
-                query = """
-                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
-                    FROM companies
-                    WHERE source = ? AND embedding IS NOT NULL
-                """
-                params = [source_filter]
-            else:
-                query = """
-                    SELECT id, name, embedding_name, legal_name, source, source_id, region, record, embedding
-                    FROM companies
-                    WHERE embedding IS NOT NULL
-                """
-                params = []
-
-        cursor = conn.execute(query, params)
-
-        # Compute similarities
-        results: list[tuple[CompanyRecord, float]] = []
-        for row in cursor:
-            # Deserialize embedding from BLOB
-            embedding_blob = row["embedding"]
-            if not embedding_blob:
-                continue
-            embedding = np.frombuffer(embedding_blob, dtype=np.float32)
-
-            # Normalize and compute cosine similarity
-            emb_norm = np.linalg.norm(embedding)
-            if emb_norm == 0:
-                continue
-            embedding_normalized = embedding / emb_norm
-            similarity = float(np.dot(query_normalized, embedding_normalized))
-
-            record = CompanyRecord(
-                name=row["name"],
-                embedding_name=row["embedding_name"],
-                legal_name=row["legal_name"],
-                source=row["source"],
-                source_id=row["source_id"],
-                region=row["region"] or "",
-                record=json.loads(row["record"]),
-            )
-            results.append((record, similarity))
-
-        # Sort by similarity and return top-k
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:top_k]
 
     def _vector_search_filtered(
         self,
@@ -589,10 +502,10 @@ class CompanyDatabase:
         # We'll use cosine distance
         query = f"""
             SELECT
-                e.company_id,
+                e.org_id,
                 vec_distance_cosine(e.embedding, ?) as distance
-            FROM company_embeddings e
-            WHERE e.company_id IN ({placeholders})
+            FROM organization_embeddings e
+            WHERE e.org_id IN ({placeholders})
             ORDER BY distance
             LIMIT ?
         """
@@ -601,13 +514,13 @@ class CompanyDatabase:
 
         results = []
         for row in cursor:
-            company_id = row["company_id"]
+            org_id = row["org_id"]
             distance = row["distance"]
             # Convert cosine distance to similarity (1 - distance)
             similarity = 1.0 - distance
 
             # Fetch full record
-            record = self._get_record_by_id(company_id)
+            record = self._get_record_by_id(org_id)
             if record:
                 # Apply source filter if specified
                 if source_filter and record.source != source_filter:
@@ -628,13 +541,13 @@ class CompanyDatabase:
 
         # KNN search with sqlite-vec
         if source_filter:
-            # Need to join with companies table for source filter
+            # Need to join with organizations table for source filter
             query = """
                 SELECT
-                    e.company_id,
+                    e.org_id,
                     vec_distance_cosine(e.embedding, ?) as distance
-                FROM company_embeddings e
-                JOIN companies c ON e.company_id = c.id
+                FROM organization_embeddings e
+                JOIN organizations c ON e.org_id = c.id
                 WHERE c.source = ?
                 ORDER BY distance
                 LIMIT ?
@@ -643,9 +556,9 @@ class CompanyDatabase:
         else:
             query = """
                 SELECT
-                    company_id,
+                    org_id,
                     vec_distance_cosine(embedding, ?) as distance
-                FROM company_embeddings
+                FROM organization_embeddings
                 ORDER BY distance
                 LIMIT ?
             """
@@ -653,46 +566,45 @@ class CompanyDatabase:
 
         results = []
         for row in cursor:
-            company_id = row["company_id"]
+            org_id = row["org_id"]
             distance = row["distance"]
             similarity = 1.0 - distance
 
-            record = self._get_record_by_id(company_id)
+            record = self._get_record_by_id(org_id)
             if record:
                 results.append((record, similarity))
 
         return results
 
-    def _get_record_by_id(self, company_id: int) -> Optional[CompanyRecord]:
-        """Get a company record by ID."""
+    def _get_record_by_id(self, org_id: int) -> Optional[CompanyRecord]:
+        """Get an organization record by ID."""
         conn = self._conn
         assert conn is not None
 
         cursor = conn.execute("""
-            SELECT name, embedding_name, legal_name, source, source_id, region, record
-            FROM companies WHERE id = ?
-        """, (company_id,))
+            SELECT name, source, source_id, region, entity_type, record
+            FROM organizations WHERE id = ?
+        """, (org_id,))
 
         row = cursor.fetchone()
         if row:
             return CompanyRecord(
                 name=row["name"],
-                embedding_name=row["embedding_name"],
-                legal_name=row["legal_name"],
                 source=row["source"],
                 source_id=row["source_id"],
                 region=row["region"] or "",
+                entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
                 record=json.loads(row["record"]),
             )
         return None
 
     def get_by_source_id(self, source: str, source_id: str) -> Optional[CompanyRecord]:
-        """Get a company record by source and source_id."""
+        """Get an organization record by source and source_id."""
         conn = self._connect()
 
         cursor = conn.execute("""
-            SELECT name, embedding_name, legal_name, source, source_id, region, record
-            FROM companies
+            SELECT name, source, source_id, region, entity_type, record
+            FROM organizations
             WHERE source = ? AND source_id = ?
         """, (source, source_id))
 
@@ -700,11 +612,10 @@ class CompanyDatabase:
         if row:
             return CompanyRecord(
                 name=row["name"],
-                embedding_name=row["embedding_name"],
-                legal_name=row["legal_name"],
                 source=row["source"],
                 source_id=row["source_id"],
                 region=row["region"] or "",
+                entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
                 record=json.loads(row["record"]),
             )
         return None
@@ -714,11 +625,11 @@ class CompanyDatabase:
         conn = self._connect()
 
         # Total count
-        cursor = conn.execute("SELECT COUNT(*) FROM companies")
+        cursor = conn.execute("SELECT COUNT(*) FROM organizations")
         total = cursor.fetchone()[0]
 
         # Count by source
-        cursor = conn.execute("SELECT source, COUNT(*) as cnt FROM companies GROUP BY source")
+        cursor = conn.execute("SELECT source, COUNT(*) as cnt FROM organizations GROUP BY source")
         by_source = {row["source"]: row["cnt"] for row in cursor}
 
         # Database file size
@@ -737,24 +648,23 @@ class CompanyDatabase:
 
         if source:
             cursor = conn.execute("""
-                SELECT name, embedding_name, legal_name, source, source_id, region, record
-                FROM companies
+                SELECT name, source, source_id, region, entity_type, record
+                FROM organizations
                 WHERE source = ?
             """, (source,))
         else:
             cursor = conn.execute("""
-                SELECT name, embedding_name, legal_name, source, source_id, region, record
-                FROM companies
+                SELECT name, source, source_id, region, entity_type, record
+                FROM organizations
             """)
 
         for row in cursor:
             yield CompanyRecord(
                 name=row["name"],
-                embedding_name=row["embedding_name"],
-                legal_name=row["legal_name"],
                 source=row["source"],
                 source_id=row["source_id"],
                 region=row["region"] or "",
+                entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
                 record=json.loads(row["record"]),
             )
 
@@ -775,7 +685,7 @@ class CompanyDatabase:
 
         # Check how many need migration (empty, null, or placeholder "-")
         cursor = conn.execute(
-            "SELECT COUNT(*) FROM companies WHERE name_normalized = '' OR name_normalized IS NULL OR name_normalized = '-'"
+            "SELECT COUNT(*) FROM organizations WHERE name_normalized = '' OR name_normalized IS NULL OR name_normalized = '-'"
         )
         empty_count = cursor.fetchone()[0]
 
@@ -791,7 +701,7 @@ class CompanyDatabase:
         while True:
             # Get batch of records that need normalization, ordered by ID
             cursor = conn.execute("""
-                SELECT id, name FROM companies
+                SELECT id, name FROM organizations
                 WHERE id > ? AND (name_normalized = '' OR name_normalized IS NULL OR name_normalized = '-')
                 ORDER BY id
                 LIMIT ?
@@ -806,7 +716,7 @@ class CompanyDatabase:
                 # _normalize_name now always returns non-empty for valid input
                 normalized = _normalize_name(row["name"])
                 conn.execute(
-                    "UPDATE companies SET name_normalized = ? WHERE id = ?",
+                    "UPDATE organizations SET name_normalized = ? WHERE id = ?",
                     (normalized, row["id"])
                 )
                 last_id = row["id"]
@@ -833,10 +743,10 @@ class CompanyDatabase:
         conn = self._connect()
 
         # Check if migration is needed
-        cursor = conn.execute("SELECT COUNT(*) FROM company_embeddings")
+        cursor = conn.execute("SELECT COUNT(*) FROM organization_embeddings")
         vec_count = cursor.fetchone()[0]
 
-        cursor = conn.execute("SELECT COUNT(*) FROM companies WHERE embedding IS NOT NULL")
+        cursor = conn.execute("SELECT COUNT(*) FROM organizations WHERE embedding IS NOT NULL")
         blob_count = cursor.fetchone()[0]
 
         if vec_count >= blob_count:
@@ -845,23 +755,23 @@ class CompanyDatabase:
 
         logger.info(f"Migrating {blob_count} embeddings from BLOB to sqlite-vec...")
 
-        # Get IDs that need migration (in sqlite-vec but not in companies)
+        # Get IDs that need migration (in sqlite-vec but not in organizations)
         cursor = conn.execute("""
             SELECT c.id, c.embedding
-            FROM companies c
-            LEFT JOIN company_embeddings e ON c.id = e.company_id
-            WHERE c.embedding IS NOT NULL AND e.company_id IS NULL
+            FROM organizations c
+            LEFT JOIN organization_embeddings e ON c.id = e.org_id
+            WHERE c.embedding IS NOT NULL AND e.org_id IS NULL
         """)
 
         migrated = 0
         batch = []
 
         for row in cursor:
-            company_id = row["id"]
+            org_id = row["id"]
             embedding_blob = row["embedding"]
 
             if embedding_blob:
-                batch.append((company_id, embedding_blob))
+                batch.append((org_id, embedding_blob))
 
             if len(batch) >= batch_size:
                 self._insert_vec_batch(batch)
@@ -882,11 +792,11 @@ class CompanyDatabase:
         conn = self._conn
         assert conn is not None
 
-        for company_id, embedding_blob in batch:
+        for org_id, embedding_blob in batch:
             conn.execute("""
-                INSERT OR REPLACE INTO company_embeddings (company_id, embedding)
+                INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
                 VALUES (?, ?)
-            """, (company_id, embedding_blob))
+            """, (org_id, embedding_blob))
 
         conn.commit()
 
@@ -895,19 +805,236 @@ class CompanyDatabase:
         conn = self._connect()
 
         # First get IDs to delete from vec table
-        cursor = conn.execute("SELECT id FROM companies WHERE source = ?", (source,))
+        cursor = conn.execute("SELECT id FROM organizations WHERE source = ?", (source,))
         ids_to_delete = [row["id"] for row in cursor]
 
         # Delete from vec table
         if ids_to_delete:
             placeholders = ",".join("?" * len(ids_to_delete))
-            conn.execute(f"DELETE FROM company_embeddings WHERE company_id IN ({placeholders})", ids_to_delete)
+            conn.execute(f"DELETE FROM organization_embeddings WHERE org_id IN ({placeholders})", ids_to_delete)
 
         # Delete from main table
-        cursor = conn.execute("DELETE FROM companies WHERE source = ?", (source,))
+        cursor = conn.execute("DELETE FROM organizations WHERE source = ?", (source,))
         deleted = cursor.rowcount
 
         conn.commit()
 
         logger.info(f"Deleted {deleted} records from source '{source}'")
         return deleted
+
+    def migrate_from_legacy_schema(self) -> dict[str, str]:
+        """
+        Migrate database from legacy schema (companies/company_embeddings tables)
+        to new schema (organizations/organization_embeddings tables).
+
+        This handles:
+        - Renaming 'companies' table to 'organizations'
+        - Renaming 'company_embeddings' table to 'organization_embeddings'
+        - Renaming 'company_id' column to 'org_id' in embeddings table
+        - Updating indexes to use new naming
+
+        Returns:
+            Dict of migrations performed (table_name -> action)
+        """
+        conn = self._connect()
+        migrations = {}
+
+        # Check what tables exist
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing_tables = {row[0] for row in cursor}
+
+        has_companies = "companies" in existing_tables
+        has_organizations = "organizations" in existing_tables
+        has_company_embeddings = "company_embeddings" in existing_tables
+        has_org_embeddings = "organization_embeddings" in existing_tables
+
+        if not has_companies and not has_company_embeddings:
+            if has_organizations and has_org_embeddings:
+                logger.info("Database already uses new schema, no migration needed")
+                return {}
+            else:
+                logger.info("No legacy tables found, database will use new schema")
+                return {}
+
+        logger.info("Migrating database from legacy schema...")
+        conn.execute("BEGIN")
+
+        try:
+            # Migrate companies -> organizations
+            if has_companies:
+                if has_organizations:
+                    # Both exist - merge data from companies into organizations
+                    logger.info("Merging companies table into organizations...")
+                    conn.execute("""
+                        INSERT OR IGNORE INTO organizations
+                        (name, name_normalized, source, source_id, region, entity_type, record)
+                        SELECT name, name_normalized, source, source_id,
+                               COALESCE(region, ''), COALESCE(entity_type, 'unknown'), record
+                        FROM companies
+                    """)
+                    conn.execute("DROP TABLE companies")
+                    migrations["companies"] = "merged_into_organizations"
+                else:
+                    # Just rename
+                    logger.info("Renaming companies table to organizations...")
+                    conn.execute("ALTER TABLE companies RENAME TO organizations")
+                    migrations["companies"] = "renamed_to_organizations"
+
+                # Update indexes
+                for old_idx in ["idx_companies_name", "idx_companies_name_normalized",
+                               "idx_companies_source", "idx_companies_source_id",
+                               "idx_companies_region", "idx_companies_entity_type",
+                               "idx_companies_name_region_source"]:
+                    try:
+                        conn.execute(f"DROP INDEX IF EXISTS {old_idx}")
+                    except Exception:
+                        pass
+
+                # Create new indexes
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_name ON organizations(name)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_name_normalized ON organizations(name_normalized)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_source ON organizations(source)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_source_id ON organizations(source, source_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_region ON organizations(region)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_entity_type ON organizations(entity_type)")
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_name_region_source ON organizations(name, region, source)")
+
+            # Migrate company_embeddings -> organization_embeddings
+            if has_company_embeddings:
+                if has_org_embeddings:
+                    # Both exist - merge
+                    logger.info("Merging company_embeddings into organization_embeddings...")
+                    # Get column info to check for company_id vs org_id
+                    cursor = conn.execute("PRAGMA table_info(company_embeddings)")
+                    cols = {row[1] for row in cursor}
+                    id_col = "company_id" if "company_id" in cols else "org_id"
+
+                    conn.execute(f"""
+                        INSERT OR IGNORE INTO organization_embeddings (org_id, embedding)
+                        SELECT {id_col}, embedding FROM company_embeddings
+                    """)
+                    conn.execute("DROP TABLE company_embeddings")
+                    migrations["company_embeddings"] = "merged_into_organization_embeddings"
+                else:
+                    # Need to recreate with new column name
+                    logger.info("Migrating company_embeddings to organization_embeddings...")
+
+                    # Check if it has company_id or org_id column
+                    cursor = conn.execute("PRAGMA table_info(company_embeddings)")
+                    cols = {row[1] for row in cursor}
+                    id_col = "company_id" if "company_id" in cols else "org_id"
+
+                    # Create new virtual table
+                    conn.execute(f"""
+                        CREATE VIRTUAL TABLE organization_embeddings USING vec0(
+                            org_id INTEGER PRIMARY KEY,
+                            embedding float[{self._embedding_dim}]
+                        )
+                    """)
+
+                    # Copy data
+                    conn.execute(f"""
+                        INSERT INTO organization_embeddings (org_id, embedding)
+                        SELECT {id_col}, embedding FROM company_embeddings
+                    """)
+
+                    # Drop old table
+                    conn.execute("DROP TABLE company_embeddings")
+                    migrations["company_embeddings"] = "renamed_to_organization_embeddings"
+
+            conn.execute("COMMIT")
+
+            # Vacuum to clean up
+            conn.execute("VACUUM")
+            logger.info(f"Migration complete: {migrations}")
+
+            return migrations
+
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            logger.error(f"Migration failed: {e}")
+            raise
+
+    def get_missing_embedding_count(self) -> int:
+        """Get count of organizations without embeddings in organization_embeddings table."""
+        conn = self._connect()
+
+        cursor = conn.execute("""
+            SELECT COUNT(*) FROM organizations c
+            LEFT JOIN organization_embeddings e ON c.id = e.org_id
+            WHERE e.org_id IS NULL
+        """)
+        return cursor.fetchone()[0]
+
+    def get_organizations_without_embeddings(
+        self,
+        batch_size: int = 1000,
+        source: Optional[str] = None,
+    ) -> Iterator[tuple[int, str]]:
+        """
+        Iterate over organizations that don't have embeddings.
+
+        Args:
+            batch_size: Number of records per batch
+            source: Optional source filter
+
+        Yields:
+            Tuples of (org_id, name)
+        """
+        conn = self._connect()
+
+        last_id = 0
+        while True:
+            if source:
+                cursor = conn.execute("""
+                    SELECT c.id, c.name FROM organizations c
+                    LEFT JOIN organization_embeddings e ON c.id = e.org_id
+                    WHERE e.org_id IS NULL AND c.id > ? AND c.source = ?
+                    ORDER BY c.id
+                    LIMIT ?
+                """, (last_id, source, batch_size))
+            else:
+                cursor = conn.execute("""
+                    SELECT c.id, c.name FROM organizations c
+                    LEFT JOIN organization_embeddings e ON c.id = e.org_id
+                    WHERE e.org_id IS NULL AND c.id > ?
+                    ORDER BY c.id
+                    LIMIT ?
+                """, (last_id, batch_size))
+
+            rows = cursor.fetchall()
+            if not rows:
+                break
+
+            for row in rows:
+                yield (row[0], row[1])
+                last_id = row[0]
+
+    def insert_embeddings_batch(
+        self,
+        org_ids: list[int],
+        embeddings: np.ndarray,
+    ) -> int:
+        """
+        Insert embeddings for existing organizations.
+
+        Args:
+            org_ids: List of organization IDs
+            embeddings: Matrix of embeddings (N x dim)
+
+        Returns:
+            Number of embeddings inserted
+        """
+        conn = self._connect()
+        count = 0
+
+        for org_id, embedding in zip(org_ids, embeddings):
+            embedding_blob = embedding.astype(np.float32).tobytes()
+            conn.execute("""
+                INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
+                VALUES (?, ?)
+            """, (org_id, embedding_blob))
+            count += 1
+
+        conn.commit()
+        return count

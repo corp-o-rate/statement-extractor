@@ -1,13 +1,12 @@
-# Company Embedding Database
+# Entity Embedding Database
 
-The company embedding database enables fast entity qualification by matching company names against pre-computed embeddings from authoritative sources.
+The entity embedding database enables fast entity qualification by matching organization names against pre-computed embeddings from authoritative sources.
 
 ## Overview
 
-The database uses `sqlite-vec` for vector similarity search, storing company records with:
-- **name**: Searchable company name
+The database uses `sqlite-vec` for vector similarity search, storing organization records with:
+- **name**: Searchable organization name
 - **embedding**: 768-dimensional vector from `google/embeddinggemma-300m`
-- **legal_name**: Official registered name
 - **source**: Data source (gleif, sec_edgar, companies_house, wikipedia)
 - **source_id**: Unique identifier (LEI, CIK, company number, Wikidata QID)
 - **record**: Full JSON record from source
@@ -17,7 +16,7 @@ The database uses `sqlite-vec` for vector similarity search, storing company rec
 | Source | Records | Identifier | Coverage |
 |--------|---------|------------|----------|
 | [GLEIF](https://www.gleif.org/) | ~3.2M | LEI (Legal Entity Identifier) | Global companies with LEI |
-| [SEC Edgar](https://www.sec.gov/) | ~10K | CIK (Central Index Key) | US public companies |
+| [SEC Edgar](https://www.sec.gov/) | ~100K+ | CIK (Central Index Key) | All SEC filers (not just public companies) |
 | [Companies House](https://www.gov.uk/government/organisations/companies-house) | ~5M | Company Number | UK registered companies |
 | [Wikidata](https://www.wikidata.org/) | Variable | QID | Notable companies worldwide |
 
@@ -45,14 +44,14 @@ corp-extractor db import-gleif --download --limit 100000
 corp-extractor db gleif-info
 ```
 
-**2. SEC Edgar (US Public Companies)**
+**2. SEC Edgar (All SEC Filers)**
 
 ```bash
-# Import all SEC companies (~10K records)
-corp-extractor db import-sec
+# Download and import bulk SEC filer data (~100K+ records)
+corp-extractor db import-sec --download
 
 # Import with limit
-corp-extractor db import-sec --limit 5000
+corp-extractor db import-sec --download --limit 50000
 ```
 
 **3. Companies House (UK Companies)**
@@ -71,15 +70,22 @@ corp-extractor db import-companies-house --search "bank,insurance,technology"
 
 Get a free API key at: https://developer.company-information.service.gov.uk/
 
-**4. Wikidata (Notable Companies)**
+**4. Wikidata (Organizations)**
 
 ```bash
-# Import via SPARQL query
+# Import companies with LEI codes (default, fastest)
 corp-extractor db import-wikidata --limit 50000
 
-# Import all companies (slower, may timeout)
+# Import specific organization types
+corp-extractor db import-wikidata --query-type organization --limit 50000  # All orgs
+corp-extractor db import-wikidata --query-type nonprofit --limit 50000     # Non-profits
+corp-extractor db import-wikidata --query-type government --limit 50000    # Gov agencies
+
+# Import all organization types (slower, runs all queries)
 corp-extractor db import-wikidata --all
 ```
+
+Available query types: `lei`, `ticker`, `public`, `business`, `organization`, `nonprofit`, `government`
 
 ### Full Build (Recommended)
 
@@ -88,36 +94,39 @@ For a comprehensive database with all sources:
 ```bash
 # Build complete database (~8M+ records, several hours)
 corp-extractor db import-gleif --download
-corp-extractor db import-sec
+corp-extractor db import-sec --download
 corp-extractor db import-companies-house --download
 corp-extractor db import-wikidata --limit 100000
 
 # Check status
 corp-extractor db status
+
+# Create lite version for deployment
+corp-extractor db create-lite ~/.cache/corp-extractor/entities.db
 ```
 
 **Expected output:**
 ```
-Company Database Status
+Entity Database Status
 ========================================
-Total records: 8,300,000+
+Total records: 8,400,000+
 Embedding dimension: 768
-Database size: ~65 GB
+Database size: ~65 GB (full) / ~20 GB (lite)
 
 Records by source:
   gleif: 3,200,000
   companies_house: 5,000,000
-  sec_edgar: 10,000
-  wikipedia: 100,000
+  sec_edgar: 100,000+
+  wikidata: 100,000
 ```
 
 ### Database Location
 
-Default: `~/.cache/corp-extractor/companies.db`
+Default: `~/.cache/corp-extractor/entities.db`
 
 Override with `--db` flag:
 ```bash
-corp-extractor db import-gleif --download --db /path/to/companies.db
+corp-extractor db import-gleif --download --db /path/to/entities.db
 ```
 
 ## Testing the Database
@@ -134,12 +143,14 @@ corp-extractor db search "Apple Inc" --top-k 20 --verbose
 Top 5 matches:
 1. MICROSOFT CORP
    Source: sec_edgar | ID: 0000789019
-   Canonical ID: sec_edgar:0000789019
+   Canonical ID: SEC-CIK:0000789019
+   Region: USA
    Similarity: 0.8423
 
 2. Microsoft Corporation
    Source: gleif | ID: INR2EJN1ERAN0W5ZP974
-   Canonical ID: gleif:INR2EJN1ERAN0W5ZP974
+   Canonical ID: LEI:INR2EJN1ERAN0W5ZP974
+   Region: US-WA
    Similarity: 0.8156
 ```
 
@@ -157,14 +168,14 @@ Top 5 matches:
 ### Upload Database
 
 ```bash
-# Upload to default repo (Corp-o-Rate-Community/company-embeddings)
-corp-extractor db upload ~/.cache/corp-extractor/companies.db
+# Upload to default repo (Corp-o-Rate-Community/entity-references)
+corp-extractor db upload ~/.cache/corp-extractor/entities.db
 
 # Upload to custom repo
-corp-extractor db upload companies.db --repo your-org/your-repo
+corp-extractor db upload entities.db --repo your-org/your-repo
 
 # With custom commit message
-corp-extractor db upload companies.db --message "Update with January 2026 GLEIF data"
+corp-extractor db upload entities.db --message "Update with January 2026 GLEIF data"
 ```
 
 ### Download Published Database
@@ -184,7 +195,7 @@ corp-extractor db download --force
 
 ## Using in the Pipeline
 
-The company database is used by the **EmbeddingCompanyQualifier** plugin in Stage 3 (Qualification).
+The entity database is used by the **EmbeddingCompanyQualifier** plugin in Stage 3 (Qualification). This plugin now returns `CanonicalEntity` objects directly with FQN and qualifiers.
 
 **Python API:**
 ```python
@@ -195,7 +206,34 @@ pipeline = ExtractionPipeline()
 ctx = pipeline.process("Microsoft acquired Activision Blizzard.")
 
 for stmt in ctx.labeled_statements:
-    print(f"{stmt.subject_fqn}")  # e.g., "Microsoft (sec_edgar:0000789019)"
+    # FQN format: "LEGAL_NAME (SOURCE,REGION)"
+    print(f"{stmt.subject_fqn}")  # e.g., "MICROSOFT CORP (SEC-CIK,USA)"
+
+    # Access qualifiers dict
+    subj = stmt.subject_canonical
+    if subj.qualifiers_dict:
+        print(f"  Legal name: {subj.qualifiers_dict.get('legal_name')}")
+        print(f"  Source: {subj.qualifiers_dict.get('source')}")
+        print(f"  Region: {subj.qualifiers_dict.get('region')}")
+```
+
+**Output format (v0.8.0+):**
+```json
+{
+  "subject": {
+    "text": "Microsoft",
+    "type": "ORG",
+    "name": "MICROSOFT CORP",
+    "fqn": "MICROSOFT CORP (SEC-CIK,USA)",
+    "canonical_id": "SEC-CIK:0000789019",
+    "qualifiers": {
+      "legal_name": "MICROSOFT CORP",
+      "region": "USA",
+      "source": "SEC-CIK",
+      "source_id": "0000789019"
+    }
+  }
+}
 ```
 
 **CLI:**
@@ -211,12 +249,15 @@ corp-extractor pipeline "Apple announced record earnings."
 | `db status` | Show database statistics |
 | `db search QUERY` | Search for a company |
 | `db import-gleif` | Import GLEIF LEI data |
-| `db import-sec` | Import SEC Edgar data |
+| `db import-sec` | Import SEC Edgar bulk data |
 | `db import-companies-house` | Import UK Companies House data |
 | `db import-wikidata` | Import Wikidata companies |
 | `db gleif-info` | Show latest GLEIF file info |
-| `db download` | Download database from HuggingFace |
-| `db upload` | Upload database to HuggingFace |
+| `db download` | Download database from HuggingFace (lite by default) |
+| `db download --full` | Download full database with all metadata |
+| `db upload` | Upload database to HuggingFace (creates all variants) |
+| `db create-lite` | Create lite version (strips record JSON) |
+| `db compress` | Compress database with gzip |
 
 ### Common Options
 
@@ -229,23 +270,48 @@ corp-extractor pipeline "Apple announced record earnings."
 | `--force` | Force re-download even if cached |
 | `-v, --verbose` | Verbose output |
 
+## Database Variants
+
+| Variant | Filename | Contains | Size |
+|---------|----------|----------|------|
+| **Full** | `entities.db` | All data + embeddings + record metadata | ~65GB |
+| **Lite** | `entities-lite.db` | All data + embeddings (no record JSON) | ~20GB |
+| **Compressed** | `*.db.gz` | Gzipped versions for transfer | ~50% smaller |
+
+The lite version is recommended for most deployments—it contains everything needed for qualification but omits the full JSON record metadata.
+
+```bash
+# Download lite version (default, smaller)
+corp-extractor db download
+
+# Download full version with all metadata
+corp-extractor db download --full
+
+# Create lite version locally
+corp-extractor db create-lite entities.db
+
+# Compress for upload
+corp-extractor db compress entities.db
+```
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Company Database                         │
+│                    Entity Database                          │
 ├─────────────────────────────────────────────────────────────┤
-│  companies table (SQLite)                                   │
+│  organizations table (SQLite)                               │
 │  ├── id (INTEGER PRIMARY KEY)                               │
 │  ├── name (TEXT)                                            │
-│  ├── embedding_name (TEXT)                                  │
-│  ├── legal_name (TEXT)                                      │
-│  ├── source (TEXT: gleif|sec_edgar|companies_house|wikipedia)│
+│  ├── name_normalized (TEXT)                                 │
+│  ├── region (TEXT)                                          │
+│  ├── entity_type (TEXT)                                     │
+│  ├── source (TEXT: gleif|sec_edgar|companies_house|wikidata)│
 │  ├── source_id (TEXT)                                       │
-│  └── record (JSON)                                          │
+│  └── record (JSON) - omitted in lite version                │
 ├─────────────────────────────────────────────────────────────┤
-│  company_embeddings (sqlite-vec virtual table)              │
-│  ├── id (INTEGER)                                           │
+│  organization_embeddings (sqlite-vec virtual table)         │
+│  ├── org_id (INTEGER)                                       │
 │  └── embedding (FLOAT[768])                                 │
 └─────────────────────────────────────────────────────────────┘
          │
@@ -253,8 +319,8 @@ corp-extractor pipeline "Apple announced record earnings."
          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  EmbeddingCompanyQualifier (Stage 3 Plugin)                 │
-│  ├── Search by company name embedding                       │
-│  ├── Return top-K candidates with similarity scores         │
+│  ├── Search by organization name embedding                  │
+│  ├── Return CanonicalEntity with FQN and qualifiers         │
 │  └── Optional LLM confirmation for ambiguous matches        │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -269,7 +335,7 @@ corp-extractor pipeline "Apple announced record earnings."
 
 3. **Similarity Search**: When searching for a company, the query is embedded and compared against all stored embeddings using cosine similarity. The top-K most similar records are returned.
 
-4. **Canonical ID Resolution**: Each match includes a canonical identifier in the format `source:source_id` (e.g., `gleif:INR2EJN1ERAN0W5ZP974`), which can be used for deduplication and cross-referencing.
+4. **Canonical ID Resolution**: Each match includes a canonical identifier in the format `SOURCE-PREFIX:source_id` (e.g., `LEI:INR2EJN1ERAN0W5ZP974`, `SEC-CIK:0000789019`), which can be used for deduplication and cross-referencing.
 
 ### Embedding Model
 
@@ -304,17 +370,27 @@ Search is performed using sqlite-vec's virtual table, which uses exact cosine si
 
 ### Record Schema
 
-Each company record contains:
+Each organization record contains:
 
 ```python
 class CompanyRecord(BaseModel):
     name: str           # Searchable name (used for embedding)
-    embedding_name: str # Name used for embedding generation
-    legal_name: str     # Official registered name
+    region: str         # Geographic region (e.g., "USA", "GB", "US-CA")
+    entity_type: str    # Organization type (business, nonprofit, government, etc.)
     source: str         # Data source identifier
     source_id: str      # Unique ID from source
-    record: dict        # Full record from source (varies by source)
+    canonical_id: str   # Full canonical ID (e.g., "SEC-CIK:0000789019")
+    record: dict        # Full record from source (omitted in lite version)
 ```
+
+**Source identifier prefixes:**
+
+| Source | Prefix | Example Canonical ID |
+|--------|--------|---------------------|
+| GLEIF | `LEI` | `LEI:INR2EJN1ERAN0W5ZP974` |
+| SEC Edgar | `SEC-CIK` | `SEC-CIK:0000789019` |
+| Companies House | `UK-CH` | `UK-CH:00445790` |
+| Wikidata | `WIKIDATA` | `WIKIDATA:Q2283` |
 
 **Source-specific record fields:**
 
@@ -358,11 +434,11 @@ Use `--force` to re-download cached files.
 ### Deduplication
 
 The database does not automatically deduplicate across sources. The same company may appear multiple times:
-- Microsoft in GLEIF (LEI: INR2EJN1ERAN0W5ZP974)
-- Microsoft in SEC Edgar (CIK: 0000789019)
-- Microsoft in Wikidata (QID: Q2283)
+- Microsoft in GLEIF → `LEI:INR2EJN1ERAN0W5ZP974`
+- Microsoft in SEC Edgar → `SEC-CIK:0000789019`
+- Microsoft in Wikidata → `WIKIDATA:Q2283`
 
-This is intentional—different sources provide different identifiers and metadata. The pipeline can use multiple matches to enrich entity qualification.
+This is intentional—different sources provide different identifiers and metadata. The qualifier plugin returns the first confident match based on embedding similarity.
 
 ## Data Freshness
 

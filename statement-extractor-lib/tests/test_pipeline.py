@@ -233,8 +233,8 @@ class TestPipelineConfig:
 
         config = PipelineConfig.default()
 
-        # 6-stage pipeline with taxonomy classification
-        assert config.enabled_stages == {1, 2, 3, 4, 5, 6}
+        # 5-stage pipeline with taxonomy classification
+        assert config.enabled_stages == {1, 2, 3, 4, 5}
         assert config.enabled_plugins is None
         # MNLI classifier disabled by default (use embedding_taxonomy_classifier instead)
         assert "mnli_taxonomy_classifier" in config.disabled_plugins
@@ -331,6 +331,29 @@ class TestPipelineContext:
 class TestPluginRegistry:
     """Tests for PluginRegistry."""
 
+    def _reload_plugins(self):
+        """Reload all plugin modules to re-register plugins."""
+        import importlib
+        # Reload the specific modules that contain registered plugins
+        from statement_extractor.plugins.splitters import t5_gemma
+        from statement_extractor.plugins.extractors import gliner2
+        from statement_extractor.plugins.qualifiers import person, embedding_company
+        from statement_extractor.plugins.labelers import sentiment, confidence, relation_type
+        from statement_extractor.plugins.taxonomy import embedding
+        from statement_extractor.plugins.scrapers import http
+        from statement_extractor.plugins.pdf import pypdf
+
+        importlib.reload(t5_gemma)
+        importlib.reload(gliner2)
+        importlib.reload(person)
+        importlib.reload(embedding_company)
+        importlib.reload(sentiment)
+        importlib.reload(confidence)
+        importlib.reload(relation_type)
+        importlib.reload(embedding)
+        importlib.reload(http)
+        importlib.reload(pypdf)
+
     def test_registry_clear(self):
         """Test clearing the registry."""
         from statement_extractor.pipeline.registry import PluginRegistry
@@ -341,15 +364,21 @@ class TestPluginRegistry:
         assert len(PluginRegistry.get_splitters()) == 0
         assert len(PluginRegistry.get_extractors()) == 0
 
+        # Re-register plugins for other tests
+        self._reload_plugins()
+
     def test_list_plugins(self):
         """Test listing plugins."""
         from statement_extractor.pipeline.registry import PluginRegistry
 
         PluginRegistry.clear()
 
-        plugins = PluginRegistry.list_plugins()
+        plugins_list = PluginRegistry.list_plugins()
         # Should be empty after clear
-        assert len(plugins) == 0
+        assert len(plugins_list) == 0
+
+        # Re-register plugins for other tests
+        self._reload_plugins()
 
 
 class TestPluginBases:
@@ -364,60 +393,6 @@ class TestPluginBases:
         assert PluginCapability.BATCH_PROCESSING in caps
         assert PluginCapability.EXTERNAL_API in caps
         assert PluginCapability.LLM_REQUIRED not in caps
-
-
-class TestCanonicalizerHelpers:
-    """Tests for canonicalizer helper functions."""
-
-    def test_normalize_org_name(self):
-        """Test organization name normalization."""
-        from statement_extractor.plugins.canonicalizers.organization import normalize_org_name
-
-        assert normalize_org_name("Apple Inc.") == "apple"
-        assert normalize_org_name("Microsoft Corporation") == "microsoft"
-        assert normalize_org_name("Google LLC") == "google"
-        assert normalize_org_name("Meta Platforms, Inc.") == "meta platforms"
-
-    def test_trigram_similarity(self):
-        """Test trigram similarity calculation."""
-        from statement_extractor.plugins.canonicalizers.organization import trigram_similarity
-
-        # Same string
-        assert trigram_similarity("apple", "apple") == 1.0
-
-        # Similar strings
-        sim = trigram_similarity("apple", "appel")
-        assert 0.5 < sim < 1.0
-
-        # Different strings
-        sim2 = trigram_similarity("apple", "microsoft")
-        assert sim2 < 0.3
-
-    def test_person_name_matching(self):
-        """Test person name matching."""
-        from statement_extractor.plugins.canonicalizers.person import names_match
-
-        # Exact match
-        match, conf = names_match("Tim Cook", "Tim Cook")
-        assert match
-        assert conf == 1.0
-
-        # Variant match
-        match, conf = names_match("Tim Cook", "Timothy Cook")
-        assert match
-        assert conf == 0.9
-
-        # Different people
-        match, conf = names_match("Tim Cook", "John Smith")
-        assert not match
-
-    def test_location_normalization(self):
-        """Test location normalization."""
-        from statement_extractor.plugins.canonicalizers.location import normalize_location
-
-        assert normalize_location("U.S.A.") == "usa"
-        assert normalize_location(" United States ") == "united states"
-        assert normalize_location("U.K.") == "uk"
 
 
 class TestLabelerHelpers:
@@ -439,31 +414,14 @@ class TestLabelerHelpers:
         sentiment, conf = classify_sentiment("Company is located in California")
         assert sentiment == "neutral"
 
-    def test_relation_type_classification(self):
-        """Test relation type classification."""
-        from statement_extractor.plugins.labelers.relation_type import classify_relation
-
-        # Employment
-        rel_type, conf = classify_relation("works for", "John works for Apple Inc.")
-        assert rel_type == "employment"
-
-        # Acquisition
-        rel_type, conf = classify_relation("acquired", "Microsoft acquired LinkedIn.")
-        assert rel_type == "acquisition"
-
-        # Location
-        rel_type, conf = classify_relation("headquartered", "Company is headquartered in SF.")
-        assert rel_type == "location"
-
-
 class TestQualifierPlugins:
     """Tests for qualifier plugins."""
 
     def test_person_qualifier_patterns(self):
         """Test person qualifier pattern matching."""
         from statement_extractor.plugins.qualifiers.person import PersonQualifierPlugin
-        from statement_extractor.models import ExtractedEntity, EntityType
-        from statement_extractor.pipeline import PipelineContext, PipelineStatement
+        from statement_extractor.models import ExtractedEntity, EntityType, PipelineStatement
+        from statement_extractor.pipeline import PipelineContext
 
         plugin = PersonQualifierPlugin(use_llm=False)  # Disable LLM for testing
 
@@ -479,11 +437,12 @@ class TestQualifierPlugins:
         ]
 
         entity = ctx.statements[0].subject
-        qualifiers = plugin.qualify(entity, ctx)
+        canonical = plugin.qualify(entity, ctx)
 
-        # Should extract role from pattern matching
-        assert qualifiers is not None
-        assert qualifiers.role == "CEO"
+        # Should extract role from pattern matching and return CanonicalEntity
+        assert canonical is not None
+        assert canonical.qualified_entity.qualifiers.role == "CEO"
+        assert "CEO" in canonical.fqn
 
 
 @pytest.mark.slow

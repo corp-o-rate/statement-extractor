@@ -396,21 +396,20 @@ Confidence scores come directly from GLiNER2 with `include_confidence=True`:
 
 <a id="pipeline-architecture"></a>
 
-<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">Updated in v0.8.0</span>
 
-Version 0.5.0 introduces a **6-stage plugin-based pipeline** for comprehensive entity resolution, canonicalization, statement enrichment, and taxonomy classification.
+Version 0.8.0 uses a **5-stage plugin-based pipeline** for comprehensive entity resolution, statement enrichment, and taxonomy classification. Qualification and canonicalization have been merged into a single stage using the embedding database.
 
-#### The 6 Stages
+#### The 5 Stages
 
 ```mermaid
 flowchart LR
     A[Text] --> B[Stage 1: Splitting]
     B --> C[Stage 2: Extraction]
-    C --> D[Stage 3: Qualification]
-    D --> E[Stage 4: Canonicalization]
-    E --> F[Stage 5: Labeling]
-    F --> G[Stage 6: Taxonomy]
-    G --> H[Classified Statements]
+    C --> D[Stage 3: Entity Qualification]
+    D --> E[Stage 4: Labeling]
+    E --> F[Stage 5: Taxonomy]
+    F --> G[Classified Statements]
 ```
 
 <table>
@@ -440,27 +439,20 @@ flowchart LR
     </tr>
     <tr>
       <td>3</td>
-      <td>Qualification</td>
+      <td>Entity Qualification</td>
       <td>Entities</td>
-      <td><code>QualifiedEntity[]</code></td>
-      <td>Add context: roles, identifiers (LEI, ticker, etc.)</td>
+      <td><code>CanonicalEntity[]</code></td>
+      <td>Add identifiers (LEI, CIK, etc.) and resolve canonical names via embedding database</td>
     </tr>
     <tr>
       <td>4</td>
-      <td>Canonicalization</td>
-      <td><code>QualifiedEntity[]</code></td>
-      <td><code>CanonicalEntity[]</code></td>
-      <td>Resolve to canonical forms, generate FQNs</td>
-    </tr>
-    <tr>
-      <td>5</td>
       <td>Labeling</td>
       <td>Statements</td>
       <td><code>LabeledStatement[]</code></td>
       <td>Apply sentiment, relation type, confidence labels</td>
     </tr>
     <tr>
-      <td>6</td>
+      <td>5</td>
       <td>Taxonomy</td>
       <td>Statements</td>
       <td><code>TaxonomyResult[]</code></td>
@@ -492,42 +484,35 @@ The extraction stage uses GLiNER2 to extract relations and assign entity types, 
 
 **Note:** Stage 2 returns **all matching relations** from GLiNER2, not just the best one. This allows downstream stages to filter, deduplicate, or select based on specific criteria. Relations are sorted by confidence (descending).
 
-#### Stage 3: Qualification
+#### Stage 3: Entity Qualification
 
-Qualification plugins add context and external identifiers to entities:
+Entity qualification combines what were previously separate qualification and canonicalization stages. It adds context, external identifiers, and canonical names to entities using the embedding database:
 
 - **PersonQualifier**: Adds role and organization for PERSON entities using Gemma3
-- **EmbeddingCompanyQualifier**: Looks up company identifiers (LEI, CIK, UK company numbers) using the local embedding database
+- **EmbeddingCompanyQualifier**: Looks up company identifiers (LEI, CIK, UK company numbers) and canonical names using vector similarity search
 
-The output is `QualifiedEntity` with an `EntityQualifiers` object containing:
-- Semantic qualifiers: `role`, `org`, `jurisdiction`
+The output is `CanonicalEntity` with:
+- **entity_type**: Classification (business, nonprofit, government, etc.)
+- **canonical_match**: Match details (id, name, method, confidence)
+- **fqn**: Fully Qualified Name, e.g., "Tim Cook (CEO, Apple Inc)"
 - External identifiers: `lei`, `ch_number`, `sec_cik`, `ticker`, etc.
 
 **Note:** The embedding-based company qualifier replaces the older API-based qualifiers (GLEIF, Companies House, SEC Edgar APIs) for faster, offline entity resolution.
 
-#### Stage 4: Canonicalization
-
-Canonicalization resolves entities to their canonical forms:
-
-- **OrganizationCanonicalizer**: Resolves organization name variants
-- **PersonCanonicalizer**: Resolves person name variants
-
-The output is `CanonicalEntity` with:
-- **canonical_match**: Match details (id, name, method, confidence)
-- **fqn**: Fully Qualified Name, e.g., "Tim Cook (CEO, Apple Inc)"
-
-#### Stage 5: Labeling
+#### Stage 4: Labeling
 
 Labeling plugins annotate statements with additional metadata:
 
 - **SentimentLabeler**: Adds sentiment classification (positive/negative/neutral)
+- **ConfidenceLabeler**: Adds confidence scoring
+- **RelationTypeLabeler**: Classifies relation types
 
 The output is `LabeledStatement` with:
 - Original statement
 - Canonicalized subject and object
 - List of `StatementLabel` objects
 
-#### Stage 6: Taxonomy
+#### Stage 5: Taxonomy
 
 Taxonomy classification plugins classify statements against large taxonomies with hundreds of possible values. **Multiple labels may match a single statement** above the confidence threshold.
 
@@ -586,7 +571,7 @@ flowchart LR
 The document pipeline:
 1. **Loads** content from files, URLs, or PDFs
 2. **Chunks** text into optimal-sized segments for the extraction model
-3. **Processes** each chunk through the 6-stage extraction pipeline
+3. **Processes** each chunk through the 5-stage extraction pipeline
 4. **Deduplicates** statements across chunks
 5. **Generates** optional document summary
 6. **Tracks** citations back to source chunks
@@ -649,13 +634,13 @@ When processing long documents, the same fact may appear in multiple chunks. The
 
 ---
 
-### Company Embedding Database
+### Entity Embedding Database
 
-<a id="company-database"></a>
+<a id="entity-database"></a>
 
 <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.6.0</span>
 
-Version 0.6.0 introduces a **company embedding database** for fast entity qualification using vector similarity search.
+Version 0.6.0 introduces an **entity embedding database** for fast organization qualification using vector similarity search.
 
 #### Data Sources
 
@@ -665,6 +650,7 @@ Version 0.6.0 introduces a **company embedding database** for fast entity qualif
       <th>Source</th>
       <th>Records</th>
       <th>Identifier</th>
+      <th>EntityType Mapping</th>
     </tr>
   </thead>
   <tbody>
@@ -672,34 +658,86 @@ Version 0.6.0 introduces a **company embedding database** for fast entity qualif
       <td>GLEIF</td>
       <td>~3.2M</td>
       <td>LEI (Legal Entity Identifier)</td>
+      <td>GENERAL→business, FUND→fund, BRANCH→branch</td>
     </tr>
     <tr>
       <td>SEC Edgar</td>
       <td>~100K+</td>
       <td>CIK (Central Index Key)</td>
+      <td>business (or fund via SIC codes)</td>
     </tr>
     <tr>
       <td>Companies House</td>
       <td>~5M</td>
       <td>UK Company Number</td>
+      <td>Maps company_type to business/nonprofit</td>
     </tr>
     <tr>
       <td>Wikidata</td>
       <td>Variable</td>
       <td>QID</td>
+      <td>35+ query types mapped to EntityType</td>
+    </tr>
+  </tbody>
+</table>
+
+#### EntityType Classification
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.8.0</span>
+
+Each organization record is classified with an `entity_type` field to distinguish between businesses, non-profits, government agencies, and other organization types:
+
+<table>
+  <thead>
+    <tr>
+      <th>Category</th>
+      <th>Types</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Business</td>
+      <td><code>business</code>, <code>fund</code>, <code>branch</code></td>
+      <td>Commercial entities, investment funds, branch offices</td>
+    </tr>
+    <tr>
+      <td>Non-profit</td>
+      <td><code>nonprofit</code>, <code>ngo</code>, <code>foundation</code>, <code>trade_union</code></td>
+      <td>Charitable organizations, NGOs, labor unions</td>
+    </tr>
+    <tr>
+      <td>Government</td>
+      <td><code>government</code>, <code>international_org</code>, <code>political_party</code></td>
+      <td>Government agencies, UN/WHO/IMF, political parties</td>
+    </tr>
+    <tr>
+      <td>Education</td>
+      <td><code>educational</code>, <code>research</code></td>
+      <td>Schools, universities, research institutes</td>
+    </tr>
+    <tr>
+      <td>Other</td>
+      <td><code>healthcare</code>, <code>media</code>, <code>sports</code>, <code>religious</code></td>
+      <td>Hospitals, studios, sports clubs, religious orgs</td>
+    </tr>
+    <tr>
+      <td>Unknown</td>
+      <td><code>unknown</code></td>
+      <td>Classification not determined</td>
     </tr>
   </tbody>
 </table>
 
 #### How It Works
 
-1. **Embedding Generation**: Company names are embedded using EmbeddingGemma (300M params)
+1. **Embedding Generation**: Organization names are embedded using EmbeddingGemma (300M params)
 2. **Vector Search**: sqlite-vec enables fast similarity search across millions of records
-3. **Qualification**: When an ORG entity is found, the database is searched for matching companies
-4. **Identifier Resolution**: Matched companies provide LEI, CIK, company numbers, etc.
+3. **Qualification**: When an ORG entity is found, the database is searched for matching organizations
+4. **Identifier Resolution**: Matched organizations provide LEI, CIK, company numbers, etc.
 
 #### Database Variants
 
-- **companies-lite.db**: Core fields and embeddings only (default download, smaller)
-- **companies.db**: Full database with complete source metadata
+- **entities-lite.db**: Core fields and embeddings only (default download, smaller)
+- **entities.db**: Full database with complete source metadata
 - **\*.db.gz**: Gzip compressed versions for faster downloads

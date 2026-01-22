@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from ..models import CompanyRecord
+from ..models import CompanyRecord, EntityType
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,37 @@ COMPANY_TYPE_PREFIXES = (
     "old public company",
     # Note: Excluded - "Limited Partnership" (often used for funds)
 )
+
+# Mapping from company_type prefixes to EntityType
+# Uses prefix matching since CSV values can be truncated
+COMPANY_TYPE_TO_ENTITY_TYPE: list[tuple[str, EntityType]] = [
+    # Charitable/non-profit (check these first - more specific)
+    ("charitable incorporated organisation", EntityType.NONPROFIT),
+    ("scottish charitable incorporated organisation", EntityType.NONPROFIT),
+    ("community interest company", EntityType.NONPROFIT),
+    ("pri/ltd by guar", EntityType.NONPROFIT),  # Limited by guarantee - often charities
+    ("pri/lbg/nsc", EntityType.NONPROFIT),  # Limited by guarantee no share capital
+    ("registered society", EntityType.NONPROFIT),  # Co-ops, friendly societies
+
+    # Business entities (default for most)
+    ("private limited company", EntityType.BUSINESS),
+    ("public limited company", EntityType.BUSINESS),
+    ("private unlimited company", EntityType.BUSINESS),
+    ("limited liability partnership", EntityType.BUSINESS),
+    ("overseas entity", EntityType.BUSINESS),
+    ("old public company", EntityType.BUSINESS),
+    ("royal charter", EntityType.BUSINESS),  # Could be various, default to business
+    ("other company type", EntityType.UNKNOWN),
+]
+
+
+def _get_entity_type_from_company_type(company_type: str) -> EntityType:
+    """Determine EntityType from Companies House company_type."""
+    company_type_lower = company_type.lower().strip()
+    for prefix, entity_type in COMPANY_TYPE_TO_ENTITY_TYPE:
+        if company_type_lower.startswith(prefix):
+            return entity_type
+    return EntityType.BUSINESS  # Default to business for unmatched types
 
 
 class CompaniesHouseImporter:
@@ -307,12 +338,16 @@ class CompaniesHouseImporter:
                 region = ""
                 country = "United Kingdom"
 
+            # Determine entity type from company_type
+            raw_company_type = item.get("company_type", "")
+            entity_type = _get_entity_type_from_company_type(raw_company_type)
+
             # Build record
             record_data = {
                 "company_number": company_number,
                 "title": title,
                 "company_status": company_status,
-                "company_type": item.get("company_type", ""),
+                "company_type": raw_company_type,
                 "date_of_creation": item.get("date_of_creation"),
                 "locality": locality,
                 "region": region,
@@ -321,11 +356,10 @@ class CompaniesHouseImporter:
 
             return CompanyRecord(
                 name=title.strip(),
-                embedding_name=title.strip(),
-                legal_name=title,
                 source="companies_house",
                 source_id=company_number,
                 region=country,
+                entity_type=entity_type,
                 record=record_data,
             )
 
@@ -359,11 +393,15 @@ class CompaniesHouseImporter:
             if company_type and not company_type.startswith(COMPANY_TYPE_PREFIXES):
                 return None
 
+            # Determine entity type from company_type
+            raw_company_type = row.get("CompanyCategory", "").strip()
+            entity_type = _get_entity_type_from_company_type(raw_company_type)
+
             record_data = {
                 "company_number": company_number,
                 "title": company_name,
                 "company_status": company_status,
-                "company_type": row.get("CompanyCategory", "").strip(),
+                "company_type": raw_company_type,
                 "date_of_creation": row.get("IncorporationDate", "").strip(),
                 "country": row.get("CountryOfOrigin", "United Kingdom").strip(),
                 "sic_code": row.get("SICCode.SicText_1", "").strip(),
@@ -374,11 +412,10 @@ class CompaniesHouseImporter:
 
             return CompanyRecord(
                 name=company_name,
-                embedding_name=company_name,
-                legal_name=company_name,
                 source="companies_house",
                 source_id=company_number,
                 region=region,
+                entity_type=entity_type,
                 record=record_data,
             )
 

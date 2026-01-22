@@ -1,8 +1,8 @@
 """
-HuggingFace Hub integration for company database distribution.
+HuggingFace Hub integration for entity/organization database distribution.
 
 Provides functionality to:
-- Download pre-built company databases from HuggingFace Hub
+- Download pre-built entity databases from HuggingFace Hub
 - Upload/publish database updates
 - Version management for database files
 - Create "lite" versions without full records for smaller downloads
@@ -20,13 +20,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Default HuggingFace repo for company database
-DEFAULT_REPO_ID = "Corp-o-Rate-Community/company-embeddings"
-DEFAULT_DB_FILENAME = "companies-lite.db"  # Lite is the default (smaller download)
-DEFAULT_DB_FULL_FILENAME = "companies.db"
-DEFAULT_DB_LITE_FILENAME = "companies-lite.db"
-DEFAULT_DB_COMPRESSED_FILENAME = "companies.db.gz"
-DEFAULT_DB_LITE_COMPRESSED_FILENAME = "companies-lite.db.gz"
+# Default HuggingFace repo for entity database
+DEFAULT_REPO_ID = "Corp-o-Rate-Community/entity-references"
+DEFAULT_DB_FILENAME = "entities-lite.db"  # Lite is the default (smaller download)
+DEFAULT_DB_FULL_FILENAME = "entities.db"
+DEFAULT_DB_LITE_FILENAME = "entities-lite.db"
+DEFAULT_DB_COMPRESSED_FILENAME = "entities.db.gz"
+DEFAULT_DB_LITE_COMPRESSED_FILENAME = "entities-lite.db.gz"
 
 # Local cache directory
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "corp-extractor"
@@ -39,7 +39,7 @@ def get_database_path(
     full: bool = False,
 ) -> Optional[Path]:
     """
-    Get path to company database, downloading if necessary.
+    Get path to entity database, downloading if necessary.
 
     Args:
         repo_id: HuggingFace repo ID
@@ -59,7 +59,7 @@ def get_database_path(
     # Check common locations
     possible_paths = [
         cache_dir / filename,
-        cache_dir / "companies.db",
+        cache_dir / "entities.db",
         Path.home() / ".cache" / "huggingface" / "hub" / f"datasets--{repo_id.replace('/', '--')}" / filename,
     ]
 
@@ -83,11 +83,11 @@ def upload_database(
     db_path: str | Path,
     repo_id: str = DEFAULT_REPO_ID,
     filename: str = DEFAULT_DB_FILENAME,
-    commit_message: str = "Update company database",
+    commit_message: str = "Update entity database",
     token: Optional[str] = None,
 ) -> str:
     """
-    Upload company database to HuggingFace Hub.
+    Upload entity database to HuggingFace Hub.
 
     Args:
         db_path: Local path to database file
@@ -226,7 +226,7 @@ def create_lite_database(
     try:
         # Update all records to have empty record JSON
         conn.execute("BEGIN")
-        cursor = conn.execute("UPDATE companies SET record = '{}'")
+        cursor = conn.execute("UPDATE organizations SET record = '{}'")
         updated = cursor.rowcount
         logger.info(f"Stripped {updated} record fields")
         conn.execute("COMMIT")
@@ -326,19 +326,21 @@ def decompress_database(
 def upload_database_with_variants(
     db_path: str | Path,
     repo_id: str = DEFAULT_REPO_ID,
-    commit_message: str = "Update company database",
+    commit_message: str = "Update entity database",
     token: Optional[str] = None,
     include_lite: bool = True,
     include_compressed: bool = True,
+    include_readme: bool = True,
 ) -> dict[str, str]:
     """
-    Upload company database with optional lite and compressed variants.
+    Upload entity database with optional lite and compressed variants.
 
     Creates and uploads:
-    - companies.db (full database)
-    - companies-lite.db (without record data, smaller)
-    - companies.db.gz (compressed full database)
-    - companies-lite.db.gz (compressed lite database)
+    - entities.db (full database)
+    - entities-lite.db (without record data, smaller)
+    - entities.db.gz (compressed full database)
+    - entities-lite.db.gz (compressed lite database)
+    - README.md (dataset card from HUGGINGFACE_README.md)
 
     Args:
         db_path: Local path to full database file
@@ -347,6 +349,7 @@ def upload_database_with_variants(
         token: HuggingFace API token
         include_lite: Whether to create and upload lite version
         include_compressed: Whether to create and upload compressed versions
+        include_readme: Whether to upload the README.md dataset card
 
     Returns:
         Dict mapping filename to upload URL
@@ -418,6 +421,18 @@ def upload_database_with_variants(
             shutil.copy2(local_path, staging_dir / remote_filename)
             logger.info(f"Staged {remote_filename}")
 
+        # Add README.md from HUGGINGFACE_README.md
+        if include_readme:
+            # Look for HUGGINGFACE_README.md in the package directory
+            package_dir = Path(__file__).parent.parent.parent.parent  # Go up to statement-extractor-lib
+            readme_source = package_dir / "HUGGINGFACE_README.md"
+            if readme_source.exists():
+                shutil.copy2(readme_source, staging_dir / "README.md")
+                files_to_upload.append((readme_source, "README.md"))
+                logger.info("Staged README.md from HUGGINGFACE_README.md")
+            else:
+                logger.warning(f"HUGGINGFACE_README.md not found at {readme_source}")
+
         # Upload all files in a single commit to avoid LFS pointer issues
         logger.info(f"Uploading {len(files_to_upload)} files to {repo_id}...")
         api.upload_folder(
@@ -443,10 +458,10 @@ def download_database(
     prefer_compressed: bool = True,
 ) -> Path:
     """
-    Download company database from HuggingFace Hub.
+    Download entity database from HuggingFace Hub.
 
     Args:
-        repo_id: HuggingFace repo ID (e.g., "corp-o-rate/company-embeddings")
+        repo_id: HuggingFace repo ID (e.g., "Corp-o-Rate-Community/entity-references")
         filename: Database filename in the repo
         revision: Git revision (branch, tag, commit) or None for latest
         cache_dir: Local cache directory
@@ -490,7 +505,7 @@ def download_database(
             logger.debug(f"Compressed version not available: {e}")
 
     # Download uncompressed version
-    logger.info(f"Downloading company database from {repo_id}...")
+    logger.info(f"Downloading entity database from {repo_id}...")
 
     local_path = hf_hub_download(
         repo_id=repo_id,

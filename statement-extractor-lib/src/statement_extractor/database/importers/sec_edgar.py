@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from ..models import CompanyRecord
+from ..models import CompanyRecord, EntityType
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ ORG_ENTITY_TYPES = {
     "foreign-private-issuer",  # Foreign companies
 }
 
-# SIC codes for funds/financial instruments to exclude
+# SIC codes for funds/financial instruments (map to FUND entity type)
 FUND_SIC_CODES = {
     "6722",  # Management Investment Offices, Open-End
     "6726",  # Other Investment Offices
@@ -43,6 +43,23 @@ FUND_SIC_CODES = {
     "6798",  # Real Estate Investment Trusts
     "6799",  # Investors, NEC
 }
+
+# Mapping from SEC entity types to our EntityType
+SEC_ENTITY_TYPE_MAP: dict[str, EntityType] = {
+    "operating": EntityType.BUSINESS,
+    "foreign-private-issuer": EntityType.BUSINESS,
+    "": EntityType.UNKNOWN,
+}
+
+
+def _get_entity_type_from_sec(sec_entity_type: str, sic: str) -> EntityType:
+    """Determine EntityType from SEC entity type and SIC code."""
+    # Check SIC codes first - they're more specific
+    if sic in FUND_SIC_CODES:
+        return EntityType.FUND
+
+    # Map SEC entity type
+    return SEC_ENTITY_TYPE_MAP.get(sec_entity_type.lower(), EntityType.BUSINESS)
 
 
 class SecEdgarImporter:
@@ -178,11 +195,10 @@ class SecEdgarImporter:
 
             yield CompanyRecord(
                 name=title.strip(),
-                embedding_name=title.strip(),
-                legal_name=title,
                 source="sec_edgar",
                 source_id=cik_str,
                 region="US",  # Tickers file is US-only
+                entity_type=EntityType.BUSINESS,  # Ticker file = publicly traded businesses
                 record=record_data,
             )
             count += 1
@@ -225,13 +241,9 @@ class SecEdgarImporter:
             if not cik or not name:
                 return None
 
-            # Filter to only include operating companies (exclude individuals and funds)
+            # Filter to only include organizations (exclude individuals without business indicators)
             ticker = self._ticker_lookup.get(cik, "") if self._ticker_lookup else ""
             sic = data.get("sic", "")
-
-            # Exclude funds/financial instruments by SIC code
-            if sic in FUND_SIC_CODES:
-                return None
 
             # Include if: has a known org entity type, OR has a ticker (publicly traded), OR has SIC code
             is_organization = (
@@ -242,6 +254,9 @@ class SecEdgarImporter:
 
             if not is_organization:
                 return None
+
+            # Determine entity type (business, fund, etc.)
+            record_entity_type = _get_entity_type_from_sec(entity_type, sic)
 
             # Get additional fields
             sic_description = data.get("sicDescription", "")
@@ -283,11 +298,10 @@ class SecEdgarImporter:
 
             return CompanyRecord(
                 name=name,
-                embedding_name=name,
-                legal_name=name,
                 source="sec_edgar",
                 source_id=cik,
                 region=region,
+                entity_type=record_entity_type,
                 record=record_data,
             )
 

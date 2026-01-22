@@ -69,7 +69,7 @@ uv publish                     # Publish to PyPI (requires credentials)
 
 # CLI commands (after install)
 corp-extractor split "text"    # Simple extraction
-corp-extractor pipeline "text" # Full 6-stage pipeline
+corp-extractor pipeline "text" # Full 5-stage pipeline
 corp-extractor plugins list    # List available plugins
 ```
 
@@ -100,31 +100,51 @@ The frontend can connect to the model via three backends (configured by environm
 - RunPod requires `--platform linux/amd64` when building Docker on Mac
 - Model uses bfloat16 on GPU, float32 on CPU
 - Generation stops at `</statements>` tag to prevent runaway output
-- **v0.5.0**: Introduces 6-stage plugin-based pipeline architecture
+- **v0.8.0**: Merged qualification and canonicalization into single stage; added EntityType classification
+- **v0.5.0**: Introduces plugin-based pipeline architecture
 - **v0.4.0**: Uses GLiNER2 (205M params) for entity recognition and relation extraction instead of spaCy
 - GLiNER2 is CPU-optimized and handles NER, relation extraction, and structured data extraction
 
-### Pipeline Architecture (v0.5.0)
-The library provides a 6-stage extraction pipeline:
+### Pipeline Architecture (v0.8.0)
+The library provides a 5-stage extraction pipeline:
 
 | Stage | Name | Description | Key Tech |
 |-------|------|-------------|----------|
 | 1 | Splitting | Text → raw triples | T5-Gemma2 |
 | 2 | Extraction | Raw triples → typed statements | GLiNER2 |
-| 3 | Qualification | Add qualifiers/identifiers | Gemma3, APIs |
-| 4 | Canonicalization | Resolve canonical forms | Fuzzy matching |
-| 5 | Labeling | Add sentiment, relation type | Classification |
-| 6 | Taxonomy | Classify against large taxonomies | MNLI, Embeddings |
+| 3 | Entity Qualification | Add identifiers + canonical names | Embedding DB |
+| 4 | Labeling | Add sentiment, relation type | Classification |
+| 5 | Taxonomy | Classify against large taxonomies | MNLI, Embeddings |
 
 **Built-in plugins:**
 - **Splitters**: `t5_gemma_splitter`
 - **Extractors**: `gliner2_extractor`
-- **Qualifiers**: `person_qualifier`, `embedding_company_qualifier` (replaces deprecated API-based qualifiers)
-- **Canonicalizers**: `organization_canonicalizer`, `person_canonicalizer`
-- **Labelers**: `sentiment_labeler`
+- **Qualifiers**: `person_qualifier`, `embedding_company_qualifier`
+- **Labelers**: `sentiment_labeler`, `confidence_labeler`, `relation_type_labeler`
 - **Taxonomy**: `embedding_taxonomy_classifier` (default), `mnli_taxonomy_classifier`
 - **PDF**: `pypdf_loader` - PDF parsing with PyMuPDF
 - **Scrapers**: `http_scraper` - URL/web page scraping
+
+### Entity Database & EntityType Classification
+The entity database supports entity type classification for distinguishing between:
+
+| EntityType | Description | Examples |
+|------------|-------------|----------|
+| `business` | Commercial companies | Apple Inc., Amazon |
+| `fund` | Investment funds, ETFs | Vanguard S&P 500 ETF |
+| `branch` | Branch offices | Deutsche Bank London |
+| `nonprofit` | Non-profit organizations | Red Cross |
+| `ngo` | Non-governmental orgs | Greenpeace |
+| `foundation` | Charitable foundations | Gates Foundation |
+| `government` | Government agencies | SEC, FDA |
+| `international_org` | International organizations | UN, WHO, IMF |
+| `educational` | Schools, universities | MIT, Stanford |
+| `research` | Research institutes | CERN, NIH |
+| `healthcare` | Hospitals, health orgs | Mayo Clinic |
+| `media` | Studios, record labels | Warner Bros |
+| `sports` | Sports clubs/teams | Manchester United |
+| `political_party` | Political parties | Democratic Party |
+| `trade_union` | Labor unions | AFL-CIO |
 
 ### GLiNER2 Integration (v0.4.0)
 The library uses GLiNER2 for:
@@ -161,8 +181,8 @@ for stmt in ctx.labeled_statements:
 
 # With configuration
 config = PipelineConfig(
-    enabled_stages={1, 2, 3},  # Skip canonicalization and labeling
-    disabled_plugins={"sec_edgar_qualifier"},
+    enabled_stages={1, 2, 3},  # Skip labeling and taxonomy
+    disabled_plugins={"person_qualifier"},
 )
 pipeline = ExtractionPipeline(config)
 ```
@@ -179,7 +199,7 @@ corp-extractor document process article.txt
 corp-extractor document process https://example.com/article
 corp-extractor document process report.pdf --use-ocr
 
-# Company database
+# Entity database
 corp-extractor db import-sec --download  # Bulk SEC data (~100K+ filers)
 corp-extractor db upload                 # Upload with lite/compressed variants
 corp-extractor db download               # Download lite version (default)

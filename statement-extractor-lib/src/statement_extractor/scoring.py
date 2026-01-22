@@ -409,18 +409,18 @@ class BeamScorer:
         filtered = [s for s in all_statements if (s.confidence_score or 0) >= min_conf]
         logger.debug(f"  After confidence filter (>={min_conf}): {len(filtered)} statements")
 
-        # # Filter out statements where source_text doesn't support the predicate
-        # # This catches model hallucinations where predicate doesn't match the evidence
-        # consistent = [
-        #     s for s in filtered
-        #     if self._source_text_supports_predicate(s)
-        # ]
-        # logger.debug(f"  After predicate consistency filter: {len(consistent)} statements")
+        # Filter out statements where source_text doesn't support the predicate
+        # This catches model hallucinations where predicate doesn't match the evidence
+        consistent = [
+            s for s in filtered
+            if self._source_text_supports_predicate(s)
+        ]
+        logger.debug(f"  After predicate consistency filter: {len(consistent)} statements")
 
         # Deduplicate - keep highest confidence for each (subject, predicate, object)
         # Note: Same subject+predicate with different objects is valid (e.g., "Apple announced X and Y")
         seen: dict[tuple[str, str, str], Statement] = {}
-        for stmt in all_statements:
+        for stmt in consistent:
             key = (
                 stmt.subject.text.lower(),
                 stmt.predicate.lower(),

@@ -23,13 +23,13 @@ uv publish                           # Publish to PyPI
 
 # CLI testing
 uv run corp-extractor split "text"           # Simple extraction (Stage 1)
-uv run corp-extractor pipeline "text"        # Full 6-stage pipeline
+uv run corp-extractor pipeline "text"        # Full 5-stage pipeline
 uv run corp-extractor pipeline "text" -v     # Verbose with debug logs
 uv run corp-extractor plugins list           # List registered plugins
 
-# Company database commands
+# Entity database commands
 uv run corp-extractor db status              # Show database stats
-uv run corp-extractor db search "Microsoft"  # Search for company
+uv run corp-extractor db search "Microsoft"  # Search for organization
 uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF (~3M records)
 uv run corp-extractor db import-sec --download                  # Import SEC bulk (~100K+ filers)
 uv run corp-extractor db import-companies-house --download --limit 10000  # Import UK companies
@@ -37,8 +37,8 @@ uv run corp-extractor db import-wikidata --limit 5000  # Import Wikidata
 uv run corp-extractor db upload              # Upload with lite/compressed variants
 uv run corp-extractor db download            # Download lite version (default)
 uv run corp-extractor db download --full     # Download full version
-uv run corp-extractor db create-lite companies.db  # Create lite version locally
-uv run corp-extractor db compress companies.db     # Compress with gzip
+uv run corp-extractor db create-lite entities.db  # Create lite version locally
+uv run corp-extractor db compress entities.db     # Compress with gzip
 
 # Document processing commands
 uv run corp-extractor document process article.txt
@@ -92,23 +92,30 @@ Plugins are sorted by `priority` property (lower = runs first). Default is 100.
 - `plugins/taxonomy/embedding.py` - Embedding-based taxonomy classification (Stage 5)
 - `cli.py` - CLI entry point (`corp-extractor` command)
 
-### Company Database Module
+### Entity Database Module
 
-The `database/` module provides company embedding storage and search:
+The `database/` module provides organization embedding storage and search:
 
-- `database/models.py` - `CompanyRecord`, `CompanyMatch`, `DatabaseStats` Pydantic models
-- `database/store.py` - `CompanyDatabase` SQLite+sqlite-vec storage
+- `database/models.py` - `CompanyRecord`, `CompanyMatch`, `DatabaseStats`, `EntityType` Pydantic models
+- `database/store.py` - `OrganizationDatabase` SQLite+sqlite-vec storage
 - `database/embeddings.py` - `CompanyEmbedder` using google/embeddinggemma-300m
 - `database/hub.py` - HuggingFace Hub upload/download with lite/compressed variants
 - `database/importers/` - Data source importers:
-  - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records)
-  - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers, not just tickers)
-  - `companies_house.py` - UK Companies House bulk data (~5M records)
-  - `wikidata.py` - Wikidata SPARQL queries
+  - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records) - maps EntityCategory to EntityType
+  - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers) - maps SIC codes to EntityType
+  - `companies_house.py` - UK Companies House bulk data (~5M records) - maps company_type to EntityType
+  - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - maps query types to EntityType
+
+**EntityType Classification:**
+Each organization record is classified with an `entity_type` field:
+- Business: `business`, `fund`, `branch`
+- Non-profit: `nonprofit`, `ngo`, `foundation`, `trade_union`
+- Government: `government`, `international_org`, `political_party`
+- Other: `educational`, `research`, `healthcare`, `media`, `sports`, `religious`, `unknown`
 
 **Database variants:**
-- `companies.db` - Full database with complete record metadata
-- `companies-lite.db` - Lite version without record data (default download, smaller)
+- `entities.db` - Full database with complete record metadata
+- `entities-lite.db` - Lite version without record data (default download, smaller)
 - `.gz` compressed versions for efficient transfer
 
 ### Document Processing Module
@@ -142,7 +149,7 @@ The `gliner2_extractor` uses 324 default predicates from `data/default_predicate
 
 ### Taxonomy Classification
 
-Stage 6 uses embedding-based classification against `data/statement_taxonomy.json` (ESG topics). Results are stored both in `ctx.taxonomy_results` and on each `LabeledStatement.taxonomy_results`.
+Stage 5 uses embedding-based classification against `data/statement_taxonomy.json` (ESG topics). Results are stored both in `ctx.taxonomy_results` and on each `LabeledStatement.taxonomy_results`.
 
 ## Testing
 

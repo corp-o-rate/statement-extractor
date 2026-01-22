@@ -14,7 +14,13 @@ from typing import Optional
 from ..base import BaseQualifierPlugin, PluginCapability
 from ...pipeline.context import PipelineContext
 from ...pipeline.registry import PluginRegistry
-from ...models import ExtractedEntity, EntityQualifiers, EntityType
+from ...models import (
+    ExtractedEntity,
+    EntityQualifiers,
+    EntityType,
+    QualifiedEntity,
+    CanonicalEntity,
+)
 from ...llm import LLM
 
 logger = logging.getLogger(__name__)
@@ -95,7 +101,7 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         self,
         entity: ExtractedEntity,
         context: PipelineContext,
-    ) -> Optional[EntityQualifiers]:
+    ) -> Optional[CanonicalEntity]:
         """
         Qualify a PERSON entity with role and organization.
 
@@ -104,7 +110,7 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
             context: Pipeline context for accessing source text
 
         Returns:
-            EntityQualifiers with role and org, or None if nothing found
+            CanonicalEntity with role/org qualifiers and FQN, or None if nothing found
         """
         if entity.type != EntityType.PERSON:
             return None
@@ -114,13 +120,21 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         full_text = context.source_text
 
         # Try LLM extraction first with full text
+        qualifiers: Optional[EntityQualifiers] = None
         if self._llm is not None:
             result = self._extract_with_llm(entity.text, full_text)
             if result and (result.role or result.org):
-                return result
+                qualifiers = result
 
         # Fallback to pattern matching with full text
-        return self._extract_with_patterns(entity.text, full_text)
+        if qualifiers is None:
+            qualifiers = self._extract_with_patterns(entity.text, full_text)
+
+        if qualifiers is None:
+            return None
+
+        # Build CanonicalEntity from qualifiers
+        return self._build_canonical_entity(entity, qualifiers)
 
     def _extract_with_llm(
         self,
@@ -215,6 +229,40 @@ Should return:
             return EntityQualifiers(role=role, org=org)
 
         return None
+
+    def _build_canonical_entity(
+        self,
+        entity: ExtractedEntity,
+        qualifiers: EntityQualifiers,
+    ) -> CanonicalEntity:
+        """Build CanonicalEntity from qualifiers."""
+        # Create QualifiedEntity
+        qualified = QualifiedEntity(
+            entity_ref=entity.entity_ref,
+            original_text=entity.text,
+            entity_type=entity.type,
+            qualifiers=qualifiers,
+            qualification_sources=[self.name],
+        )
+
+        # Build FQN: "Person Name (Role, Org)" or "Person Name (Role)" or "Person Name (Org)"
+        fqn_parts = []
+        if qualifiers.role:
+            fqn_parts.append(qualifiers.role)
+        if qualifiers.org:
+            fqn_parts.append(qualifiers.org)
+
+        if fqn_parts:
+            fqn = f"{entity.text} ({', '.join(fqn_parts)})"
+        else:
+            fqn = entity.text
+
+        return CanonicalEntity(
+            entity_ref=entity.entity_ref,
+            qualified_entity=qualified,
+            canonical_match=None,  # PERSON entities don't have canonical matches
+            fqn=fqn,
+        )
 
 
 # Allow importing without decorator for testing

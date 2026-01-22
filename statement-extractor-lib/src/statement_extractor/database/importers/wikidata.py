@@ -1,8 +1,32 @@
 """
-Wikidata importer for the company database.
+Wikidata importer for the company/organization database.
 
-Imports company data from Wikidata using SPARQL queries
-into the embedding database for company name matching.
+Imports organization data from Wikidata using SPARQL queries
+into the embedding database for entity name matching.
+
+Supports 35+ entity types across 4 categories:
+
+Organizations (highest priority):
+- Organizations, nonprofits, NGOs, foundations
+- Government agencies, international organizations
+- Political parties, trade unions
+- Educational institutions, universities, research institutes
+- Hospitals, sports clubs
+
+Companies:
+- Companies with LEI codes or stock tickers
+- Public companies, business enterprises, corporations
+- Subsidiaries, conglomerates
+
+Industry-specific:
+- Banks, insurance companies, investment companies
+- Airlines, retailers, manufacturers
+- Pharma, tech companies, law firms
+- Record labels, film studios, video game companies
+
+Property-based (catches untyped entities):
+- Entities with CEO, subsidiaries, legal form
+- Entities with employee count or revenue data
 
 Uses the public Wikidata Query Service endpoint.
 """
@@ -14,97 +38,742 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterator, Optional
 
-from ..models import CompanyRecord
+from ..models import CompanyRecord, EntityType
 
 logger = logging.getLogger(__name__)
 
 # Wikidata SPARQL endpoint
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 
-# SPARQL query to get companies with stock tickers or LEI codes
-# This focuses on notable companies that are publicly traded or have LEI
-COMPANY_SPARQL_QUERY = """
-SELECT DISTINCT ?company ?companyLabel ?lei ?ticker ?exchange ?exchangeLabel ?country ?countryLabel ?inception WHERE {
-  # Companies that are either:
-  # - business enterprises (Q4830453)
-  # - public companies (Q891723)
-  # - or have a stock ticker
-  {
-    ?company wdt:P31/wdt:P279* wd:Q4830453.  # instance of business enterprise
-    ?company wdt:P414 ?exchange.  # has stock exchange
-  } UNION {
-    ?company wdt:P31/wdt:P279* wd:Q891723.  # instance of public company
-  } UNION {
-    ?company wdt:P1278 ?lei.  # has LEI code
-  }
-
-  OPTIONAL { ?company wdt:P1278 ?lei. }  # LEI code
-  OPTIONAL { ?company wdt:P249 ?ticker. }  # ticker symbol
-  OPTIONAL { ?company wdt:P414 ?exchange. }  # stock exchange
-  OPTIONAL { ?company wdt:P17 ?country. }  # country
-  OPTIONAL { ?company wdt:P571 ?inception. }  # inception date
-
+# Simpler SPARQL query - directly query for companies with LEI codes (fastest, most reliable)
+# Avoids property path wildcards (wdt:P279*) which timeout on Wikidata
+LEI_COMPANY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P1278 ?lei.
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
 OFFSET %d
 """
 
-# Simpler query for bulk import - gets companies with English labels
-BULK_COMPANY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
-  ?company wdt:P31/wdt:P279* wd:Q4830453.
-  ?company rdfs:label ?companyLabel.
-  FILTER(LANG(?companyLabel) = "en")
+# Query for companies with stock exchange listing (has ticker)
+TICKER_COMPANY_QUERY = """
+SELECT ?company ?companyLabel ?ticker ?exchange ?exchangeLabel ?country ?countryLabel WHERE {
+  ?company wdt:P414 ?exchange.
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
 
+# Query for direct instances of public company (Q891723) - no subclass traversal
+PUBLIC_COMPANY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q891723.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
-
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
 OFFSET %d
 """
+
+# Query for direct instances of business enterprise (Q4830453) - no subclass traversal
+BUSINESS_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q4830453.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for direct instances of organization (Q43229) - includes NGOs, gov agencies, etc.
+ORGANIZATION_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q43229.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for non-profit organizations (Q163740)
+NONPROFIT_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q163740.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for government agencies (Q327333)
+GOV_AGENCY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q327333.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for enterprises (Q6881511) - broader than business enterprise
+ENTERPRISE_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q6881511.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for corporations (Q167037)
+CORPORATION_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q167037.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for subsidiaries (Q658255)
+SUBSIDIARY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q658255.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for banks (Q22687)
+BANK_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q22687.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for insurance companies (Q6881511)
+INSURANCE_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q1145276.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for airlines (Q46970)
+AIRLINE_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q46970.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for law firms (Q613142)
+LAW_FIRM_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q613142.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for educational institutions (Q2385804)
+EDUCATIONAL_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q2385804.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for universities (Q3918)
+UNIVERSITY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q3918.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for research institutes (Q31855)
+RESEARCH_INSTITUTE_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q31855.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for political parties (Q7278)
+POLITICAL_PARTY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q7278.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for trade unions (Q178790)
+TRADE_UNION_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q178790.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for NGOs (Q79913)
+NGO_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q79913.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for foundations (Q157031)
+FOUNDATION_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q157031.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for international organizations (Q484652)
+INTL_ORG_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q484652.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for sports teams/clubs (Q476028)
+SPORTS_CLUB_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q476028.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for hospitals (Q16917)
+HOSPITAL_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q16917.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for record labels (Q18127)
+RECORD_LABEL_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q18127.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for film studios (Q1366047)
+FILM_STUDIO_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q1366047.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for video game companies (Q1137109)
+VIDEO_GAME_COMPANY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q1137109.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for pharmaceutical companies (Q507619)
+PHARMA_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q507619.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for tech companies (Q2979960)
+TECH_COMPANY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q2979960.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for retailers (Q1631111)
+RETAILER_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q1631111.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for manufacturers (Q187652)
+MANUFACTURER_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q187652.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for conglomerates (Q206652)
+CONGLOMERATE_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q206652.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Query for investment companies (Q380649)
+INVESTMENT_COMPANY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P31 wd:Q380649.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Property-based query: entities with a CEO (P169) - likely companies
+HAS_CEO_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P169 ?ceo.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Property-based query: entities with subsidiaries (P355) - parent companies
+HAS_SUBSIDIARIES_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P355 ?subsidiary.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Property-based query: entities owned by another entity (P127) - subsidiaries/companies
+OWNED_BY_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P127 ?owner.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Property-based query: entities with legal form (P1454) - structured companies
+HAS_LEGAL_FORM_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P1454 ?legalForm.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Property-based query: entities with employees count (P1128) - organizations
+HAS_EMPLOYEES_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P1128 ?employees.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+# Property-based query: entities with revenue (P2139) - companies
+HAS_REVENUE_QUERY = """
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+  ?company wdt:P2139 ?revenue.
+  OPTIONAL { ?company wdt:P1278 ?lei. }
+  OPTIONAL { ?company wdt:P249 ?ticker. }
+  OPTIONAL { ?company wdt:P17 ?country. }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+}
+LIMIT %d
+OFFSET %d
+"""
+
+
+# Query types available for import - organized by category
+# Organization types (highest priority - run first)
+ORG_QUERY_TYPES = {
+    "organization": ORGANIZATION_QUERY,
+    "nonprofit": NONPROFIT_QUERY,
+    "ngo": NGO_QUERY,
+    "foundation": FOUNDATION_QUERY,
+    "government": GOV_AGENCY_QUERY,
+    "intl_org": INTL_ORG_QUERY,
+    "political_party": POLITICAL_PARTY_QUERY,
+    "trade_union": TRADE_UNION_QUERY,
+    "educational": EDUCATIONAL_QUERY,
+    "university": UNIVERSITY_QUERY,
+    "research_institute": RESEARCH_INSTITUTE_QUERY,
+    "hospital": HOSPITAL_QUERY,
+    "sports_club": SPORTS_CLUB_QUERY,
+}
+
+# Company types
+COMPANY_QUERY_TYPES = {
+    "lei": LEI_COMPANY_QUERY,
+    "ticker": TICKER_COMPANY_QUERY,
+    "public": PUBLIC_COMPANY_QUERY,
+    "business": BUSINESS_QUERY,
+    "enterprise": ENTERPRISE_QUERY,
+    "corporation": CORPORATION_QUERY,
+    "subsidiary": SUBSIDIARY_QUERY,
+    "conglomerate": CONGLOMERATE_QUERY,
+}
+
+# Industry-specific company types
+INDUSTRY_QUERY_TYPES = {
+    "bank": BANK_QUERY,
+    "insurance": INSURANCE_QUERY,
+    "airline": AIRLINE_QUERY,
+    "law_firm": LAW_FIRM_QUERY,
+    "pharma": PHARMA_QUERY,
+    "tech_company": TECH_COMPANY_QUERY,
+    "retailer": RETAILER_QUERY,
+    "manufacturer": MANUFACTURER_QUERY,
+    "investment_company": INVESTMENT_COMPANY_QUERY,
+    "record_label": RECORD_LABEL_QUERY,
+    "film_studio": FILM_STUDIO_QUERY,
+    "video_game_company": VIDEO_GAME_COMPANY_QUERY,
+}
+
+# Property-based queries (catches entities not typed correctly)
+PROPERTY_QUERY_TYPES = {
+    "has_ceo": HAS_CEO_QUERY,
+    "has_subsidiaries": HAS_SUBSIDIARIES_QUERY,
+    "owned_by": OWNED_BY_QUERY,
+    "has_legal_form": HAS_LEGAL_FORM_QUERY,
+    "has_employees": HAS_EMPLOYEES_QUERY,
+    "has_revenue": HAS_REVENUE_QUERY,
+}
+
+# All query types combined
+QUERY_TYPES = {
+    **ORG_QUERY_TYPES,
+    **COMPANY_QUERY_TYPES,
+    **INDUSTRY_QUERY_TYPES,
+    **PROPERTY_QUERY_TYPES,
+}
+
+# Mapping from query type to EntityType
+QUERY_TYPE_TO_ENTITY_TYPE: dict[str, EntityType] = {
+    # Organizations
+    "organization": EntityType.NONPROFIT,  # Generic org, default to nonprofit
+    "nonprofit": EntityType.NONPROFIT,
+    "ngo": EntityType.NGO,
+    "foundation": EntityType.FOUNDATION,
+    "government": EntityType.GOVERNMENT,
+    "intl_org": EntityType.INTERNATIONAL_ORG,
+    "political_party": EntityType.POLITICAL_PARTY,
+    "trade_union": EntityType.TRADE_UNION,
+    "educational": EntityType.EDUCATIONAL,
+    "university": EntityType.EDUCATIONAL,
+    "research_institute": EntityType.RESEARCH,
+    "hospital": EntityType.HEALTHCARE,
+    "sports_club": EntityType.SPORTS,
+
+    # Companies
+    "lei": EntityType.BUSINESS,
+    "ticker": EntityType.BUSINESS,
+    "public": EntityType.BUSINESS,
+    "business": EntityType.BUSINESS,
+    "enterprise": EntityType.BUSINESS,
+    "corporation": EntityType.BUSINESS,
+    "subsidiary": EntityType.BUSINESS,
+    "conglomerate": EntityType.BUSINESS,
+
+    # Industry-specific (all business)
+    "bank": EntityType.BUSINESS,
+    "insurance": EntityType.BUSINESS,
+    "airline": EntityType.BUSINESS,
+    "law_firm": EntityType.BUSINESS,
+    "pharma": EntityType.BUSINESS,
+    "tech_company": EntityType.BUSINESS,
+    "retailer": EntityType.BUSINESS,
+    "manufacturer": EntityType.BUSINESS,
+    "investment_company": EntityType.FUND,
+    "record_label": EntityType.MEDIA,
+    "film_studio": EntityType.MEDIA,
+    "video_game_company": EntityType.MEDIA,
+
+    # Property-based (assume business as they have CEO/revenue/etc)
+    "has_ceo": EntityType.BUSINESS,
+    "has_subsidiaries": EntityType.BUSINESS,
+    "owned_by": EntityType.BUSINESS,
+    "has_legal_form": EntityType.BUSINESS,
+    "has_employees": EntityType.UNKNOWN,  # Could be any org type
+    "has_revenue": EntityType.BUSINESS,
+}
 
 
 class WikidataImporter:
     """
-    Importer for Wikidata company data.
+    Importer for Wikidata organization data.
 
     Uses SPARQL queries against the public Wikidata Query Service
-    to fetch companies with stock tickers, LEI codes, etc.
+    to fetch organizations including companies, nonprofits, government agencies, etc.
+
+    Query categories (run in this order with import_all=True):
+
+    Organizations:
+    - organization: All organizations (Q43229)
+    - nonprofit: Non-profit organizations (Q163740)
+    - ngo: NGOs (Q79913)
+    - foundation: Foundations (Q157031)
+    - government: Government agencies (Q327333)
+    - intl_org: International organizations (Q484652)
+    - political_party: Political parties (Q7278)
+    - trade_union: Trade unions (Q178790)
+    - educational: Educational institutions (Q2385804)
+    - university: Universities (Q3918)
+    - research_institute: Research institutes (Q31855)
+    - hospital: Hospitals (Q16917)
+    - sports_club: Sports clubs (Q476028)
+
+    Companies:
+    - lei: Companies with LEI codes
+    - ticker: Companies with stock exchange listings
+    - public: Public companies (Q891723)
+    - business: Business enterprises (Q4830453)
+    - enterprise: Enterprises (Q6881511)
+    - corporation: Corporations (Q167037)
+    - subsidiary: Subsidiaries (Q658255)
+    - conglomerate: Conglomerates (Q206652)
+
+    Industry-specific:
+    - bank: Banks (Q22687)
+    - insurance: Insurance companies (Q1145276)
+    - airline: Airlines (Q46970)
+    - law_firm: Law firms (Q613142)
+    - pharma: Pharmaceutical companies (Q507619)
+    - tech_company: Tech companies (Q2979960)
+    - retailer: Retailers (Q1631111)
+    - manufacturer: Manufacturers (Q187652)
+    - investment_company: Investment companies (Q380649)
+    - record_label: Record labels (Q18127)
+    - film_studio: Film studios (Q1366047)
+    - video_game_company: Video game companies (Q1137109)
+
+    Property-based (catches untyped entities):
+    - has_ceo: Entities with CEO (P169)
+    - has_subsidiaries: Entities with subsidiaries (P355)
+    - owned_by: Entities owned by another (P127)
+    - has_legal_form: Entities with legal form (P1454)
+    - has_employees: Entities with employee count (P1128)
+    - has_revenue: Entities with revenue (P2139)
     """
 
-    def __init__(self, batch_size: int = 5000, delay_seconds: float = 1.0):
+    def __init__(self, batch_size: int = 1000, delay_seconds: float = 2.0, timeout: int = 120):
         """
         Initialize the Wikidata importer.
 
         Args:
-            batch_size: Number of records to fetch per SPARQL query
+            batch_size: Number of records to fetch per SPARQL query (default 1000)
             delay_seconds: Delay between requests to be polite to the endpoint
+            timeout: HTTP timeout in seconds (default 120)
         """
         self._batch_size = batch_size
         self._delay = delay_seconds
+        self._timeout = timeout
 
     def import_from_sparql(
         self,
         limit: Optional[int] = None,
-        notable_only: bool = True,
+        query_type: str = "lei",
+        import_all: bool = False,
     ) -> Iterator[CompanyRecord]:
         """
-        Import company records from Wikidata via SPARQL.
+        Import organization records from Wikidata via SPARQL.
 
         Args:
             limit: Optional limit on total records
-            notable_only: If True, only fetch companies with tickers/LEI (default)
+            query_type: Which query to use (see class docstring for full list).
+                Common options:
+                - "lei": Companies with LEI codes (default, fastest)
+                - "organization": All organizations (Q43229)
+                - "nonprofit": Non-profit organizations (Q163740)
+                - "government": Government agencies (Q327333)
+                - "has_ceo": Entities with CEO property (catches many companies)
+            import_all: If True, run all query types sequentially in priority order:
+                1. Organization types (nonprofits, gov agencies, NGOs, etc.)
+                2. Company types (public companies, business enterprises, etc.)
+                3. Industry-specific types (banks, airlines, pharma, etc.)
+                4. Property-based queries (catches entities not properly typed)
 
         Yields:
-            CompanyRecord for each company
+            CompanyRecord for each organization
         """
-        logger.info("Starting Wikidata company import via SPARQL...")
+        if import_all:
+            yield from self._import_all_types(limit)
+            return
 
-        query_template = COMPANY_SPARQL_QUERY if notable_only else BULK_COMPANY_QUERY
+        if query_type not in QUERY_TYPES:
+            raise ValueError(f"Unknown query type: {query_type}. Use one of: {list(QUERY_TYPES.keys())}")
+
+        query_template = QUERY_TYPES[query_type]
+        entity_type = QUERY_TYPE_TO_ENTITY_TYPE.get(query_type, EntityType.UNKNOWN)
+        logger.info(f"Starting Wikidata company import via SPARQL (query_type={query_type}, entity_type={entity_type.value})...")
 
         offset = 0
         total_count = 0
@@ -136,7 +805,7 @@ class WikidataImporter:
                 if limit and total_count >= limit:
                     break
 
-                record = self._parse_binding(binding)
+                record = self._parse_binding(binding, entity_type=entity_type)
                 if record and record.source_id not in seen_ids:
                     seen_ids.add(record.source_id)
                     total_count += 1
@@ -157,6 +826,57 @@ class WikidataImporter:
 
         logger.info(f"Completed Wikidata import: {total_count} records")
 
+    def _import_all_types(self, limit: Optional[int]) -> Iterator[CompanyRecord]:
+        """Import from all query types sequentially, deduplicating across types.
+
+        Query categories are run in priority order:
+        1. Organization types (nonprofits, gov agencies, NGOs, etc.)
+        2. Company types (public companies, business enterprises, etc.)
+        3. Industry-specific types (banks, airlines, pharma, etc.)
+        4. Property-based queries (catches entities not properly typed)
+        """
+        seen_ids: set[str] = set()
+        total_count = 0
+
+        # Calculate per-category limits if a total limit is set
+        num_categories = 4
+        per_category_limit = limit // num_categories if limit else None
+
+        # Run categories in priority order: organizations first
+        categories = [
+            ("Organizations", ORG_QUERY_TYPES, per_category_limit),
+            ("Companies", COMPANY_QUERY_TYPES, per_category_limit),
+            ("Industry-specific", INDUSTRY_QUERY_TYPES, per_category_limit),
+            ("Property-based", PROPERTY_QUERY_TYPES, per_category_limit),
+        ]
+
+        for category_name, query_types, category_limit in categories:
+            logger.info(f"=== Starting category: {category_name} ({len(query_types)} query types) ===")
+            category_count = 0
+            per_type_limit = category_limit // len(query_types) if category_limit else None
+
+            for query_type in query_types:
+                logger.info(f"Importing from query type: {query_type}")
+                type_count = 0
+
+                for record in self.import_from_sparql(limit=per_type_limit, query_type=query_type):
+                    if record.source_id not in seen_ids:
+                        seen_ids.add(record.source_id)
+                        total_count += 1
+                        type_count += 1
+                        category_count += 1
+                        yield record
+
+                        if limit and total_count >= limit:
+                            logger.info(f"Reached total limit of {limit} records")
+                            return
+
+                logger.info(f"Got {type_count} new records from {query_type} (total: {total_count})")
+
+            logger.info(f"=== Completed {category_name}: {category_count} new records ===")
+
+        logger.info(f"Completed all query types: {total_count} total records")
+
     def _execute_sparql(self, query: str) -> dict[str, Any]:
         """Execute a SPARQL query against Wikidata."""
         params = urllib.parse.urlencode({
@@ -174,10 +894,14 @@ class WikidataImporter:
             }
         )
 
-        with urllib.request.urlopen(req, timeout=60) as response:
+        with urllib.request.urlopen(req, timeout=self._timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def _parse_binding(self, binding: dict[str, Any]) -> Optional[CompanyRecord]:
+    def _parse_binding(
+        self,
+        binding: dict[str, Any],
+        entity_type: EntityType = EntityType.UNKNOWN,
+    ) -> Optional[CompanyRecord]:
         """Parse a SPARQL result binding into a CompanyRecord."""
         try:
             # Get Wikidata entity ID
@@ -220,11 +944,10 @@ class WikidataImporter:
 
             return CompanyRecord(
                 name=label.strip(),
-                embedding_name=label.strip(),
-                legal_name=label,
                 source="wikipedia",  # Use "wikipedia" as source per schema
                 source_id=wikidata_id,
                 region=country_label or "",
+                entity_type=entity_type,
                 record=record_data,
             )
 
@@ -275,8 +998,6 @@ class WikidataImporter:
 
             record = CompanyRecord(
                 name=label,
-                embedding_name=label,
-                legal_name=label,
                 source="wikipedia",
                 source_id=qid,
                 region="",  # Not available from search API
