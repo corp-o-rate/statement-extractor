@@ -8,6 +8,7 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 ## Features
 
+- **Person Database** *(v0.9.0)*: Qualify notable people (executives, politicians, athletes, etc.) against Wikidata with canonical IDs
 - **5-Stage Pipeline** *(v0.8.0)*: Modular plugin-based architecture for full entity resolution
 - **Document Processing** *(v0.7.0)*: Process documents, URLs, and PDFs with chunking and deduplication
 - **Entity Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (~100K+ SEC, ~3M GLEIF, ~5M UK organizations)
@@ -315,7 +316,7 @@ config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
 - `gliner2_extractor` - GLiNER2 entity recognition and relation extraction
 
 **Qualifiers (Stage 3):**
-- `person_qualifier` - PERSON → role, org (uses Gemma3)
+- `person_qualifier` - PERSON → role, org, canonical ID via Wikidata person database *(enhanced in v0.9.0)*
 - `embedding_company_qualifier` - ORG → canonical name, identifiers (LEI, CIK, company number), and FQN via embedding database
 
 **Labelers (Stage 4):**
@@ -335,12 +336,20 @@ v0.6.0 introduces an **entity embedding database** for fast entity qualification
 
 ### Data Sources
 
+**Organizations:**
+
 | Source | Records | Identifier | EntityType Mapping |
 |--------|---------|------------|-------------------|
 | GLEIF | ~3.2M | LEI (Legal Entity Identifier) | GENERAL→business, FUND→fund, BRANCH→branch, INTERNATIONAL_ORGANIZATION→international_org |
 | SEC Edgar | ~100K+ | CIK (Central Index Key) | business (or fund via SIC codes) |
 | Companies House | ~5M | UK Company Number | Maps company_type to business/nonprofit |
 | Wikidata | Variable | Wikidata QID | 35+ query types mapped to EntityType |
+
+**People** *(v0.9.0)*:
+
+| Source | Records | Identifier | PersonType Classification |
+|--------|---------|------------|--------------------------|
+| Wikidata | Variable | Wikidata QID | executive, politician, athlete, artist, academic, scientist, journalist, entrepreneur, activist |
 
 ### EntityType Classification
 
@@ -356,17 +365,24 @@ Each organization record is classified with an `entity_type` field:
 ### Building the Database
 
 ```bash
-# Import from authoritative sources
+# Import organizations from authoritative sources
 corp-extractor db import-gleif --download
 corp-extractor db import-sec --download      # Bulk submissions.zip (~100K+ filers)
 corp-extractor db import-companies-house --download
 corp-extractor db import-wikidata --limit 50000
+
+# Import notable people (v0.9.0)
+corp-extractor db import-people --type executive --limit 5000
+corp-extractor db import-people --all --limit 10000  # All person types
 
 # Check status
 corp-extractor db status
 
 # Search for an organization
 corp-extractor db search "Microsoft"
+
+# Search for a person (v0.9.0)
+corp-extractor db search-people "Tim Cook"
 ```
 
 ### Using in Pipeline

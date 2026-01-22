@@ -44,7 +44,7 @@ else:
 # New pipeline models
 from .entity import ExtractedEntity
 from .statement import RawTriple, PipelineStatement
-from .qualifiers import EntityQualifiers, QualifiedEntity
+from .qualifiers import EntityQualifiers, QualifiedEntity, ResolvedRole, ResolvedOrganization
 from .canonical import CanonicalMatch, CanonicalEntity
 from .labels import StatementLabel, LabeledStatement, TaxonomyResult
 from .document import (
@@ -73,6 +73,8 @@ __all__ = [
     "PipelineStatement",
     "EntityQualifiers",
     "QualifiedEntity",
+    "ResolvedRole",
+    "ResolvedOrganization",
     "CanonicalMatch",
     "CanonicalEntity",
     "StatementLabel",

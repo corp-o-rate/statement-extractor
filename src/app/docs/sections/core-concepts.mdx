@@ -488,7 +488,11 @@ The extraction stage uses GLiNER2 to extract relations and assign entity types, 
 
 Entity qualification combines what were previously separate qualification and canonicalization stages. It adds context, external identifiers, and canonical names to entities using the embedding database:
 
-- **PersonQualifier**: Adds role and organization for PERSON entities using Gemma3
+- **PersonQualifier**: Adds role, organization, and canonical ID for PERSON entities <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">Enhanced in v0.9.0</span>
+  - Uses LLM (Gemma3) to extract role and organization from context
+  - Searches person database for notable people (executives, politicians, athletes, etc.)
+  - Resolves organization mentions against the organization database
+  - Returns canonical Wikidata IDs for matched people
 - **EmbeddingCompanyQualifier**: Looks up company identifiers (LEI, CIK, UK company numbers) and canonical names using vector similarity search
 
 The output is `CanonicalEntity` with:
@@ -496,6 +500,8 @@ The output is `CanonicalEntity` with:
 - **canonical_match**: Match details (id, name, method, confidence)
 - **fqn**: Fully Qualified Name, e.g., "Tim Cook (CEO, Apple Inc)"
 - External identifiers: `lei`, `ch_number`, `sec_cik`, `ticker`, etc.
+- **resolved_role**: Canonical role information from person database <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.0</span>
+- **resolved_org**: Canonical organization information from org database <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.0</span>
 
 **Note:** The embedding-based company qualifier replaces the older API-based qualifiers (GLEIF, Companies House, SEC Edgar APIs) for faster, offline entity resolution.
 
@@ -638,11 +644,11 @@ When processing long documents, the same fact may appear in multiple chunks. The
 
 <a id="entity-database"></a>
 
-<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.6.0</span>
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">UPDATED in v0.9.0</span>
 
-Version 0.6.0 introduces an **entity embedding database** for fast organization qualification using vector similarity search.
+The entity embedding database provides fast qualification for both **organizations** and **people** using vector similarity search.
 
-#### Data Sources
+#### Organization Data Sources
 
 <table>
   <thead>
@@ -680,6 +686,72 @@ Version 0.6.0 introduces an **entity embedding database** for fast organization 
     </tr>
   </tbody>
 </table>
+
+#### Person Data Sources <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.9.0</span>
+
+<table>
+  <thead>
+    <tr>
+      <th>PersonType</th>
+      <th>Description</th>
+      <th>Example People</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>executive</code></td>
+      <td>C-suite, board members</td>
+      <td>Tim Cook, Satya Nadella</td>
+    </tr>
+    <tr>
+      <td><code>politician</code></td>
+      <td>Elected officials, diplomats</td>
+      <td>Joe Biden, Angela Merkel</td>
+    </tr>
+    <tr>
+      <td><code>athlete</code></td>
+      <td>Sports figures</td>
+      <td>LeBron James, Lionel Messi</td>
+    </tr>
+    <tr>
+      <td><code>artist</code></td>
+      <td>Actors, musicians, directors</td>
+      <td>Tom Hanks, Taylor Swift</td>
+    </tr>
+    <tr>
+      <td><code>academic</code></td>
+      <td>Professors, researchers</td>
+      <td>Neil deGrasse Tyson</td>
+    </tr>
+    <tr>
+      <td><code>scientist</code></td>
+      <td>Scientists, inventors</td>
+      <td>Researchers, lab directors</td>
+    </tr>
+    <tr>
+      <td><code>journalist</code></td>
+      <td>Media personalities</td>
+      <td>Anderson Cooper</td>
+    </tr>
+    <tr>
+      <td><code>entrepreneur</code></td>
+      <td>Founders, business owners</td>
+      <td>Mark Zuckerberg</td>
+    </tr>
+    <tr>
+      <td><code>activist</code></td>
+      <td>Advocates, campaigners</td>
+      <td>Greta Thunberg</td>
+    </tr>
+  </tbody>
+</table>
+
+People are imported from **Wikidata** with English Wikipedia articles (ensuring notability). Each person record includes:
+- **name**: Display name
+- **known_for_role**: Primary role (e.g., "CEO", "President")
+- **known_for_org**: Primary organization (e.g., "Apple Inc", "Tesla")
+- **country**: Country of citizenship
+- **person_type**: Classification category
 
 #### EntityType Classification
 

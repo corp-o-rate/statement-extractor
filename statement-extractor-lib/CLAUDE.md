@@ -30,10 +30,13 @@ uv run corp-extractor plugins list           # List registered plugins
 # Entity database commands
 uv run corp-extractor db status              # Show database stats
 uv run corp-extractor db search "Microsoft"  # Search for organization
+uv run corp-extractor db search-people "Tim Cook"  # Search for person (v0.9.0)
 uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF (~3M records)
 uv run corp-extractor db import-sec --download                  # Import SEC bulk (~100K+ filers)
 uv run corp-extractor db import-companies-house --download --limit 10000  # Import UK companies
-uv run corp-extractor db import-wikidata --limit 5000  # Import Wikidata
+uv run corp-extractor db import-wikidata --limit 5000  # Import Wikidata orgs
+uv run corp-extractor db import-people --type executive --limit 5000  # Import notable people (v0.9.0)
+uv run corp-extractor db import-people --all --limit 10000            # All person types (v0.9.0)
 uv run corp-extractor db upload              # Upload with lite/compressed variants
 uv run corp-extractor db download            # Download lite version (default)
 uv run corp-extractor db download --full     # Download full version
@@ -94,17 +97,19 @@ Plugins are sorted by `priority` property (lower = runs first). Default is 100.
 
 ### Entity Database Module
 
-The `database/` module provides organization embedding storage and search:
+The `database/` module provides organization and person embedding storage and search:
 
-- `database/models.py` - `CompanyRecord`, `CompanyMatch`, `DatabaseStats`, `EntityType` Pydantic models
-- `database/store.py` - `OrganizationDatabase` SQLite+sqlite-vec storage
+- `database/models.py` - `CompanyRecord`, `CompanyMatch`, `PersonRecord`, `PersonMatch`, `PersonType`, `DatabaseStats`, `EntityType` Pydantic models
+- `database/store.py` - `OrganizationDatabase` and `PersonDatabase` SQLite+sqlite-vec storage
 - `database/embeddings.py` - `CompanyEmbedder` using google/embeddinggemma-300m
 - `database/hub.py` - HuggingFace Hub upload/download with lite/compressed variants
+- `database/resolver.py` - `OrganizationResolver` shared utility for org lookups (used by person.py and embedding_company.py)
 - `database/importers/` - Data source importers:
   - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records) - maps EntityCategory to EntityType
   - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers) - maps SIC codes to EntityType
   - `companies_house.py` - UK Companies House bulk data (~5M records) - maps company_type to EntityType
   - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - maps query types to EntityType
+  - `wikidata_people.py` - Wikidata SPARQL queries for notable people (executives, politicians, athletes, etc.)
 
 **EntityType Classification:**
 Each organization record is classified with an `entity_type` field:
@@ -112,6 +117,19 @@ Each organization record is classified with an `entity_type` field:
 - Non-profit: `nonprofit`, `ngo`, `foundation`, `trade_union`
 - Government: `government`, `international_org`, `political_party`
 - Other: `educational`, `research`, `healthcare`, `media`, `sports`, `religious`, `unknown`
+
+**PersonType Classification (v0.9.0):**
+Each person record is classified with a `person_type` field:
+- `executive` - CEOs, board members, C-suite
+- `politician` - Elected officials, diplomats
+- `academic` - Professors, researchers
+- `artist` - Musicians, actors, directors, writers
+- `athlete` - Sports figures
+- `entrepreneur` - Founders, business owners
+- `journalist` - Reporters, media personalities
+- `activist` - Advocates, campaigners
+- `scientist` - Scientists, inventors
+- `unknown` - Type not determined
 
 **Database variants:**
 - `entities.db` - Full database with complete record metadata

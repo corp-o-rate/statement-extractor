@@ -47,6 +47,24 @@ class EntityType(str, Enum):
     UNKNOWN = "unknown"  # Type not determined
 
 
+class PersonType(str, Enum):
+    """
+    Classification of notable person type.
+
+    Used for categorizing people in the person database.
+    """
+    EXECUTIVE = "executive"  # CEOs, board members, C-suite
+    POLITICIAN = "politician"  # Elected officials, diplomats
+    ACADEMIC = "academic"  # Professors, researchers
+    ARTIST = "artist"  # Musicians, actors, directors, writers
+    ATHLETE = "athlete"  # Sports figures
+    ENTREPRENEUR = "entrepreneur"  # Founders, business owners
+    JOURNALIST = "journalist"  # Reporters, media personalities
+    ACTIVIST = "activist"  # Advocates, campaigners
+    SCIENTIST = "scientist"  # Scientists, inventors
+    UNKNOWN = "unknown"  # Type not determined
+
+
 class CompanyRecord(BaseModel):
     """
     An organization record for the embedding database.
@@ -76,6 +94,92 @@ class CompanyRecord(BaseModel):
             "entity_type": self.entity_type.value,
             "record": self.record,
         }
+
+
+PersonSourceType = Literal["wikidata"]
+
+
+class PersonRecord(BaseModel):
+    """
+    A person record for the embedding database.
+
+    Used for storing and searching notable people by embedding similarity.
+    Supports people from Wikipedia/Wikidata with role/org context.
+    """
+    name: str = Field(..., description="Display name (used for embedding and display)")
+    source: PersonSourceType = Field(default="wikidata", description="Data source")
+    source_id: str = Field(..., description="Unique identifier from source (Wikidata QID)")
+    country: str = Field(default="", description="Country code or name (e.g., 'US', 'Germany')")
+    person_type: PersonType = Field(default=PersonType.UNKNOWN, description="Person type classification")
+    known_for_role: str = Field(default="", description="Primary role from Wikipedia (e.g., 'CEO', 'President')")
+    known_for_org: str = Field(default="", description="Primary org from Wikipedia (e.g., 'Apple Inc', 'Tesla')")
+    record: dict[str, Any] = Field(default_factory=dict, description="Original record from source")
+
+    @property
+    def canonical_id(self) -> str:
+        """Generate canonical ID in format source:source_id."""
+        return f"{self.source}:{self.source_id}"
+
+    def model_dump_for_db(self) -> dict[str, Any]:
+        """Convert to dict suitable for database storage."""
+        return {
+            "name": self.name,
+            "source": self.source,
+            "source_id": self.source_id,
+            "country": self.country,
+            "person_type": self.person_type.value,
+            "known_for_role": self.known_for_role,
+            "known_for_org": self.known_for_org,
+            "record": self.record,
+        }
+
+    def get_embedding_text(self) -> str:
+        """Build text for embedding that includes role/org context."""
+        parts = [self.name]
+        if self.known_for_role:
+            parts.append(self.known_for_role)
+        if self.known_for_org:
+            parts.append(self.known_for_org)
+        return " | ".join(parts)
+
+
+class PersonMatch(BaseModel):
+    """
+    A person match result from embedding search.
+
+    Returned by the person qualifier when finding potential matches.
+    """
+    query_name: str = Field(..., description="Name extracted from text (the search query)")
+    record: PersonRecord = Field(..., description="The matched person record")
+    source: PersonSourceType = Field(..., description="Data source of match")
+    source_id: str = Field(..., description="Source identifier of match")
+    canonical_id: str = Field(..., description="Canonical ID in format source:source_id")
+    similarity_score: float = Field(..., description="Embedding similarity score (0-1)")
+    llm_confirmed: bool = Field(default=False, description="Whether LLM confirmed this match")
+
+    @property
+    def name(self) -> str:
+        """Get the matched person name."""
+        return self.record.name
+
+    @classmethod
+    def from_record(
+        cls,
+        query_name: str,
+        record: PersonRecord,
+        similarity_score: float,
+        llm_confirmed: bool = False,
+    ) -> "PersonMatch":
+        """Create a PersonMatch from a person record."""
+        return cls(
+            query_name=query_name,
+            record=record,
+            source=record.source,
+            source_id=record.source_id,
+            canonical_id=record.canonical_id,
+            similarity_score=similarity_score,
+            llm_confirmed=llm_confirmed,
+        )
 
 
 class CompanyMatch(BaseModel):

@@ -3,13 +3,44 @@ Qualifier models for the extraction pipeline.
 
 EntityQualifiers: Semantic qualifiers and external identifiers
 QualifiedEntity: Entity with qualification information from Stage 3
+ResolvedRole: Canonical role information from database
+ResolvedOrganization: Canonical organization information from database
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
 from .entity import EntityType
+
+
+class ResolvedRole(BaseModel):
+    """
+    Resolved/canonical role information for a person.
+
+    Populated when matching a person against the database,
+    capturing the canonical role from Wikidata or other sources.
+    """
+    canonical_name: str = Field(..., description="Canonical role name (e.g., 'Chief Executive Officer')")
+    canonical_id: Optional[str] = Field(None, description="Full canonical ID (e.g., 'wikidata:Q484876')")
+    source: str = Field(..., description="Source of resolution (e.g., 'wikidata')")
+    source_id: Optional[str] = Field(None, description="ID in the source (e.g., 'Q484876' for Wikidata)")
+
+
+class ResolvedOrganization(BaseModel):
+    """
+    Resolved/canonical organization information.
+
+    Populated when resolving an organization mentioned in context
+    against the organization database (GLEIF, SEC, Companies House, Wikidata).
+    """
+    canonical_name: str = Field(..., description="Canonical organization name")
+    canonical_id: str = Field(..., description="Full canonical ID (e.g., 'LEI:549300XYZ', 'SEC-CIK:1234567')")
+    source: str = Field(..., description="Source of resolution (e.g., 'gleif', 'sec_edgar', 'wikidata')")
+    source_id: str = Field(..., description="ID in the source")
+    region: Optional[str] = Field(None, description="Organization's region/jurisdiction")
+    match_confidence: float = Field(default=1.0, description="Confidence in the match (0-1)")
+    match_details: Optional[dict[str, Any]] = Field(None, description="Additional match details")
 
 
 class EntityQualifiers(BaseModel):
@@ -41,11 +72,22 @@ class EntityQualifiers(BaseModel):
         description="External identifiers: lei, ch_number, sec_cik, ticker, wikidata_qid, etc."
     )
 
+    # Resolved canonical information (for PERSON entities)
+    resolved_role: Optional[ResolvedRole] = Field(
+        None,
+        description="Canonical role information from database lookup"
+    )
+    resolved_org: Optional[ResolvedOrganization] = Field(
+        None,
+        description="Canonical organization information from database lookup"
+    )
+
     def has_any_qualifier(self) -> bool:
         """Check if any qualifier or identifier is set."""
         return bool(
             self.legal_name or self.org or self.role or self.region or self.country or
-            self.city or self.jurisdiction or self.identifiers
+            self.city or self.jurisdiction or self.identifiers or
+            self.resolved_role or self.resolved_org
         )
 
     def merge_with(self, other: "EntityQualifiers") -> "EntityQualifiers":
@@ -64,6 +106,8 @@ class EntityQualifiers(BaseModel):
             city=other.city or self.city,
             jurisdiction=other.jurisdiction or self.jurisdiction,
             identifiers=merged_identifiers,
+            resolved_role=other.resolved_role or self.resolved_role,
+            resolved_org=other.resolved_org or self.resolved_org,
         )
 
 

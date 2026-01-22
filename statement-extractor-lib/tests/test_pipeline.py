@@ -334,6 +334,10 @@ class TestPluginRegistry:
     def _reload_plugins(self):
         """Reload all plugin modules to re-register plugins."""
         import importlib
+        # Reload models first (since plugins depend on them)
+        from statement_extractor.models import qualifiers as models_qualifiers
+        importlib.reload(models_qualifiers)
+
         # Reload the specific modules that contain registered plugins
         from statement_extractor.plugins.splitters import t5_gemma
         from statement_extractor.plugins.extractors import gliner2

@@ -489,9 +489,9 @@ corp-extractor document process article.txt -o triples
 
 <span id="db-commands" />
 
-<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.6.0</span>
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">UPDATED in v0.9.0</span>
 
-The `db` command group manages the entity embedding database used for organization qualification.
+The `db` command group manages the entity embedding database used for organization and person qualification.
 
 ```bash
 # Show database status
@@ -501,11 +501,19 @@ corp-extractor db status
 corp-extractor db search "Microsoft"
 corp-extractor db search "Barclays" --source companies_house
 
-# Import from data sources
+# Search for a person (v0.9.0)
+corp-extractor db search-people "Tim Cook"
+corp-extractor db search-people "Elon Musk" --top-k 5
+
+# Import organizations from data sources
 corp-extractor db import-gleif --download
 corp-extractor db import-sec --download           # Bulk data (~100K+ filers)
 corp-extractor db import-companies-house --download
 corp-extractor db import-wikidata --limit 50000
+
+# Import notable people (v0.9.0)
+corp-extractor db import-people --type executive --limit 5000
+corp-extractor db import-people --all --limit 10000  # All person types
 
 # Download/upload from HuggingFace Hub
 corp-extractor db download                        # Lite version (default)
@@ -520,7 +528,7 @@ corp-extractor db create-lite entities.db         # Create lite version
 corp-extractor db compress entities.db            # Compress with gzip
 ```
 
-#### Data Sources
+#### Organization Data Sources
 
 <table>
   <thead>
@@ -555,6 +563,45 @@ corp-extractor db compress entities.db            # Compress with gzip
       <td><code>import-wikidata</code></td>
       <td>Variable</td>
       <td>QID</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Person Data Sources <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.0</span>
+
+<table>
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th>Command</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Executives</td>
+      <td><code>import-people --type executive</code></td>
+      <td>CEOs, CFOs, board members</td>
+    </tr>
+    <tr>
+      <td>Politicians</td>
+      <td><code>import-people --type politician</code></td>
+      <td>Elected officials, diplomats</td>
+    </tr>
+    <tr>
+      <td>Athletes</td>
+      <td><code>import-people --type athlete</code></td>
+      <td>Sports figures, coaches</td>
+    </tr>
+    <tr>
+      <td>Artists</td>
+      <td><code>import-people --type artist</code></td>
+      <td>Actors, musicians, directors</td>
+    </tr>
+    <tr>
+      <td>All Types</td>
+      <td><code>import-people --all</code></td>
+      <td>Run all person type queries</td>
     </tr>
   </tbody>
 </table>

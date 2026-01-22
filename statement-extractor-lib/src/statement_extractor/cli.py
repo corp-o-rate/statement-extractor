@@ -668,8 +668,10 @@ def db_cmd():
         import-sec             Import SEC Edgar bulk data (~100K+ filers)
         import-companies-house Import UK Companies House (~5M records)
         import-wikidata        Import Wikidata organizations
+        import-people          Import Wikidata notable people
         status                 Show database status
         search                 Search for an organization
+        search-people          Search for a person
         download               Download database from HuggingFace
         upload                 Upload database with lite/compressed variants
         create-lite            Create lite version (no record data)
@@ -679,8 +681,10 @@ def db_cmd():
     Examples:
         corp-extractor db import-sec --download
         corp-extractor db import-gleif --download --limit 100000
+        corp-extractor db import-people --all --limit 10000
         corp-extractor db status
         corp-extractor db search "Apple Inc"
+        corp-extractor db search-people "Tim Cook"
         corp-extractor db upload entities.db
     """
     pass
@@ -931,6 +935,126 @@ def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size:
         count += len(records)
 
     click.echo(f"\nImported {count} Wikidata records successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("import-people")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--limit", type=int, help="Limit number of records")
+@click.option("--batch-size", type=int, default=1000, help="Batch size for commits (default: 1000)")
+@click.option("--type", "query_type", type=click.Choice([
+    "executive", "politician", "athlete", "artist",
+    "academic", "scientist", "journalist", "entrepreneur", "activist"
+]), default="executive", help="Person type to import")
+@click.option("--all", "import_all", is_flag=True, help="Run all person type queries sequentially")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: int, query_type: str, import_all: bool, verbose: bool):
+    """
+    Import notable people data from Wikidata via SPARQL.
+
+    Imports people with English Wikipedia articles (ensures notability).
+    Includes executives, politicians, athletes, artists, academics, and more.
+
+    \b
+    Examples:
+        corp-extractor db import-people --type executive --limit 5000
+        corp-extractor db import-people --all --limit 10000
+        corp-extractor db import-people --type politician -v
+    """
+    _configure_logging(verbose)
+
+    from .database.store import get_person_database, DEFAULT_DB_PATH
+    from .database.embeddings import CompanyEmbedder
+    from .database.importers.wikidata_people import WikidataPeopleImporter
+
+    # Default database path
+    if db_path is None:
+        db_path_obj = DEFAULT_DB_PATH
+    else:
+        db_path_obj = Path(db_path)
+
+    click.echo(f"Importing Wikidata people to {db_path_obj}...", err=True)
+
+    # Initialize components
+    database = get_person_database(db_path=db_path_obj)
+    embedder = CompanyEmbedder()
+    importer = WikidataPeopleImporter(batch_size=batch_size)
+
+    # Batch processing
+    records = []
+    count = 0
+
+    for record in importer.import_from_sparql(limit=limit, query_type=query_type, import_all=import_all):
+        records.append(record)
+
+        if len(records) >= batch_size:
+            # Generate embeddings using the combined name|role|org format
+            embedding_texts = [r.get_embedding_text() for r in records]
+            embeddings = embedder.embed_batch(embedding_texts)
+            database.insert_batch(records, embeddings)
+            count += len(records)
+            click.echo(f"  Imported {count} people...", err=True)
+            records = []
+
+    # Final batch
+    if records:
+        embedding_texts = [r.get_embedding_text() for r in records]
+        embeddings = embedder.embed_batch(embedding_texts)
+        database.insert_batch(records, embeddings)
+        count += len(records)
+
+    click.echo(f"\nImported {count} people successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("search-people")
+@click.argument("query")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--top-k", type=int, default=10, help="Number of results")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_search_people(query: str, db_path: Optional[str], top_k: int, verbose: bool):
+    """
+    Search for a person in the database.
+
+    \b
+    Examples:
+        corp-extractor db search-people "Tim Cook"
+        corp-extractor db search-people "Elon Musk" --top-k 5
+    """
+    _configure_logging(verbose)
+
+    from .database.store import get_person_database, DEFAULT_DB_PATH
+    from .database.embeddings import CompanyEmbedder
+
+    # Default database path
+    if db_path is None:
+        db_path_obj = DEFAULT_DB_PATH
+    else:
+        db_path_obj = Path(db_path)
+
+    click.echo(f"Searching for '{query}' in {db_path_obj}...", err=True)
+
+    # Initialize components
+    database = get_person_database(db_path=db_path_obj)
+    embedder = CompanyEmbedder()
+
+    # Embed query and search
+    query_embedding = embedder.embed(query)
+    results = database.search(query_embedding, top_k=top_k, query_text=query)
+
+    if not results:
+        click.echo("No results found.", err=True)
+        return
+
+    click.echo(f"\nFound {len(results)} results:\n")
+    for i, (record, similarity) in enumerate(results, 1):
+        role_str = f" ({record.known_for_role})" if record.known_for_role else ""
+        org_str = f" at {record.known_for_org}" if record.known_for_org else ""
+        country_str = f" [{record.country}]" if record.country else ""
+        click.echo(f"  {i}. {record.name}{role_str}{org_str}{country_str}")
+        click.echo(f"     Source: wikidata:{record.source_id}, Type: {record.person_type.value}, Score: {similarity:.3f}")
+        click.echo()
+
     database.close()
 
 

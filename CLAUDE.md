@@ -100,6 +100,7 @@ The frontend can connect to the model via three backends (configured by environm
 - RunPod requires `--platform linux/amd64` when building Docker on Mac
 - Model uses bfloat16 on GPU, float32 on CPU
 - Generation stops at `</statements>` tag to prevent runaway output
+- **v0.9.0**: Added person database with Wikidata import and person qualification with canonical IDs
 - **v0.8.0**: Merged qualification and canonicalization into single stage; added EntityType classification
 - **v0.5.0**: Introduces plugin-based pipeline architecture
 - **v0.4.0**: Uses GLiNER2 (205M params) for entity recognition and relation extraction instead of spaCy
@@ -119,14 +120,17 @@ The library provides a 5-stage extraction pipeline:
 **Built-in plugins:**
 - **Splitters**: `t5_gemma_splitter`
 - **Extractors**: `gliner2_extractor`
-- **Qualifiers**: `person_qualifier`, `embedding_company_qualifier`
+- **Qualifiers**: `person_qualifier` (Wikidata person database lookup), `embedding_company_qualifier` (organization database lookup)
 - **Labelers**: `sentiment_labeler`, `confidence_labeler`, `relation_type_labeler`
 - **Taxonomy**: `embedding_taxonomy_classifier` (default), `mnli_taxonomy_classifier`
 - **PDF**: `pypdf_loader` - PDF parsing with PyMuPDF
 - **Scrapers**: `http_scraper` - URL/web page scraping
 
-### Entity Database & EntityType Classification
-The entity database supports entity type classification for distinguishing between:
+### Entity Database
+
+The entity database supports both **organizations** and **people** (v0.9.0).
+
+**Organization EntityType Classification:**
 
 | EntityType | Description | Examples |
 |------------|-------------|----------|
@@ -145,6 +149,22 @@ The entity database supports entity type classification for distinguishing betwe
 | `sports` | Sports clubs/teams | Manchester United |
 | `political_party` | Political parties | Democratic Party |
 | `trade_union` | Labor unions | AFL-CIO |
+
+**Person Database (v0.9.0):**
+
+The person database stores notable people from Wikidata with role/org context for disambiguation:
+
+| PersonType | Description | Examples |
+|------------|-------------|----------|
+| `executive` | C-suite, board members | Tim Cook, Satya Nadella |
+| `politician` | Elected officials, diplomats | Joe Biden, Angela Merkel |
+| `athlete` | Sports figures | LeBron James, Lionel Messi |
+| `artist` | Actors, musicians, directors | Tom Hanks, Taylor Swift |
+| `academic` | Professors, researchers | Neil deGrasse Tyson |
+| `scientist` | Scientists, inventors | Elon Musk (as founder) |
+| `journalist` | Media personalities | Anderson Cooper |
+| `entrepreneur` | Founders, business owners | Mark Zuckerberg |
+| `activist` | Advocates, campaigners | Greta Thunberg |
 
 ### GLiNER2 Integration (v0.4.0)
 The library uses GLiNER2 for:
@@ -201,6 +221,9 @@ corp-extractor document process report.pdf --use-ocr
 
 # Entity database
 corp-extractor db import-sec --download  # Bulk SEC data (~100K+ filers)
+corp-extractor db import-people --all    # Notable people from Wikidata (v0.9.0)
+corp-extractor db search "Microsoft"     # Search organizations
+corp-extractor db search-people "Tim Cook"  # Search people (v0.9.0)
 corp-extractor db upload                 # Upload with lite/compressed variants
 corp-extractor db download               # Download lite version (default)
 corp-extractor db download --full        # Download full version

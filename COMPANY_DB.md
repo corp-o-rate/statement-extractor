@@ -1,17 +1,31 @@
 # Entity Embedding Database
 
-The entity embedding database enables fast entity qualification by matching organization names against pre-computed embeddings from authoritative sources.
+The entity embedding database enables fast entity qualification by matching organization and person names against pre-computed embeddings from authoritative sources.
 
 ## Overview
 
-The database uses `sqlite-vec` for vector similarity search, storing organization records with:
+The database uses `sqlite-vec` for vector similarity search, storing **two types of records**:
+
+### Organization Records
 - **name**: Searchable organization name
 - **embedding**: 768-dimensional vector from `google/embeddinggemma-300m`
-- **source**: Data source (gleif, sec_edgar, companies_house, wikipedia)
+- **source**: Data source (gleif, sec_edgar, companies_house, wikidata)
 - **source_id**: Unique identifier (LEI, CIK, company number, Wikidata QID)
 - **record**: Full JSON record from source
 
+### Person Records *(v0.9.0)*
+- **name**: Person name (used for embedding and display)
+- **embedding**: 768-dimensional vector combining name, role, and organization
+- **source**: Data source (wikidata)
+- **source_id**: Wikidata QID (e.g., Q312 for Tim Cook)
+- **person_type**: Classification (executive, politician, athlete, artist, etc.)
+- **known_for_role**: Primary role from Wikipedia (e.g., "CEO", "President")
+- **known_for_org**: Primary organization (e.g., "Apple Inc", "Tesla")
+- **record**: Full JSON record from source
+
 ## Data Sources
+
+### Organizations
 
 | Source | Records | Identifier | Coverage |
 |--------|---------|------------|----------|
@@ -19,6 +33,26 @@ The database uses `sqlite-vec` for vector similarity search, storing organizatio
 | [SEC Edgar](https://www.sec.gov/) | ~100K+ | CIK (Central Index Key) | All SEC filers (not just public companies) |
 | [Companies House](https://www.gov.uk/government/organisations/companies-house) | ~5M | Company Number | UK registered companies |
 | [Wikidata](https://www.wikidata.org/) | Variable | QID | Notable companies worldwide |
+
+### People *(v0.9.0)*
+
+| Source | Records | Identifier | Coverage |
+|--------|---------|------------|----------|
+| [Wikidata](https://www.wikidata.org/) | Variable | QID | Notable people with English Wikipedia articles |
+
+**Person Types:**
+
+| Type | Description | Example Roles |
+|------|-------------|---------------|
+| `executive` | C-suite, board members | CEO, CFO, Chairman, Director |
+| `politician` | Elected officials, diplomats | President, Senator, Ambassador |
+| `athlete` | Sports figures | Players, coaches, team owners |
+| `artist` | Creative professionals | Actors, musicians, directors, writers |
+| `academic` | Professors, researchers | Professor, Dean, Researcher |
+| `scientist` | Scientists, inventors | Research scientist, Lab director |
+| `journalist` | Media personalities | Reporter, Editor, Anchor |
+| `entrepreneur` | Founders, business owners | Founder, Co-founder |
+| `activist` | Advocates, campaigners | Human rights activist |
 
 ## Building the Database
 
@@ -87,6 +121,23 @@ corp-extractor db import-wikidata --all
 
 Available query types: `lei`, `ticker`, `public`, `business`, `organization`, `nonprofit`, `government`
 
+**5. Wikidata People** *(v0.9.0)*
+
+```bash
+# Import notable people (executives by default)
+corp-extractor db import-people --type executive --limit 5000
+
+# Import specific person types
+corp-extractor db import-people --type politician --limit 5000
+corp-extractor db import-people --type athlete --limit 5000
+corp-extractor db import-people --type artist --limit 5000
+
+# Import all person types (runs all queries sequentially)
+corp-extractor db import-people --all --limit 10000
+```
+
+Available person types: `executive`, `politician`, `athlete`, `artist`, `academic`, `scientist`, `journalist`, `entrepreneur`, `activist`
+
 ### Full Build (Recommended)
 
 For a comprehensive database with all sources:
@@ -97,6 +148,7 @@ corp-extractor db import-gleif --download
 corp-extractor db import-sec --download
 corp-extractor db import-companies-house --download
 corp-extractor db import-wikidata --limit 100000
+corp-extractor db import-people --all --limit 50000  # Notable people
 
 # Check status
 corp-extractor db status
@@ -131,11 +183,32 @@ corp-extractor db import-gleif --download --db /path/to/entities.db
 
 ## Testing the Database
 
-**Search for a company:**
+**Search for an organization:**
 ```bash
 corp-extractor db search "Microsoft"
 corp-extractor db search "Barclays" --source companies_house
 corp-extractor db search "Apple Inc" --top-k 20 --verbose
+```
+
+**Search for a person:** *(v0.9.0)*
+```bash
+corp-extractor db search-people "Tim Cook"
+corp-extractor db search-people "Elon Musk" --top-k 5
+corp-extractor db search-people "Warren Buffett" --verbose
+```
+
+**Example person search output:**
+```
+Found 3 results:
+
+  1. Tim Cook (CEO) at Apple Inc [US]
+     Source: wikidata:Q312, Type: executive, Score: 0.952
+
+  2. Timothy Donald Cook (CEO) at Apple [US]
+     Source: wikidata:Q312, Type: executive, Score: 0.891
+
+  3. Tim Cook (Director) at Nike [US]
+     Source: wikidata:Q12345, Type: executive, Score: 0.743
 ```
 
 **Example output:**
@@ -247,11 +320,13 @@ corp-extractor pipeline "Apple announced record earnings."
 | Command | Description |
 |---------|-------------|
 | `db status` | Show database statistics |
-| `db search QUERY` | Search for a company |
+| `db search QUERY` | Search for an organization |
+| `db search-people QUERY` | Search for a person *(v0.9.0)* |
 | `db import-gleif` | Import GLEIF LEI data |
 | `db import-sec` | Import SEC Edgar bulk data |
 | `db import-companies-house` | Import UK Companies House data |
-| `db import-wikidata` | Import Wikidata companies |
+| `db import-wikidata` | Import Wikidata organizations |
+| `db import-people` | Import Wikidata notable people *(v0.9.0)* |
 | `db gleif-info` | Show latest GLEIF file info |
 | `db download` | Download database from HuggingFace (lite by default) |
 | `db download --full` | Download full database with all metadata |
@@ -297,32 +372,56 @@ corp-extractor db compress entities.db
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Entity Database                          │
-├─────────────────────────────────────────────────────────────┤
-│  organizations table (SQLite)                               │
-│  ├── id (INTEGER PRIMARY KEY)                               │
-│  ├── name (TEXT)                                            │
-│  ├── name_normalized (TEXT)                                 │
-│  ├── region (TEXT)                                          │
-│  ├── entity_type (TEXT)                                     │
-│  ├── source (TEXT: gleif|sec_edgar|companies_house|wikidata)│
-│  ├── source_id (TEXT)                                       │
-│  └── record (JSON) - omitted in lite version                │
-├─────────────────────────────────────────────────────────────┤
-│  organization_embeddings (sqlite-vec virtual table)         │
-│  ├── org_id (INTEGER)                                       │
-│  └── embedding (FLOAT[768])                                 │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                           Entity Database                                  │
+├───────────────────────────────────────────────────────────────────────────┤
+│  organizations table (SQLite)                                              │
+│  ├── id (INTEGER PRIMARY KEY)                                              │
+│  ├── name (TEXT)                                                           │
+│  ├── name_normalized (TEXT)                                                │
+│  ├── region (TEXT)                                                         │
+│  ├── entity_type (TEXT)                                                    │
+│  ├── source (TEXT: gleif|sec_edgar|companies_house|wikidata)               │
+│  ├── source_id (TEXT)                                                      │
+│  └── record (JSON) - omitted in lite version                               │
+├───────────────────────────────────────────────────────────────────────────┤
+│  organization_embeddings (sqlite-vec virtual table)                        │
+│  ├── org_id (INTEGER)                                                      │
+│  └── embedding (FLOAT[768])                                                │
+├───────────────────────────────────────────────────────────────────────────┤
+│  people table (SQLite) - v0.9.0                                            │
+│  ├── id (INTEGER PRIMARY KEY)                                              │
+│  ├── name (TEXT)                                                           │
+│  ├── name_normalized (TEXT)                                                │
+│  ├── source (TEXT: wikidata)                                               │
+│  ├── source_id (TEXT)                                                      │
+│  ├── country (TEXT)                                                        │
+│  ├── person_type (TEXT: executive|politician|athlete|artist|...)           │
+│  ├── known_for_role (TEXT) - e.g., "CEO", "President"                      │
+│  ├── known_for_org (TEXT) - e.g., "Apple Inc", "Tesla"                     │
+│  └── record (JSON) - omitted in lite version                               │
+├───────────────────────────────────────────────────────────────────────────┤
+│  person_embeddings (sqlite-vec virtual table)                              │
+│  ├── person_id (INTEGER)                                                   │
+│  └── embedding (FLOAT[768]) - combines name|role|org                       │
+└───────────────────────────────────────────────────────────────────────────┘
          │
          │ Vector similarity search
          ▼
-┌─────────────────────────────────────────────────────────────┐
-│  EmbeddingCompanyQualifier (Stage 3 Plugin)                 │
-│  ├── Search by organization name embedding                  │
-│  ├── Return CanonicalEntity with FQN and qualifiers         │
-│  └── Optional LLM confirmation for ambiguous matches        │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│  Stage 3 Qualifier Plugins                                                 │
+├───────────────────────────────────────────────────────────────────────────┤
+│  EmbeddingCompanyQualifier (ORG entities)                                  │
+│  ├── Search by organization name embedding                                 │
+│  ├── Return CanonicalEntity with FQN and qualifiers                        │
+│  └── Optional LLM confirmation for ambiguous matches                       │
+├───────────────────────────────────────────────────────────────────────────┤
+│  PersonQualifier (PERSON entities) - v0.9.0                                │
+│  ├── LLM extracts role + org from context                                  │
+│  ├── Search PersonDatabase with role/org boost                             │
+│  ├── Resolve org mentions via OrganizationResolver                         │
+│  └── Build CanonicalEntity with Wikidata ID + resolved role/org            │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Technical Details
@@ -383,6 +482,32 @@ class CompanyRecord(BaseModel):
     record: dict        # Full record from source (omitted in lite version)
 ```
 
+Each person record contains *(v0.9.0)*:
+
+```python
+class PersonRecord(BaseModel):
+    name: str               # Display name (used for embedding and display)
+    source: str             # Data source (wikidata)
+    source_id: str          # Wikidata QID (e.g., "Q312")
+    country: str            # Country code or name (e.g., "US", "Germany")
+    person_type: PersonType # Classification (executive, politician, etc.)
+    known_for_role: str     # Primary role from Wikipedia (e.g., "CEO")
+    known_for_org: str      # Primary org from Wikipedia (e.g., "Apple Inc")
+    record: dict            # Full record from source (omitted in lite version)
+
+class PersonType(Enum):
+    EXECUTIVE = "executive"      # CEOs, board members, C-suite
+    POLITICIAN = "politician"    # Elected officials, diplomats
+    ACADEMIC = "academic"        # Professors, researchers
+    ARTIST = "artist"            # Musicians, actors, directors
+    ATHLETE = "athlete"          # Sports figures
+    ENTREPRENEUR = "entrepreneur"# Founders, business owners
+    JOURNALIST = "journalist"    # Reporters, media personalities
+    ACTIVIST = "activist"        # Advocates, campaigners
+    SCIENTIST = "scientist"      # Scientists, inventors
+    UNKNOWN = "unknown"          # Type not determined
+```
+
 **Source identifier prefixes:**
 
 | Source | Prefix | Example Canonical ID |
@@ -390,7 +515,8 @@ class CompanyRecord(BaseModel):
 | GLEIF | `LEI` | `LEI:INR2EJN1ERAN0W5ZP974` |
 | SEC Edgar | `SEC-CIK` | `SEC-CIK:0000789019` |
 | Companies House | `UK-CH` | `UK-CH:00445790` |
-| Wikidata | `WIKIDATA` | `WIKIDATA:Q2283` |
+| Wikidata (org) | `WIKIDATA` | `WIKIDATA:Q2283` |
+| Wikidata (person) | `wikidata` | `wikidata:Q312` |
 
 **Source-specific record fields:**
 

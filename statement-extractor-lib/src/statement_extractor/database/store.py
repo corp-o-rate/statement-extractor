@@ -17,7 +17,7 @@ from typing import Iterator, Optional
 import numpy as np
 import sqlite_vec
 
-from .models import CompanyRecord, DatabaseStats, EntityType
+from .models import CompanyRecord, DatabaseStats, EntityType, PersonRecord, PersonType
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,9 @@ DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "entities.db"
 
 # Module-level singleton for OrganizationDatabase to prevent multiple loads
 _database_instances: dict[str, "OrganizationDatabase"] = {}
+
+# Module-level singleton for PersonDatabase
+_person_database_instances: dict[str, "PersonDatabase"] = {}
 
 # Comprehensive set of corporate legal suffixes (international)
 COMPANY_SUFFIXES: set[str] = {
@@ -132,6 +135,77 @@ def _extract_search_terms(query: str) -> list[str]:
     words.sort(key=len, reverse=True)
 
     return words[:3]  # Limit to top 3 terms
+
+
+# Person name normalization patterns
+_PERSON_PREFIXES = {
+    "dr.", "dr", "prof.", "prof", "professor",
+    "mr.", "mr", "mrs.", "mrs", "ms.", "ms", "miss",
+    "sir", "dame", "lord", "lady",
+    "rev.", "rev", "reverend",
+    "hon.", "hon", "honorable",
+    "gen.", "gen", "general",
+    "col.", "col", "colonel",
+    "capt.", "capt", "captain",
+    "lt.", "lt", "lieutenant",
+    "sgt.", "sgt", "sergeant",
+}
+
+_PERSON_SUFFIXES = {
+    "jr.", "jr", "junior",
+    "sr.", "sr", "senior",
+    "ii", "iii", "iv", "v",
+    "2nd", "3rd", "4th", "5th",
+    "phd", "ph.d.", "ph.d",
+    "md", "m.d.", "m.d",
+    "esq", "esq.",
+    "mba", "m.b.a.",
+    "cpa", "c.p.a.",
+    "jd", "j.d.",
+}
+
+
+def _normalize_person_name(name: str) -> str:
+    """
+    Normalize person name for text matching.
+
+    1. Remove honorific prefixes (Dr., Prof., Mr., etc.)
+    2. Remove generational suffixes (Jr., Sr., III, PhD, etc.)
+    3. Keep name particles (von, van, de, al-, etc.)
+    4. Lowercase and strip
+
+    Always returns a non-empty string for valid input.
+    """
+    if not name:
+        return ""
+
+    # Lowercase for matching
+    normalized = name.lower().strip()
+
+    # Split into words
+    words = normalized.split()
+    if not words:
+        return ""
+
+    # Remove prefix if first word is a title
+    while words and words[0].rstrip(".") in _PERSON_PREFIXES:
+        words.pop(0)
+        if not words:
+            return name.lower().strip()  # Fallback if name was just a title
+
+    # Remove suffix if last word is a suffix
+    while words and words[-1].rstrip(".") in _PERSON_SUFFIXES:
+        words.pop()
+        if not words:
+            return name.lower().strip()  # Fallback if name was just suffixes
+
+    # Rejoin remaining words
+    normalized = " ".join(words)
+
+    # Clean up extra spaces
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+    return normalized if normalized else name.lower().strip()
 
 
 def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "OrganizationDatabase":
@@ -1038,3 +1112,495 @@ class OrganizationDatabase:
 
         conn.commit()
         return count
+
+
+def get_person_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "PersonDatabase":
+    """
+    Get a singleton PersonDatabase instance for the given path.
+
+    Args:
+        db_path: Path to database file
+        embedding_dim: Dimension of embeddings
+
+    Returns:
+        Shared PersonDatabase instance
+    """
+    path_key = str(db_path or DEFAULT_DB_PATH)
+    if path_key not in _person_database_instances:
+        logger.debug(f"Creating new PersonDatabase instance for {path_key}")
+        _person_database_instances[path_key] = PersonDatabase(db_path=db_path, embedding_dim=embedding_dim)
+    return _person_database_instances[path_key]
+
+
+class PersonDatabase:
+    """
+    SQLite database with sqlite-vec for person vector search.
+
+    Uses hybrid text + vector search:
+    1. Text filtering with LIKE to reduce candidates
+    2. sqlite-vec for semantic similarity ranking
+
+    Stores people from sources like Wikidata with role/org context.
+    """
+
+    def __init__(
+        self,
+        db_path: Optional[str | Path] = None,
+        embedding_dim: int = 768,  # Default for embeddinggemma-300m
+    ):
+        """
+        Initialize the person database.
+
+        Args:
+            db_path: Path to database file (creates if not exists)
+            embedding_dim: Dimension of embeddings to store
+        """
+        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._embedding_dim = embedding_dim
+        self._conn: Optional[sqlite3.Connection] = None
+
+    def _ensure_dir(self) -> None:
+        """Ensure database directory exists."""
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _connect(self) -> sqlite3.Connection:
+        """Get or create database connection with sqlite-vec loaded."""
+        if self._conn is not None:
+            return self._conn
+
+        self._ensure_dir()
+        self._conn = sqlite3.connect(str(self._db_path))
+        self._conn.row_factory = sqlite3.Row
+
+        # Load sqlite-vec extension
+        self._conn.enable_load_extension(True)
+        sqlite_vec.load(self._conn)
+        self._conn.enable_load_extension(False)
+
+        # Create tables
+        self._create_tables()
+
+        return self._conn
+
+    def _create_tables(self) -> None:
+        """Create database tables including sqlite-vec virtual table."""
+        conn = self._conn
+        assert conn is not None
+
+        # Main people records table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                name_normalized TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'wikidata',
+                source_id TEXT NOT NULL,
+                country TEXT NOT NULL DEFAULT '',
+                person_type TEXT NOT NULL DEFAULT 'unknown',
+                known_for_role TEXT NOT NULL DEFAULT '',
+                known_for_org TEXT NOT NULL DEFAULT '',
+                record TEXT NOT NULL,
+                UNIQUE(source, source_id)
+            )
+        """)
+
+        # Create indexes on main table
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_people_name ON people(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_people_name_normalized ON people(name_normalized)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_people_source ON people(source)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_people_source_id ON people(source, source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_people_known_for_org ON people(known_for_org)")
+
+        # Create sqlite-vec virtual table for embeddings
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS person_embeddings USING vec0(
+                person_id INTEGER PRIMARY KEY,
+                embedding float[{self._embedding_dim}]
+            )
+        """)
+
+        conn.commit()
+
+    def close(self) -> None:
+        """Close database connection."""
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def insert(self, record: PersonRecord, embedding: np.ndarray) -> int:
+        """
+        Insert a person record with its embedding.
+
+        Args:
+            record: Person record to insert
+            embedding: Embedding vector for the person name
+
+        Returns:
+            Row ID of inserted record
+        """
+        conn = self._connect()
+
+        # Serialize record
+        record_json = json.dumps(record.record)
+        name_normalized = _normalize_person_name(record.name)
+
+        cursor = conn.execute("""
+            INSERT OR REPLACE INTO people
+            (name, name_normalized, source, source_id, country, person_type, known_for_role, known_for_org, record)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            record.name,
+            name_normalized,
+            record.source,
+            record.source_id,
+            record.country,
+            record.person_type.value,
+            record.known_for_role,
+            record.known_for_org,
+            record_json,
+        ))
+
+        row_id = cursor.lastrowid
+        assert row_id is not None
+
+        # Insert embedding into vec table
+        embedding_blob = embedding.astype(np.float32).tobytes()
+        conn.execute("""
+            INSERT OR REPLACE INTO person_embeddings (person_id, embedding)
+            VALUES (?, ?)
+        """, (row_id, embedding_blob))
+
+        conn.commit()
+        return row_id
+
+    def insert_batch(
+        self,
+        records: list[PersonRecord],
+        embeddings: np.ndarray,
+        batch_size: int = 1000,
+    ) -> int:
+        """
+        Insert multiple person records with embeddings.
+
+        Args:
+            records: List of person records
+            embeddings: Matrix of embeddings (N x dim)
+            batch_size: Commit batch size
+
+        Returns:
+            Number of records inserted
+        """
+        conn = self._connect()
+        count = 0
+
+        for record, embedding in zip(records, embeddings):
+            record_json = json.dumps(record.record)
+            name_normalized = _normalize_person_name(record.name)
+
+            cursor = conn.execute("""
+                INSERT OR REPLACE INTO people
+                (name, name_normalized, source, source_id, country, person_type, known_for_role, known_for_org, record)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                record.name,
+                name_normalized,
+                record.source,
+                record.source_id,
+                record.country,
+                record.person_type.value,
+                record.known_for_role,
+                record.known_for_org,
+                record_json,
+            ))
+
+            row_id = cursor.lastrowid
+            assert row_id is not None
+
+            # Insert embedding
+            embedding_blob = embedding.astype(np.float32).tobytes()
+            conn.execute("""
+                INSERT OR REPLACE INTO person_embeddings (person_id, embedding)
+                VALUES (?, ?)
+            """, (row_id, embedding_blob))
+
+            count += 1
+
+            if count % batch_size == 0:
+                conn.commit()
+                logger.info(f"Inserted {count} person records...")
+
+        conn.commit()
+        return count
+
+    def search(
+        self,
+        query_embedding: np.ndarray,
+        top_k: int = 20,
+        query_text: Optional[str] = None,
+        max_text_candidates: int = 5000,
+    ) -> list[tuple[PersonRecord, float]]:
+        """
+        Search for similar people using hybrid text + vector search.
+
+        Two-stage approach:
+        1. If query_text provided, use SQL LIKE to find candidates containing search terms
+        2. Use sqlite-vec for vector similarity ranking on filtered candidates
+
+        Args:
+            query_embedding: Query embedding vector
+            top_k: Number of results to return
+            query_text: Optional query text for text-based pre-filtering
+            max_text_candidates: Max candidates to keep after text filtering
+
+        Returns:
+            List of (PersonRecord, similarity_score) tuples
+        """
+        start = time.time()
+        self._connect()
+
+        # Normalize query embedding
+        query_norm = np.linalg.norm(query_embedding)
+        if query_norm == 0:
+            return []
+        query_normalized = query_embedding / query_norm
+        query_blob = query_normalized.astype(np.float32).tobytes()
+
+        # Stage 1: Text-based pre-filtering (if query_text provided)
+        candidate_ids: Optional[set[int]] = None
+        if query_text:
+            query_normalized_text = _normalize_person_name(query_text)
+            if query_normalized_text:
+                candidate_ids = self._text_filter_candidates(
+                    query_normalized_text,
+                    max_candidates=max_text_candidates,
+                )
+                logger.info(f"Text filter: {len(candidate_ids)} candidates for '{query_text}'")
+
+        # Stage 2: Vector search
+        if candidate_ids is not None and len(candidate_ids) == 0:
+            # No text matches, return empty
+            return []
+
+        if candidate_ids is not None:
+            # Search within text-filtered candidates
+            results = self._vector_search_filtered(
+                query_blob, candidate_ids, top_k
+            )
+        else:
+            # Full vector search
+            results = self._vector_search_full(query_blob, top_k)
+
+        elapsed = time.time() - start
+        logger.debug(f"Person search took {elapsed:.3f}s (results={len(results)})")
+        return results
+
+    def _text_filter_candidates(
+        self,
+        query_normalized: str,
+        max_candidates: int,
+    ) -> set[int]:
+        """
+        Filter candidates using SQL LIKE for fast text matching.
+
+        Uses `name_normalized` column for consistent matching.
+        """
+        conn = self._conn
+        assert conn is not None
+
+        # Extract search terms from the normalized query
+        search_terms = _extract_search_terms(query_normalized)
+        if not search_terms:
+            return set()
+
+        logger.debug(f"Person text filter search terms: {search_terms}")
+
+        # Build OR clause for LIKE matching on any term
+        like_clauses = []
+        params: list = []
+        for term in search_terms:
+            like_clauses.append("name_normalized LIKE ?")
+            params.append(f"%{term}%")
+
+        where_clause = " OR ".join(like_clauses)
+
+        query = f"""
+            SELECT id FROM people
+            WHERE {where_clause}
+            LIMIT ?
+        """
+
+        params.append(max_candidates)
+
+        cursor = conn.execute(query, params)
+        return set(row["id"] for row in cursor)
+
+    def _vector_search_filtered(
+        self,
+        query_blob: bytes,
+        candidate_ids: set[int],
+        top_k: int,
+    ) -> list[tuple[PersonRecord, float]]:
+        """Vector search within a filtered set of candidates."""
+        conn = self._conn
+        assert conn is not None
+
+        if not candidate_ids:
+            return []
+
+        # Build IN clause for candidate IDs
+        placeholders = ",".join("?" * len(candidate_ids))
+
+        query = f"""
+            SELECT
+                e.person_id,
+                vec_distance_cosine(e.embedding, ?) as distance
+            FROM person_embeddings e
+            WHERE e.person_id IN ({placeholders})
+            ORDER BY distance
+            LIMIT ?
+        """
+
+        cursor = conn.execute(query, [query_blob] + list(candidate_ids) + [top_k])
+
+        results = []
+        for row in cursor:
+            person_id = row["person_id"]
+            distance = row["distance"]
+            # Convert cosine distance to similarity (1 - distance)
+            similarity = 1.0 - distance
+
+            # Fetch full record
+            record = self._get_record_by_id(person_id)
+            if record:
+                results.append((record, similarity))
+
+        return results
+
+    def _vector_search_full(
+        self,
+        query_blob: bytes,
+        top_k: int,
+    ) -> list[tuple[PersonRecord, float]]:
+        """Full vector search without text pre-filtering."""
+        conn = self._conn
+        assert conn is not None
+
+        query = """
+            SELECT
+                person_id,
+                vec_distance_cosine(embedding, ?) as distance
+            FROM person_embeddings
+            ORDER BY distance
+            LIMIT ?
+        """
+        cursor = conn.execute(query, (query_blob, top_k))
+
+        results = []
+        for row in cursor:
+            person_id = row["person_id"]
+            distance = row["distance"]
+            similarity = 1.0 - distance
+
+            record = self._get_record_by_id(person_id)
+            if record:
+                results.append((record, similarity))
+
+        return results
+
+    def _get_record_by_id(self, person_id: int) -> Optional[PersonRecord]:
+        """Get a person record by ID."""
+        conn = self._conn
+        assert conn is not None
+
+        cursor = conn.execute("""
+            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+            FROM people WHERE id = ?
+        """, (person_id,))
+
+        row = cursor.fetchone()
+        if row:
+            return PersonRecord(
+                name=row["name"],
+                source=row["source"],
+                source_id=row["source_id"],
+                country=row["country"] or "",
+                person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
+                known_for_role=row["known_for_role"] or "",
+                known_for_org=row["known_for_org"] or "",
+                record=json.loads(row["record"]),
+            )
+        return None
+
+    def get_by_source_id(self, source: str, source_id: str) -> Optional[PersonRecord]:
+        """Get a person record by source and source_id."""
+        conn = self._connect()
+
+        cursor = conn.execute("""
+            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+            FROM people
+            WHERE source = ? AND source_id = ?
+        """, (source, source_id))
+
+        row = cursor.fetchone()
+        if row:
+            return PersonRecord(
+                name=row["name"],
+                source=row["source"],
+                source_id=row["source_id"],
+                country=row["country"] or "",
+                person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
+                known_for_role=row["known_for_role"] or "",
+                known_for_org=row["known_for_org"] or "",
+                record=json.loads(row["record"]),
+            )
+        return None
+
+    def get_stats(self) -> dict:
+        """Get database statistics for people table."""
+        conn = self._connect()
+
+        # Total count
+        cursor = conn.execute("SELECT COUNT(*) FROM people")
+        total = cursor.fetchone()[0]
+
+        # Count by person_type
+        cursor = conn.execute("SELECT person_type, COUNT(*) as cnt FROM people GROUP BY person_type")
+        by_type = {row["person_type"]: row["cnt"] for row in cursor}
+
+        # Count by source
+        cursor = conn.execute("SELECT source, COUNT(*) as cnt FROM people GROUP BY source")
+        by_source = {row["source"]: row["cnt"] for row in cursor}
+
+        return {
+            "total_records": total,
+            "by_type": by_type,
+            "by_source": by_source,
+        }
+
+    def iter_records(self, source: Optional[str] = None) -> Iterator[PersonRecord]:
+        """Iterate over all person records, optionally filtered by source."""
+        conn = self._connect()
+
+        if source:
+            cursor = conn.execute("""
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+                FROM people
+                WHERE source = ?
+            """, (source,))
+        else:
+            cursor = conn.execute("""
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+                FROM people
+            """)
+
+        for row in cursor:
+            yield PersonRecord(
+                name=row["name"],
+                source=row["source"],
+                source_id=row["source_id"],
+                country=row["country"] or "",
+                person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
+                known_for_role=row["known_for_role"] or "",
+                known_for_org=row["known_for_org"] or "",
+                record=json.loads(row["record"]),
+            )
