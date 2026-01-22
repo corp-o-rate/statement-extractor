@@ -9,7 +9,7 @@ Publish the corp-extractor library to PyPI:
 
 1. **Version Check:**
    - Read `statement-extractor-lib/pyproject.toml`
-   - Verify version number is incremented appropriately
+   - Verify version number is incremented appropriately do this by checking PyPi - https://pypi.org/project/corp-extractor/ - use semantic versioning bump the middle number for non-minor functional changes and the final number for non-functional changes (fixes, tidy up etc.) 
 
 2. **Run Tests:**
    ```bash
@@ -24,6 +24,7 @@ Publish the corp-extractor library to PyPI:
 4. **Verify Build:**
    - Check dist/ directory for wheel and tarball
    - Verify package contents look correct
+
 
 5. **Publish:**
    ```bash

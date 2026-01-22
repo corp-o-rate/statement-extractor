@@ -1017,17 +1017,20 @@ class OrganizationDatabase:
                     migrations["company_embeddings"] = "renamed_to_organization_embeddings"
 
             conn.execute("COMMIT")
-
-            # Vacuum to clean up
-            conn.execute("VACUUM")
             logger.info(f"Migration complete: {migrations}")
-
-            return migrations
 
         except Exception as e:
             conn.execute("ROLLBACK")
             logger.error(f"Migration failed: {e}")
             raise
+
+        # Vacuum to clean up - outside try block since COMMIT already succeeded
+        try:
+            conn.execute("VACUUM")
+        except Exception as e:
+            logger.warning(f"VACUUM failed (migration was successful): {e}")
+
+        return migrations
 
     def get_missing_embedding_count(self) -> int:
         """Get count of organizations without embeddings in organization_embeddings table."""
