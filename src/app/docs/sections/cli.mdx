@@ -489,7 +489,7 @@ corp-extractor document process article.txt -o triples
 
 <span id="db-commands" />
 
-<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">UPDATED in v0.9.0</span>
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">UPDATED in v0.9.1</span>
 
 The `db` command group manages the entity embedding database used for organization and person qualification.
 
@@ -509,11 +509,15 @@ corp-extractor db search-people "Elon Musk" --top-k 5
 corp-extractor db import-gleif --download
 corp-extractor db import-sec --download           # Bulk data (~100K+ filers)
 corp-extractor db import-companies-house --download
-corp-extractor db import-wikidata --limit 50000
+corp-extractor db import-wikidata --limit 50000   # SPARQL-based
 
 # Import notable people (v0.9.0)
 corp-extractor db import-people --type executive --limit 5000
 corp-extractor db import-people --all --limit 10000  # All person types
+
+# Import from Wikidata dump (v0.9.1) - avoids SPARQL timeouts
+corp-extractor db import-wikidata-dump --download --limit 50000
+corp-extractor db import-wikidata-dump --dump /path/to/dump.bz2 --people --no-orgs
 
 # Download/upload from HuggingFace Hub
 corp-extractor db download                        # Lite version (default)
@@ -559,9 +563,15 @@ corp-extractor db compress entities.db            # Compress with gzip
       <td>Company Number</td>
     </tr>
     <tr>
-      <td>Wikidata</td>
+      <td>Wikidata (SPARQL)</td>
       <td><code>import-wikidata</code></td>
       <td>Variable</td>
+      <td>QID</td>
+    </tr>
+    <tr>
+      <td>Wikidata (Dump)</td>
+      <td><code>import-wikidata-dump --download</code></td>
+      <td>All with enwiki</td>
       <td>QID</td>
     </tr>
   </tbody>
@@ -626,6 +636,69 @@ corp-extractor db compress entities.db            # Compress with gzip
     </tr>
   </tbody>
 </table>
+
+#### Wikidata Dump Import <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.1</span>
+
+For large imports that avoid SPARQL timeouts, use the Wikidata JSON dump:
+
+```bash
+# Download and import (~100GB dump file)
+corp-extractor db import-wikidata-dump --download --limit 50000
+
+# Import only people
+corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 100000
+
+# Import only organizations
+corp-extractor db import-wikidata-dump --download --orgs --no-people --limit 100000
+
+# Use existing dump file
+corp-extractor db import-wikidata-dump --dump /path/to/latest-all.json.bz2
+```
+
+**Fast download with aria2c:** Install `aria2c` for 10-20x faster downloads:
+```bash
+brew install aria2   # macOS
+apt install aria2    # Ubuntu/Debian
+```
+
+<table>
+  <thead>
+    <tr>
+      <th>Option</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--download</code></td>
+      <td>Download the Wikidata dump (~100GB)</td>
+    </tr>
+    <tr>
+      <td><code>--dump PATH</code></td>
+      <td>Use existing dump file (.bz2 or .gz)</td>
+    </tr>
+    <tr>
+      <td><code>--people/--no-people</code></td>
+      <td>Import people (default: yes)</td>
+    </tr>
+    <tr>
+      <td><code>--orgs/--no-orgs</code></td>
+      <td>Import organizations (default: yes)</td>
+    </tr>
+    <tr>
+      <td><code>--no-aria2</code></td>
+      <td>Don't use aria2c even if available</td>
+    </tr>
+  </tbody>
+</table>
+
+**Advantages over SPARQL:**
+- No timeouts (processes locally)
+- Complete coverage (all notable people/orgs with English Wikipedia)
+- Captures people via occupation (P106) even if position type is generic
+- Extracts role dates from position qualifiers (P580/P582)
+
+**Download location:** `~/.cache/corp-extractor/wikidata-latest-all.json.bz2`
 
 **Note:** Use `-v` (verbose) to see detailed logs of skipped records during import:
 ```bash

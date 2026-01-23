@@ -667,21 +667,21 @@ def db_cmd():
         import-gleif           Import GLEIF LEI data (~3M records)
         import-sec             Import SEC Edgar bulk data (~100K+ filers)
         import-companies-house Import UK Companies House (~5M records)
-        import-wikidata        Import Wikidata organizations
-        import-people          Import Wikidata notable people
+        import-wikidata        Import Wikidata organizations (SPARQL, may timeout)
+        import-people          Import Wikidata notable people (SPARQL, may timeout)
+        import-wikidata-dump   Import from Wikidata JSON dump (recommended)
         status                 Show database status
         search                 Search for an organization
         search-people          Search for a person
         download               Download database from HuggingFace
-        upload                 Upload database with lite/compressed variants
+        upload                 Upload database with lite variant
         create-lite            Create lite version (no record data)
-        compress               Compress database with gzip
 
     \b
     Examples:
         corp-extractor db import-sec --download
         corp-extractor db import-gleif --download --limit 100000
-        corp-extractor db import-people --all --limit 10000
+        corp-extractor db import-wikidata-dump --download --limit 50000
         corp-extractor db status
         corp-extractor db search "Apple Inc"
         corp-extractor db search-people "Tim Cook"
@@ -988,7 +988,7 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
     database = get_person_database(db_path=db_path_obj)
     org_database = get_database(db_path=db_path_obj)
     embedder = CompanyEmbedder()
-    importer = WikidataPeopleImporter(batch_size=500)  # Smaller batch for SPARQL reliability
+    importer = WikidataPeopleImporter(batch_size=batch_size)
 
     count = 0
 
@@ -1114,6 +1114,269 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
 
     org_database.close()
     database.close()
+
+
+@db_cmd.command("import-wikidata-dump")
+@click.option("--dump", "dump_path", type=click.Path(exists=True), help="Path to Wikidata JSON dump file (.bz2 or .gz)")
+@click.option("--download", is_flag=True, help="Download latest dump first (~100GB)")
+@click.option("--force", is_flag=True, help="Force re-download even if cached")
+@click.option("--no-aria2", is_flag=True, help="Don't use aria2c even if available (slower)")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--people/--no-people", default=True, help="Import people (default: yes)")
+@click.option("--orgs/--no-orgs", default=True, help="Import organizations (default: yes)")
+@click.option("--limit", type=int, help="Max records per type (people and/or orgs)")
+@click.option("--batch-size", type=int, default=10000, help="Batch size for commits (default: 10000)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_wikidata_dump(
+    dump_path: Optional[str],
+    download: bool,
+    force: bool,
+    no_aria2: bool,
+    db_path: Optional[str],
+    people: bool,
+    orgs: bool,
+    limit: Optional[int],
+    batch_size: int,
+    verbose: bool,
+):
+    """
+    Import people and organizations from Wikidata JSON dump.
+
+    This uses the full Wikidata JSON dump (~100GB compressed) to import
+    all humans and organizations with English Wikipedia articles. This
+    avoids SPARQL query timeouts that occur with large result sets.
+
+    The dump is streamed line-by-line to minimize memory usage.
+
+    \b
+    Features:
+    - No timeouts (processes locally)
+    - Complete coverage (all notable people/orgs)
+    - Resumable (can restart from same dump)
+    - People like Andy Burnham are captured via occupation (P106)
+
+    \b
+    Examples:
+        corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --limit 10000
+        corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 50000
+        corp-extractor db import-wikidata-dump --dump dump.json.bz2 --orgs --no-people
+    """
+    _configure_logging(verbose)
+
+    from .database.store import get_person_database, get_database, DEFAULT_DB_PATH
+    from .database.embeddings import CompanyEmbedder
+    from .database.importers.wikidata_dump import WikidataDumpImporter
+
+    if not dump_path and not download:
+        raise click.UsageError("Either --dump path or --download is required")
+
+    if not people and not orgs:
+        raise click.UsageError("Must import at least one of --people or --orgs")
+
+    # Default database path
+    if db_path is None:
+        db_path_obj = DEFAULT_DB_PATH
+    else:
+        db_path_obj = Path(db_path)
+
+    click.echo(f"Importing Wikidata dump to {db_path_obj}...", err=True)
+
+    # Initialize importer
+    importer = WikidataDumpImporter(dump_path=dump_path)
+
+    # Download if requested
+    if download:
+        import shutil
+        dump_target = importer.get_dump_path()
+        click.echo(f"Downloading Wikidata dump (~100GB) to:", err=True)
+        click.echo(f"  {dump_target}", err=True)
+
+        # Check for aria2c
+        has_aria2 = shutil.which("aria2c") is not None
+        use_aria2 = has_aria2 and not no_aria2
+
+        if use_aria2:
+            click.echo("  Using aria2c for fast parallel download (16 connections)", err=True)
+            dump_file = importer.download_dump(force=force, use_aria2=True)
+            click.echo(f"\nUsing dump: {dump_file}", err=True)
+        else:
+            if not has_aria2:
+                click.echo("", err=True)
+                click.echo("  TIP: Install aria2c for 10-20x faster downloads:", err=True)
+                click.echo("       brew install aria2  (macOS)", err=True)
+                click.echo("       apt install aria2   (Ubuntu/Debian)", err=True)
+                click.echo("", err=True)
+
+            # Use urllib to get content length first
+            import urllib.request
+            req = urllib.request.Request(
+                "https://dumps.wikimedia.org/wikidatawiki/entities/latest-all.json.bz2",
+                headers={"User-Agent": "corp-extractor/1.0"},
+                method="HEAD"
+            )
+            with urllib.request.urlopen(req) as response:
+                total_size = int(response.headers.get("content-length", 0))
+
+            if total_size:
+                total_gb = total_size / (1024 ** 3)
+                click.echo(f"  Size: {total_gb:.1f} GB", err=True)
+
+            # Download with progress bar
+            progress_bar = None
+
+            def update_progress(downloaded: int, total: int) -> None:
+                nonlocal progress_bar
+                if progress_bar is None and total > 0:
+                    progress_bar = click.progressbar(
+                        length=total,
+                        label="Downloading",
+                        show_percent=True,
+                        show_pos=True,
+                        item_show_func=lambda x: f"{(x or 0) / (1024**3):.1f} GB" if x else "",
+                    )
+                    progress_bar.__enter__()
+                if progress_bar:
+                    # Update to absolute position
+                    progress_bar.update(downloaded - progress_bar.pos)
+
+            try:
+                dump_file = importer.download_dump(force=force, use_aria2=False, progress_callback=update_progress)
+            finally:
+                if progress_bar:
+                    progress_bar.__exit__(None, None, None)
+
+            click.echo(f"\nUsing dump: {dump_file}", err=True)
+    elif dump_path:
+        click.echo(f"Using dump: {dump_path}", err=True)
+
+    # Initialize embedder
+    embedder = CompanyEmbedder()
+
+    # Import people
+    if people:
+        click.echo("\n=== Importing People ===", err=True)
+        if limit:
+            click.echo(f"  Target: up to {limit:,} records", err=True)
+        database = get_person_database(db_path=db_path_obj)
+
+        records = []
+        count = 0
+        scanned = 0
+
+        # Use progress bar if limit is set, otherwise show counter
+        if limit:
+            with click.progressbar(
+                length=limit,
+                label="Processing people",
+                show_percent=True,
+                show_pos=True,
+            ) as pbar:
+                for record in importer.import_people(limit=limit):
+                    records.append(record)
+                    scanned += 1
+                    pbar.update(1)
+
+                    if len(records) >= batch_size:
+                        embedding_texts = [r.get_embedding_text() for r in records]
+                        embeddings = embedder.embed_batch(embedding_texts)
+                        database.insert_batch(records, embeddings)
+                        count += len(records)
+                        records = []
+
+                # Final batch
+                if records:
+                    embedding_texts = [r.get_embedding_text() for r in records]
+                    embeddings = embedder.embed_batch(embedding_texts)
+                    database.insert_batch(records, embeddings)
+                    count += len(records)
+        else:
+            # No limit - show counter updates
+            for record in importer.import_people(limit=limit):
+                records.append(record)
+                scanned += 1
+
+                if len(records) >= batch_size:
+                    embedding_texts = [r.get_embedding_text() for r in records]
+                    embeddings = embedder.embed_batch(embedding_texts)
+                    database.insert_batch(records, embeddings)
+                    count += len(records)
+                    click.echo(f"\r  Processed {scanned:,} entities, imported {count:,} people...", nl=False, err=True)
+                    records = []
+
+            # Final batch
+            if records:
+                embedding_texts = [r.get_embedding_text() for r in records]
+                embeddings = embedder.embed_batch(embedding_texts)
+                database.insert_batch(records, embeddings)
+                count += len(records)
+            click.echo("", err=True)  # Newline after counter
+
+        click.echo(f"People import complete: {count:,} records", err=True)
+        database.close()
+
+    # Import organizations
+    if orgs:
+        click.echo("\n=== Importing Organizations ===", err=True)
+        if limit:
+            click.echo(f"  Target: up to {limit:,} records", err=True)
+        org_database = get_database(db_path=db_path_obj)
+
+        records = []
+        count = 0
+        scanned = 0
+
+        # Use progress bar if limit is set, otherwise show counter
+        if limit:
+            with click.progressbar(
+                length=limit,
+                label="Processing orgs",
+                show_percent=True,
+                show_pos=True,
+            ) as pbar:
+                for record in importer.import_organizations(limit=limit):
+                    records.append(record)
+                    scanned += 1
+                    pbar.update(1)
+
+                    if len(records) >= batch_size:
+                        names = [r.name for r in records]
+                        embeddings = embedder.embed_batch(names)
+                        org_database.insert_batch(records, embeddings)
+                        count += len(records)
+                        records = []
+
+                # Final batch
+                if records:
+                    names = [r.name for r in records]
+                    embeddings = embedder.embed_batch(names)
+                    org_database.insert_batch(records, embeddings)
+                    count += len(records)
+        else:
+            # No limit - show counter updates
+            for record in importer.import_organizations(limit=limit):
+                records.append(record)
+                scanned += 1
+
+                if len(records) >= batch_size:
+                    names = [r.name for r in records]
+                    embeddings = embedder.embed_batch(names)
+                    org_database.insert_batch(records, embeddings)
+                    count += len(records)
+                    click.echo(f"\r  Processed {scanned:,} entities, imported {count:,} orgs...", nl=False, err=True)
+                    records = []
+
+            # Final batch
+            if records:
+                names = [r.name for r in records]
+                embeddings = embedder.embed_batch(names)
+                org_database.insert_batch(records, embeddings)
+                count += len(records)
+            click.echo("", err=True)  # Newline after counter
+
+        click.echo(f"Organization import complete: {count:,} records", err=True)
+        org_database.close()
+
+    click.echo("\nWikidata dump import complete!", err=True)
 
 
 @db_cmd.command("search-people")
@@ -1356,10 +1619,9 @@ def db_search(query: str, db_path: Optional[str], top_k: int, source: Optional[s
 @click.option("--repo", type=str, default="Corp-o-Rate-Community/entity-references", help="HuggingFace repo ID")
 @click.option("--db", "db_path", type=click.Path(), help="Output path for database")
 @click.option("--full", is_flag=True, help="Download full version (larger, includes record metadata)")
-@click.option("--no-compress", is_flag=True, help="Download uncompressed version (slower)")
 @click.option("--force", is_flag=True, help="Force re-download")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def db_download(repo: str, db_path: Optional[str], full: bool, no_compress: bool, force: bool, verbose: bool):
+def db_download(repo: str, db_path: Optional[str], full: bool, force: bool, verbose: bool):
     """
     Download entity database from HuggingFace Hub.
 
@@ -1383,7 +1645,6 @@ def db_download(repo: str, db_path: Optional[str], full: bool, no_compress: bool
             repo_id=repo,
             filename=filename,
             force_download=force,
-            prefer_compressed=not no_compress,
         )
         click.echo(f"Database downloaded to: {path}")
     except Exception as e:
@@ -1395,27 +1656,23 @@ def db_download(repo: str, db_path: Optional[str], full: bool, no_compress: bool
 @click.option("--repo", type=str, default="Corp-o-Rate-Community/entity-references", help="HuggingFace repo ID")
 @click.option("--message", type=str, default="Update entity database", help="Commit message")
 @click.option("--no-lite", is_flag=True, help="Skip creating lite version (without record data)")
-@click.option("--no-compress", is_flag=True, help="Skip creating compressed versions")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def db_upload(db_path: Optional[str], repo: str, message: str, no_lite: bool, no_compress: bool, verbose: bool):
+def db_upload(db_path: Optional[str], repo: str, message: str, no_lite: bool, verbose: bool):
     """
-    Upload entity database to HuggingFace Hub with variants.
+    Upload entity database to HuggingFace Hub.
 
-    If no path is provided, uploads from the default cache location.
-
-    By default uploads:
+    First VACUUMs the database, then creates and uploads:
     - entities.db (full database)
     - entities-lite.db (without record data, smaller)
-    - entities.db.gz (compressed full)
-    - entities-lite.db.gz (compressed lite)
 
+    If no path is provided, uploads from the default cache location.
     Requires HF_TOKEN environment variable to be set.
 
     \b
     Examples:
         corp-extractor db upload
         corp-extractor db upload /path/to/entities.db
-        corp-extractor db upload --no-lite --no-compress
+        corp-extractor db upload --no-lite
         corp-extractor db upload --repo my-org/my-entity-db
     """
     _configure_logging(verbose)
@@ -1431,10 +1688,9 @@ def db_upload(db_path: Optional[str], repo: str, message: str, no_lite: bool, no
             )
 
     click.echo(f"Uploading {db_path} to {repo}...", err=True)
+    click.echo("  - Running VACUUM to optimize database", err=True)
     if not no_lite:
         click.echo("  - Creating lite version (without record data)", err=True)
-    if not no_compress:
-        click.echo("  - Creating compressed versions", err=True)
 
     try:
         results = upload_database_with_variants(
@@ -1442,7 +1698,6 @@ def db_upload(db_path: Optional[str], repo: str, message: str, no_lite: bool, no
             repo_id=repo,
             commit_message=message,
             include_lite=not no_lite,
-            include_compressed=not no_compress,
         )
         click.echo(f"\nUploaded {len(results)} file(s) successfully:")
         for filename, url in results.items():
@@ -1478,31 +1733,6 @@ def db_create_lite(db_path: str, output: Optional[str], verbose: bool):
         click.echo(f"Lite database created: {lite_path}")
     except Exception as e:
         raise click.ClickException(f"Failed to create lite database: {e}")
-
-
-@db_cmd.command("compress")
-@click.argument("db_path", type=click.Path(exists=True))
-@click.option("-o", "--output", type=click.Path(), help="Output path (default: adds .gz suffix)")
-@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def db_compress(db_path: str, output: Optional[str], verbose: bool):
-    """
-    Compress a database file using gzip.
-
-    \b
-    Examples:
-        corp-extractor db compress entities.db
-        corp-extractor db compress entities.db -o entities.db.gz
-    """
-    _configure_logging(verbose)
-    from .database.hub import compress_database
-
-    click.echo(f"Compressing {db_path}...", err=True)
-
-    try:
-        compressed_path = compress_database(db_path, output)
-        click.echo(f"Compressed database created: {compressed_path}")
-    except Exception as e:
-        raise click.ClickException(f"Compression failed: {e}")
 
 
 @db_cmd.command("repair-embeddings")

@@ -6,10 +6,8 @@ Provides functionality to:
 - Upload/publish database updates
 - Version management for database files
 - Create "lite" versions without full records for smaller downloads
-- Optional gzip compression for reduced file sizes
 """
 
-import gzip
 import logging
 import os
 import shutil
@@ -25,8 +23,6 @@ DEFAULT_REPO_ID = "Corp-o-Rate-Community/entity-references"
 DEFAULT_DB_FILENAME = "entities-lite.db"  # Lite is the default (smaller download)
 DEFAULT_DB_FULL_FILENAME = "entities.db"
 DEFAULT_DB_LITE_FILENAME = "entities-lite.db"
-DEFAULT_DB_COMPRESSED_FILENAME = "entities.db.gz"
-DEFAULT_DB_LITE_COMPRESSED_FILENAME = "entities-lite.db.gz"
 
 # Local cache directory
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "corp-extractor"
@@ -139,7 +135,7 @@ def upload_database(
         commit_message=commit_message,
     )
 
-    logger.info(f"Database uploaded successfully")
+    logger.info("Database uploaded successfully")
     return result
 
 
@@ -187,6 +183,33 @@ def check_for_updates(
         return True, latest
 
     return latest != current_version, latest
+
+
+def vacuum_database(db_path: str | Path) -> None:
+    """
+    VACUUM the database to reclaim space and optimize it.
+
+    Args:
+        db_path: Path to the database file
+    """
+    db_path = Path(db_path)
+    if not db_path.exists():
+        raise FileNotFoundError(f"Database not found: {db_path}")
+
+    original_size = db_path.stat().st_size
+    logger.info(f"Running VACUUM on {db_path} ({original_size / (1024*1024):.1f}MB)")
+
+    # Use isolation_level=None for autocommit (required for VACUUM)
+    conn = sqlite3.connect(str(db_path), isolation_level=None)
+    try:
+        conn.execute("VACUUM")
+    finally:
+        conn.close()
+
+    new_size = db_path.stat().st_size
+    reduction = (1 - new_size / original_size) * 100
+
+    logger.info(f"After VACUUM: {new_size / (1024*1024):.1f}MB (reduced {reduction:.1f}%)")
 
 
 def create_lite_database(
@@ -248,98 +271,20 @@ def create_lite_database(
     return output_path
 
 
-def compress_database(
-    db_path: str | Path,
-    output_path: Optional[str | Path] = None,
-) -> Path:
-    """
-    Compress a database file using gzip.
-
-    Args:
-        db_path: Path to the database file
-        output_path: Output path for compressed file (default: adds .gz suffix)
-
-    Returns:
-        Path to the compressed file
-    """
-    db_path = Path(db_path)
-    if not db_path.exists():
-        raise FileNotFoundError(f"Database not found: {db_path}")
-
-    if output_path is None:
-        output_path = db_path.with_suffix(db_path.suffix + ".gz")
-    output_path = Path(output_path)
-
-    logger.info(f"Compressing {db_path} to {output_path}")
-
-    with open(db_path, "rb") as f_in:
-        with gzip.open(output_path, "wb", compresslevel=9) as f_out:
-            shutil.copyfileobj(f_in, f_out)
-
-    # Log compression results
-    original_size = db_path.stat().st_size
-    compressed_size = output_path.stat().st_size
-    ratio = (1 - compressed_size / original_size) * 100
-
-    logger.info(f"Original: {original_size / (1024*1024):.1f}MB")
-    logger.info(f"Compressed: {compressed_size / (1024*1024):.1f}MB")
-    logger.info(f"Compression ratio: {ratio:.1f}%")
-
-    return output_path
-
-
-def decompress_database(
-    compressed_path: str | Path,
-    output_path: Optional[str | Path] = None,
-) -> Path:
-    """
-    Decompress a gzipped database file.
-
-    Args:
-        compressed_path: Path to the .gz file
-        output_path: Output path (default: removes .gz suffix)
-
-    Returns:
-        Path to the decompressed file
-    """
-    compressed_path = Path(compressed_path)
-    if not compressed_path.exists():
-        raise FileNotFoundError(f"Compressed file not found: {compressed_path}")
-
-    if output_path is None:
-        if compressed_path.suffix == ".gz":
-            output_path = compressed_path.with_suffix("")
-        else:
-            output_path = compressed_path.with_stem(compressed_path.stem + "-decompressed")
-    output_path = Path(output_path)
-
-    logger.info(f"Decompressing {compressed_path} to {output_path}")
-
-    with gzip.open(compressed_path, "rb") as f_in:
-        with open(output_path, "wb") as f_out:
-            shutil.copyfileobj(f_in, f_out)
-
-    logger.info(f"Decompressed to {output_path}")
-    return output_path
-
-
 def upload_database_with_variants(
     db_path: str | Path,
     repo_id: str = DEFAULT_REPO_ID,
     commit_message: str = "Update entity database",
     token: Optional[str] = None,
     include_lite: bool = True,
-    include_compressed: bool = True,
     include_readme: bool = True,
 ) -> dict[str, str]:
     """
-    Upload entity database with optional lite and compressed variants.
+    Upload entity database with optional lite variant.
 
-    Creates and uploads:
+    First VACUUMs the database, then creates and uploads:
     - entities.db (full database)
     - entities-lite.db (without record data, smaller)
-    - entities.db.gz (compressed full database)
-    - entities-lite.db.gz (compressed lite database)
     - README.md (dataset card from HUGGINGFACE_README.md)
 
     Args:
@@ -348,7 +293,6 @@ def upload_database_with_variants(
         commit_message: Git commit message
         token: HuggingFace API token
         include_lite: Whether to create and upload lite version
-        include_compressed: Whether to create and upload compressed versions
         include_readme: Whether to upload the README.md dataset card
 
     Returns:
@@ -383,6 +327,9 @@ def upload_database_with_variants(
     except Exception as e:
         logger.debug(f"Repo creation note: {e}")
 
+    # VACUUM the database first to optimize it
+    vacuum_database(db_path)
+
     results = {}
 
     # Create temp directory for variants
@@ -398,20 +345,6 @@ def upload_database_with_variants(
             lite_path = temp_path / DEFAULT_DB_LITE_FILENAME
             create_lite_database(db_path, lite_path)
             files_to_upload.append((lite_path, DEFAULT_DB_LITE_FILENAME))
-
-        # Compressed versions
-        if include_compressed:
-            # Compress full database
-            compressed_path = temp_path / DEFAULT_DB_COMPRESSED_FILENAME
-            compress_database(db_path, compressed_path)
-            files_to_upload.append((compressed_path, DEFAULT_DB_COMPRESSED_FILENAME))
-
-            # Compress lite database
-            if include_lite:
-                lite_compressed_path = temp_path / DEFAULT_DB_LITE_COMPRESSED_FILENAME
-                lite_path = temp_path / DEFAULT_DB_LITE_FILENAME
-                compress_database(lite_path, lite_compressed_path)
-                files_to_upload.append((lite_compressed_path, DEFAULT_DB_LITE_COMPRESSED_FILENAME))
 
         # Copy all files to a staging directory for upload_folder
         staging_dir = temp_path / "staging"
@@ -455,7 +388,6 @@ def download_database(
     revision: Optional[str] = None,
     cache_dir: Optional[Path] = None,
     force_download: bool = False,
-    prefer_compressed: bool = True,
 ) -> Path:
     """
     Download entity database from HuggingFace Hub.
@@ -466,10 +398,9 @@ def download_database(
         revision: Git revision (branch, tag, commit) or None for latest
         cache_dir: Local cache directory
         force_download: Force re-download even if cached
-        prefer_compressed: Try to download compressed version first
 
     Returns:
-        Path to the downloaded database file (decompressed if was .gz)
+        Path to the downloaded database file
     """
     try:
         from huggingface_hub import hf_hub_download
@@ -482,34 +413,11 @@ def download_database(
     cache_dir = cache_dir or DEFAULT_CACHE_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Try compressed version first if preferred
-    download_filename = filename
-    if prefer_compressed and not filename.endswith(".gz"):
-        compressed_filename = filename + ".gz"
-        try:
-            logger.info(f"Trying compressed version: {compressed_filename}")
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=compressed_filename,
-                revision=revision,
-                cache_dir=str(cache_dir),
-                force_download=force_download,
-                repo_type="dataset",
-            )
-            # Decompress to final location
-            final_path = cache_dir / filename
-            decompress_database(local_path, final_path)
-            logger.info(f"Database downloaded and decompressed to {final_path}")
-            return final_path
-        except Exception as e:
-            logger.debug(f"Compressed version not available: {e}")
-
-    # Download uncompressed version
     logger.info(f"Downloading entity database from {repo_id}...")
 
     local_path = hf_hub_download(
         repo_id=repo_id,
-        filename=download_filename,
+        filename=filename,
         revision=revision,
         cache_dir=str(cache_dir),
         force_download=force_download,

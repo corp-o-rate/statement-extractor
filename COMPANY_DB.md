@@ -125,7 +125,7 @@ corp-extractor db import-wikidata --all
 
 Available query types: `lei`, `ticker`, `public`, `business`, `organization`, `nonprofit`, `government`
 
-**5. Wikidata People** *(v0.9.0)*
+**5. Wikidata People (SPARQL)** *(v0.9.0)*
 
 ```bash
 # Import notable people (executives by default)
@@ -149,6 +149,50 @@ corp-extractor db import-people --type executive --enrich-dates
 Available person types: `executive`, `politician`, `athlete`, `artist`, `academic`, `scientist`, `journalist`, `entrepreneur`, `activist`
 
 **Note**: Organizations discovered during people import (employers, affiliated orgs) are automatically inserted into the organizations table if they don't already exist. This creates foreign key links via `known_for_org_id`.
+
+**6. Wikidata Dump Import (Recommended for Large Imports)** *(v0.9.1)*
+
+For comprehensive imports that avoid SPARQL timeouts, use the Wikidata JSON dump:
+
+```bash
+# Download and import from Wikidata dump (~100GB)
+# Uses aria2c for fast parallel downloads if available
+corp-extractor db import-wikidata-dump --download --limit 50000
+
+# Import only people
+corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 100000
+
+# Import only organizations
+corp-extractor db import-wikidata-dump --download --orgs --no-people --limit 100000
+
+# Use an existing dump file
+corp-extractor db import-wikidata-dump --dump /path/to/latest-all.json.bz2 --limit 50000
+
+# Disable aria2c (use slower single-connection download)
+corp-extractor db import-wikidata-dump --download --no-aria2 --limit 10000
+```
+
+**Fast download with aria2c:**
+```bash
+# Install aria2c for 10-20x faster downloads (16 parallel connections)
+brew install aria2   # macOS
+apt install aria2    # Ubuntu/Debian
+
+# Or download manually with more connections:
+aria2c -x 32 -s 32 -k 10M \
+  https://dumps.wikimedia.org/wikidatawiki/entities/latest-all.json.bz2 \
+  -d ~/.cache/corp-extractor \
+  -o wikidata-latest-all.json.bz2
+```
+
+**Advantages over SPARQL import:**
+- No timeouts (processes locally)
+- Complete coverage (all notable people/orgs with English Wikipedia articles)
+- Captures people like Andy Burnham via occupation (P106) even if position type is generic
+- Extracts role dates from position qualifiers (P580/P582)
+- Resumable (can restart from same dump file)
+
+**Download location:** `~/.cache/corp-extractor/wikidata-latest-all.json.bz2`
 
 ### Full Build (Recommended)
 
@@ -337,8 +381,9 @@ corp-extractor pipeline "Apple announced record earnings."
 | `db import-gleif` | Import GLEIF LEI data |
 | `db import-sec` | Import SEC Edgar bulk data |
 | `db import-companies-house` | Import UK Companies House data |
-| `db import-wikidata` | Import Wikidata organizations |
-| `db import-people` | Import Wikidata notable people *(v0.9.0)* |
+| `db import-wikidata` | Import Wikidata organizations (SPARQL) |
+| `db import-people` | Import Wikidata notable people (SPARQL) *(v0.9.0)* |
+| `db import-wikidata-dump` | Import from Wikidata JSON dump (recommended) *(v0.9.1)* |
 | `db gleif-info` | Show latest GLEIF file info |
 | `db download` | Download database from HuggingFace (lite by default) |
 | `db download --full` | Download full database with all metadata |
@@ -622,6 +667,11 @@ The GLEIF file is ~1.5GB. Ensure stable internet connection. The file is cached 
 Wikidata's endpoint can be slow. Use `--limit` to reduce query size:
 ```bash
 corp-extractor db import-wikidata --limit 10000
+```
+
+For large imports that avoid timeouts entirely, use the dump-based importer:
+```bash
+corp-extractor db import-wikidata-dump --download --limit 50000
 ```
 
 **Companies House API 401 Unauthorized**

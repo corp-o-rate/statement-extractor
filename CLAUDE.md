@@ -100,6 +100,7 @@ The frontend can connect to the model via three backends (configured by environm
 - RunPod requires `--platform linux/amd64` when building Docker on Mac
 - Model uses bfloat16 on GPU, float32 on CPU
 - Generation stops at `</statements>` tag to prevent runaway output
+- **v0.9.1**: Added Wikidata dump importer (`import-wikidata-dump`) for large imports without SPARQL timeouts. Uses aria2c for fast parallel downloads. Extracts people via occupation (P106) and position dates (P580/P582).
 - **v0.9.0**: Added person database with Wikidata import and person qualification with canonical IDs. People import auto-inserts discovered organizations with `known_for_org_id` FK. New flags: `--skip-existing`, `--enrich-dates`
 - **v0.8.0**: Merged qualification and canonicalization into single stage; added EntityType classification
 - **v0.5.0**: Introduces plugin-based pipeline architecture
@@ -224,6 +225,8 @@ corp-extractor db import-sec --download  # Bulk SEC data (~100K+ filers)
 corp-extractor db import-people --all    # Notable people from Wikidata (v0.9.0)
 corp-extractor db import-people --type executive --skip-existing  # Skip existing records
 corp-extractor db import-people --type executive --enrich-dates   # Fetch role dates (slower)
+corp-extractor db import-wikidata-dump --download --limit 50000   # From Wikidata dump (v0.9.1)
+corp-extractor db import-wikidata-dump --dump /path/to/dump.bz2 --people --no-orgs  # Local dump
 corp-extractor db search "Microsoft"     # Search organizations
 corp-extractor db search-people "Tim Cook"  # Search people (v0.9.0)
 corp-extractor db upload                 # Upload with lite/compressed variants

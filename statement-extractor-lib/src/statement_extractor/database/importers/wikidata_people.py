@@ -40,143 +40,198 @@ WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 
 # =============================================================================
 # BULK QUERIES - Simple, fast queries for initial import (no role/org/dates)
+# Uses rdfs:label instead of SERVICE wikibase:label for better performance
+# Each query targets a single role/occupation for speed
 # =============================================================================
 
-# Bulk query for executives - just get people who held executive positions
-BULK_EXECUTIVE_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
+# Template for position-held queries (P39) - for executives, politicians
+# Matches people who held a position that IS the role, or is an INSTANCE OF the role
+# {role_qid} = single role QID, {seed} = unique seed, {limit} = batch limit
+POSITION_QUERY_TEMPLATE = """
+SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {{
   ?person wdt:P31 wd:Q5 .
-  ?person wdt:P39 ?role .
-  VALUES ?role {
-    wd:Q484876 wd:Q623279 wd:Q1502675 wd:Q935019 wd:Q1057716 wd:Q2140589
-    wd:Q1115042 wd:Q4720025 wd:Q60432825 wd:Q15967139 wd:Q15729310 wd:Q47523568
-    wd:Q258557 wd:Q114863313 wd:Q726114 wd:Q1372944 wd:Q18918145 wd:Q1057569
-    wd:Q24058752 wd:Q3578048 wd:Q476675 wd:Q5441744 wd:Q4188234 wd:Q38844673
-    wd:Q97273203 wd:Q60715311 wd:Q3563879 wd:Q3505845
-  }
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
+  ?person wdt:P39 ?position .
+  {{ ?position wdt:P31 wd:{role_qid} . }} UNION {{ VALUES ?position {{ wd:{role_qid} }} }}
+  ?person rdfs:label ?personLabel FILTER(LANG(?personLabel) = "en") .
+  OPTIONAL {{ ?person wdt:P27 ?country . ?country rdfs:label ?countryLabel FILTER(LANG(?countryLabel) = "en") . }}
+  OPTIONAL {{ ?person schema:description ?description FILTER(LANG(?description) = "en") }}
   ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
+}}
+ORDER BY MD5(CONCAT(STR(?person), "{seed}"))
+LIMIT {limit}
 """
 
-# Bulk query for politicians
-BULK_POLITICIAN_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
+# Template for occupation queries (P106) - for athletes, artists, etc.
+# {occupation_qid} = single occupation QID, {seed} = unique seed, {limit} = batch limit
+OCCUPATION_QUERY_TEMPLATE = """
+SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {{
   ?person wdt:P31 wd:Q5 .
-  ?person wdt:P39 ?role .
-  VALUES ?roleType { wd:Q2285706 wd:Q30461 wd:Q83307 wd:Q4175034 }
-  ?role wdt:P31 ?roleType .
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
+  ?person wdt:P106 wd:{occupation_qid} .
+  ?person rdfs:label ?personLabel FILTER(LANG(?personLabel) = "en") .
+  OPTIONAL {{ ?person wdt:P27 ?country . ?country rdfs:label ?countryLabel FILTER(LANG(?countryLabel) = "en") . }}
+  OPTIONAL {{ ?person schema:description ?description FILTER(LANG(?description) = "en") }}
   ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
+}}
+ORDER BY MD5(CONCAT(STR(?person), "{seed}"))
+LIMIT {limit}
 """
 
-# Bulk query for athletes
-BULK_ATHLETE_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
-  ?person wdt:P31 wd:Q5 .
-  ?person wdt:P106 wd:Q2066131 .
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
-  ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
-"""
-
-# Bulk query for artists
-BULK_ARTIST_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
-  ?person wdt:P31 wd:Q5 .
-  ?person wdt:P106 ?occupation .
-  VALUES ?occupation { wd:Q33999 wd:Q177220 wd:Q639669 wd:Q2526255 wd:Q36180 wd:Q483501 }
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
-  ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
-"""
-
-# Bulk query for academics
-BULK_ACADEMIC_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
-  ?person wdt:P31 wd:Q5 .
-  { ?person wdt:P106 wd:Q121594 . } UNION { ?person wdt:P106 wd:Q3400985 . }
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
-  ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
-"""
-
-# Bulk query for scientists
-BULK_SCIENTIST_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
-  ?person wdt:P31 wd:Q5 .
-  { ?person wdt:P106 wd:Q901 . } UNION { ?person wdt:P106 wd:Q1650915 . }
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
-  ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
-"""
-
-# Bulk query for journalists
-BULK_JOURNALIST_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
-  ?person wdt:P31 wd:Q5 .
-  { ?person wdt:P106 wd:Q1930187 . } UNION { ?person wdt:P106 wd:Q13590141 . }
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
-  ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
-"""
-
-# Bulk query for entrepreneurs
-BULK_ENTREPRENEUR_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
+# Template for founder queries (P112) - for entrepreneurs
+# {seed} = unique seed, {limit} = batch limit
+FOUNDER_QUERY_TEMPLATE = """
+SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {{
   ?person wdt:P31 wd:Q5 .
   ?org wdt:P112 ?person .
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
+  ?person rdfs:label ?personLabel FILTER(LANG(?personLabel) = "en") .
+  OPTIONAL {{ ?person wdt:P27 ?country . ?country rdfs:label ?countryLabel FILTER(LANG(?countryLabel) = "en") . }}
+  OPTIONAL {{ ?person schema:description ?description FILTER(LANG(?description) = "en") }}
   ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT %d
-OFFSET %d
+}}
+ORDER BY MD5(CONCAT(STR(?person), "{seed}"))
+LIMIT {limit}
 """
 
-# Bulk query for activists
-BULK_ACTIVIST_QUERY = """
-SELECT DISTINCT ?person ?personLabel ?countryLabel ?description WHERE {
-  ?person wdt:P31 wd:Q5 .
-  ?person wdt:P106 wd:Q15253558 .
-  OPTIONAL { ?person wdt:P27 ?country . }
-  OPTIONAL { ?person schema:description ?description FILTER(LANG(?description) = "en") }
-  ?article schema:about ?person ; schema:isPartOf <https://en.wikipedia.org/> .
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+# Role QIDs for executives (position held - P39)
+EXECUTIVE_ROLES = [
+    "Q484876",    # CEO
+    "Q623279",    # CFO
+    "Q1502675",   # COO
+    "Q935019",    # CTO
+    "Q1057716",   # CIO
+    "Q2140589",   # CMO
+    "Q1115042",   # chairperson
+    "Q4720025",   # board of directors member
+    "Q60432825",  # chief human resources officer
+    "Q15967139",  # chief compliance officer
+    "Q15729310",  # chief risk officer
+    "Q47523568",  # chief legal officer
+    "Q258557",    # board chair
+    "Q114863313", # chief sustainability officer
+    "Q726114",    # company president
+    "Q1372944",   # managing director
+    "Q18918145",  # chief commercial officer
+    "Q1057569",   # chief strategy officer
+    "Q24058752",  # chief product officer
+    "Q3578048",   # vice president
+    "Q476675",    # business executive (generic)
+    "Q5441744",   # finance director
+    "Q4188234",   # general manager
+    "Q38844673",  # chief data officer
+    "Q97273203",  # chief digital officer
+    "Q60715311",  # chief growth officer
+    "Q3563879",   # treasurer
+    "Q3505845",   # corporate secretary
+]
+
+# Role QIDs for politicians (position held - P39)
+POLITICIAN_ROLES = [
+    "Q30461",     # president
+    "Q14212",     # prime minister
+    "Q83307",     # minister
+    "Q2285706",   # head of government
+    "Q4175034",   # legislator
+    "Q486839",    # member of parliament
+    "Q193391",    # member of national legislature
+    "Q212071",    # mayor
+    "Q382617",    # governor
+    "Q116",       # monarch
+    "Q484529",    # member of congress
+]
+
+# Note: Politicians with generic position types (like "public office") may not be found
+# because querying all public office holders times out. This includes some mayors
+# whose positions are typed as "public office" rather than "mayor".
+
+# Occupation QIDs for athletes (P106)
+ATHLETE_OCCUPATIONS = [
+    "Q2066131",   # athlete
+    "Q937857",    # football player
+    "Q3665646",   # basketball player
+    "Q10871364",  # baseball player
+    "Q19204627",  # ice hockey player
+    "Q10843402",  # tennis player
+    "Q13381376",  # golfer
+    "Q11338576",  # boxer
+    "Q10873124",  # swimmer
+]
+
+# Occupation QIDs for artists (P106)
+ARTIST_OCCUPATIONS = [
+    "Q33999",     # actor
+    "Q177220",    # singer
+    "Q639669",    # musician
+    "Q2526255",   # film director
+    "Q36180",     # writer
+    "Q483501",    # artist
+    "Q488205",    # singer-songwriter
+    "Q753110",    # songwriter
+    "Q2405480",   # voice actor
+    "Q10800557",  # film actor
+]
+
+# Occupation QIDs for academics (P106)
+ACADEMIC_OCCUPATIONS = [
+    "Q121594",    # professor
+    "Q3400985",   # academic
+    "Q1622272",   # university professor
+]
+
+# Occupation QIDs for scientists (P106)
+SCIENTIST_OCCUPATIONS = [
+    "Q901",       # scientist
+    "Q1650915",   # researcher
+    "Q169470",    # physicist
+    "Q593644",    # chemist
+    "Q864503",    # biologist
+    "Q11063",     # astronomer
+]
+
+# Occupation QIDs for journalists (P106)
+JOURNALIST_OCCUPATIONS = [
+    "Q1930187",   # journalist
+    "Q13590141",  # news presenter
+    "Q947873",    # television presenter
+    "Q4263842",   # columnist
+]
+
+# Occupation QIDs for activists (P106)
+ACTIVIST_OCCUPATIONS = [
+    "Q15253558",  # activist
+    "Q11631410",  # human rights activist
+    "Q18939491",  # environmental activist
+]
+
+# Mapping query type to role/occupation lists and query template type
+# Each entry can have multiple query groups to combine different approaches
+QUERY_TYPE_CONFIG: dict[str, list[dict]] = {
+    "executive": [
+        {"template": "position", "items": EXECUTIVE_ROLES},
+    ],
+    "politician": [
+        {"template": "position", "items": POLITICIAN_ROLES},
+    ],
+    "athlete": [
+        {"template": "occupation", "items": ATHLETE_OCCUPATIONS},
+    ],
+    "artist": [
+        {"template": "occupation", "items": ARTIST_OCCUPATIONS},
+    ],
+    "academic": [
+        {"template": "occupation", "items": ACADEMIC_OCCUPATIONS},
+    ],
+    "scientist": [
+        {"template": "occupation", "items": SCIENTIST_OCCUPATIONS},
+    ],
+    "journalist": [
+        {"template": "occupation", "items": JOURNALIST_OCCUPATIONS},
+    ],
+    "activist": [
+        {"template": "occupation", "items": ACTIVIST_OCCUPATIONS},
+    ],
+    "entrepreneur": [
+        {"template": "founder", "items": []},  # No items, uses special template
+    ],
 }
-LIMIT %d
-OFFSET %d
-"""
 
 # Mapping query type to PersonType
 QUERY_TYPE_TO_PERSON_TYPE: dict[str, PersonType] = {
@@ -189,19 +244,6 @@ QUERY_TYPE_TO_PERSON_TYPE: dict[str, PersonType] = {
     "journalist": PersonType.JOURNALIST,
     "entrepreneur": PersonType.ENTREPRENEUR,
     "activist": PersonType.ACTIVIST,
-}
-
-# Mapping query type to bulk SPARQL query template
-BULK_QUERY_TYPES: dict[str, str] = {
-    "executive": BULK_EXECUTIVE_QUERY,
-    "politician": BULK_POLITICIAN_QUERY,
-    "athlete": BULK_ATHLETE_QUERY,
-    "artist": BULK_ARTIST_QUERY,
-    "academic": BULK_ACADEMIC_QUERY,
-    "scientist": BULK_SCIENTIST_QUERY,
-    "journalist": BULK_JOURNALIST_QUERY,
-    "entrepreneur": BULK_ENTREPRENEUR_QUERY,
-    "activist": BULK_ACTIVIST_QUERY,
 }
 
 
@@ -226,7 +268,7 @@ class WikidataPeopleImporter:
 
     def __init__(
         self,
-        batch_size: int = 500,
+        batch_size: int = 5000,
         delay_seconds: float = 2.0,
         timeout: int = 120,
         max_retries: int = 3,
@@ -236,7 +278,7 @@ class WikidataPeopleImporter:
         Initialize the Wikidata people importer.
 
         Args:
-            batch_size: Number of records to fetch per SPARQL query (default 500)
+            batch_size: Number of records to fetch per SPARQL query (default 5000)
             delay_seconds: Delay between requests to be polite to the endpoint
             timeout: HTTP timeout in seconds (default 120)
             max_retries: Maximum retries per batch on timeout (default 3)
@@ -255,6 +297,7 @@ class WikidataPeopleImporter:
         limit: Optional[int] = None,
         query_type: str = "executive",
         import_all: bool = False,
+        convergence_threshold: int = 5,
     ) -> Iterator[PersonRecord]:
         """
         Import person records from Wikidata via SPARQL (bulk fetch phase).
@@ -262,10 +305,14 @@ class WikidataPeopleImporter:
         This performs the fast bulk import with minimal data (QID, name, country).
         Use enrich_people_batch() afterwards to add role/org/dates.
 
+        Iterates through each role/occupation individually for faster queries,
+        using random sampling with convergence detection per role.
+
         Args:
             limit: Optional limit on total records
             query_type: Which query to use (executive, politician, athlete, etc.)
             import_all: If True, run all query types sequentially
+            convergence_threshold: Stop after this many consecutive batches with no new records per role
 
         Yields:
             PersonRecord for each person (without role/org - use enrich to add)
@@ -274,85 +321,180 @@ class WikidataPeopleImporter:
             yield from self._import_all_types(limit)
             return
 
-        if query_type not in BULK_QUERY_TYPES:
-            raise ValueError(f"Unknown query type: {query_type}. Use one of: {list(BULK_QUERY_TYPES.keys())}")
+        if query_type not in QUERY_TYPE_CONFIG:
+            raise ValueError(f"Unknown query type: {query_type}. Use one of: {list(QUERY_TYPE_CONFIG.keys())}")
 
-        query_template = BULK_QUERY_TYPES[query_type]
+        config_groups = QUERY_TYPE_CONFIG[query_type]
         person_type = QUERY_TYPE_TO_PERSON_TYPE.get(query_type, PersonType.UNKNOWN)
+
         logger.info(f"Starting Wikidata bulk import (query_type={query_type}, person_type={person_type.value})...")
 
-        offset = 0
         total_count = 0
-        # Track seen QIDs to deduplicate
+        # Track seen QIDs to deduplicate across all roles
         seen_qids: set[str] = set()
-        # Current batch size (may be reduced on timeouts)
+
+        # Iterate through each config group (e.g., position queries + occupation queries)
+        for config in config_groups:
+            if limit and total_count >= limit:
+                break
+
+            template_type = config["template"]
+            items = config["items"]
+
+            # For founder template, run a single query
+            if template_type == "founder":
+                for record in self._import_single_template(
+                    template=FOUNDER_QUERY_TEMPLATE,
+                    template_params={},
+                    person_type=person_type,
+                    seen_qids=seen_qids,
+                    limit=(limit - total_count) if limit else None,
+                    convergence_threshold=convergence_threshold,
+                    role_name="founder",
+                ):
+                    total_count += 1
+                    yield record
+                continue
+
+            # Select the right template
+            if template_type == "position":
+                template = POSITION_QUERY_TEMPLATE
+                param_name = "role_qid"
+            else:  # occupation
+                template = OCCUPATION_QUERY_TEMPLATE
+                param_name = "occupation_qid"
+
+            # Iterate through each role/occupation in this group
+            for item_qid in items:
+                if limit and total_count >= limit:
+                    break
+
+                remaining = (limit - total_count) if limit else None
+                role_count = 0
+
+                for record in self._import_single_template(
+                    template=template,
+                    template_params={param_name: item_qid},
+                    person_type=person_type,
+                    seen_qids=seen_qids,
+                    limit=remaining,
+                    convergence_threshold=convergence_threshold,
+                    role_name=item_qid,
+                ):
+                    role_count += 1
+                    total_count += 1
+                    yield record
+
+                logger.info(f"Role {item_qid}: {role_count} new (total: {total_count})")
+
+        logger.info(f"Completed Wikidata bulk import: {total_count} records (use enrich to add role/org)")
+
+    def _import_single_template(
+        self,
+        template: str,
+        template_params: dict[str, str],
+        person_type: PersonType,
+        seen_qids: set[str],
+        limit: Optional[int],
+        convergence_threshold: int,
+        role_name: str,
+    ) -> Iterator[PersonRecord]:
+        """
+        Import from a single role/occupation using random sampling with convergence.
+
+        Args:
+            template: SPARQL query template
+            template_params: Parameters to format into template (role_qid or occupation_qid)
+            person_type: PersonType to assign to records
+            seen_qids: Set of already-seen QIDs (shared across roles)
+            limit: Optional limit on records from this role
+            convergence_threshold: Stop after this many consecutive empty batches
+            role_name: Name for logging
+
+        Yields:
+            PersonRecord for each new person found
+        """
+        batch_num = 0
+        total_count = 0
         current_batch_size = self._batch_size
+        consecutive_empty_batches = 0
+
+        logger.info(f"Querying role {role_name}...")
 
         while True:
             if limit and total_count >= limit:
                 break
 
+            batch_num += 1
             batch_limit = min(current_batch_size, (limit - total_count) if limit else current_batch_size)
 
-            logger.info(f"Fetching Wikidata batch at offset {offset} (batch_size={batch_limit})...")
+            # Generate unique seed for this batch
+            batch_seed = f"{role_name}_{batch_num}_{int(time.time() * 1000)}"
 
-            # Retry with smaller batch sizes on timeout
+            # Build query
+            query = template.format(
+                **template_params,
+                seed=batch_seed,
+                limit=batch_limit,
+            )
+
+            # Execute with retries
             results = None
             retries = 0
             retry_batch_size = batch_limit
 
             while retries <= self._max_retries:
                 try:
-                    query = query_template % (retry_batch_size, offset)
+                    # Rebuild query with potentially smaller batch size
+                    if retry_batch_size != batch_limit:
+                        query = template.format(
+                            **template_params,
+                            seed=batch_seed,
+                            limit=retry_batch_size,
+                        )
                     results = self._execute_sparql(query)
-                    # Success - keep the reduced batch size for future requests
                     if retry_batch_size < current_batch_size:
                         current_batch_size = retry_batch_size
-                        logger.info(f"Batch succeeded, continuing with batch_size={current_batch_size}")
                     break
                 except Exception as e:
                     is_timeout = "timeout" in str(e).lower() or "504" in str(e) or "503" in str(e)
                     if is_timeout and retry_batch_size > self._min_batch_size:
                         retries += 1
                         retry_batch_size = max(retry_batch_size // 2, self._min_batch_size)
-                        wait_time = self._delay * (2 ** retries)  # Exponential backoff
+                        wait_time = self._delay * (2 ** retries)
                         logger.warning(
-                            f"Timeout at offset {offset}, retry {retries}/{self._max_retries} "
+                            f"Timeout on {role_name} batch #{batch_num}, retry {retries}/{self._max_retries} "
                             f"with batch_size={retry_batch_size} after {wait_time:.1f}s wait"
                         )
                         time.sleep(wait_time)
                     else:
-                        logger.error(f"SPARQL query failed at offset {offset}: {e}")
+                        logger.error(f"SPARQL query failed on {role_name} batch #{batch_num}: {e}")
                         break
 
             if results is None:
-                logger.error(f"Giving up on offset {offset} after {retries} retries")
+                logger.warning(f"Giving up on {role_name} after {retries} retries")
                 break
 
             bindings = results.get("results", {}).get("bindings", [])
 
             if not bindings:
-                logger.info("No more results from Wikidata")
-                break
+                consecutive_empty_batches += 1
+                if consecutive_empty_batches >= convergence_threshold:
+                    logger.debug(f"Role {role_name}: convergence after {batch_num} batches")
+                    break
+                continue
 
             batch_count = 0
-            skipped_count = 0
             for binding in bindings:
                 if limit and total_count >= limit:
                     break
 
-                record, skip_reason = self._parse_bulk_binding(
-                    binding, person_type=person_type
-                )
+                record, skip_reason = self._parse_bulk_binding(binding, person_type=person_type)
                 if record is None:
-                    skipped_count += 1
-                    if skip_reason:
-                        logger.debug(f"Skipped: {skip_reason}")
                     continue
 
-                # Deduplicate by QID
+                # Deduplicate
                 if record.source_id in seen_qids:
-                    skipped_count += 1
                     continue
 
                 seen_qids.add(record.source_id)
@@ -360,21 +502,18 @@ class WikidataPeopleImporter:
                 batch_count += 1
                 yield record
 
-            logger.info(
-                f"Processed {batch_count} people, skipped {skipped_count} (total: {total_count})"
-            )
+            # Check convergence
+            if batch_count == 0:
+                consecutive_empty_batches += 1
+                if consecutive_empty_batches >= convergence_threshold:
+                    logger.debug(f"Role {role_name}: convergence after {batch_num} batches")
+                    break
+            else:
+                consecutive_empty_batches = 0
 
-            if len(bindings) < retry_batch_size:
-                # Last batch
-                break
-
-            offset += retry_batch_size
-
-            # Be polite to the endpoint
+            # Rate limit
             if self._delay > 0:
                 time.sleep(self._delay)
-
-        logger.info(f"Completed Wikidata bulk import: {total_count} records (use enrich to add role/org)")
 
     def _import_all_types(self, limit: Optional[int]) -> Iterator[PersonRecord]:
         """Import from all query types sequentially, deduplicating across types."""
@@ -383,10 +522,10 @@ class WikidataPeopleImporter:
         total_count = 0
 
         # Calculate per-type limits if a total limit is set
-        num_types = len(BULK_QUERY_TYPES)
+        num_types = len(QUERY_TYPE_CONFIG)
         per_type_limit = limit // num_types if limit else None
 
-        for query_type in BULK_QUERY_TYPES:
+        for query_type in QUERY_TYPE_CONFIG:
             logger.info(f"=== Importing people: {query_type} ===")
             type_count = 0
             skipped_count = 0
@@ -748,14 +887,15 @@ class WikidataPeopleImporter:
             Tuple of (from_date, to_date) in ISO format, or (None, None) if not found
         """
         # Query for position dates for this specific person
+        # Uses rdfs:label instead of SERVICE wikibase:label for better performance
         query = """
         SELECT ?roleLabel ?orgLabel ?startDate ?endDate WHERE {
           wd:%s p:P39 ?positionStatement .
           ?positionStatement ps:P39 ?role .
-          OPTIONAL { ?positionStatement pq:P642 ?org }
+          ?role rdfs:label ?roleLabel FILTER(LANG(?roleLabel) = "en") .
+          OPTIONAL { ?positionStatement pq:P642 ?org . ?org rdfs:label ?orgLabel FILTER(LANG(?orgLabel) = "en") . }
           OPTIONAL { ?positionStatement pq:P580 ?startDate }
           OPTIONAL { ?positionStatement pq:P582 ?endDate }
-          SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
         }
         LIMIT 50
         """ % person_qid
@@ -851,14 +991,15 @@ class WikidataPeopleImporter:
             Empty strings/None if not found
         """
         # Query for position held (P39) with org qualifier and dates
+        # Uses rdfs:label instead of SERVICE wikibase:label for better performance
         query = """
         SELECT ?roleLabel ?org ?orgLabel ?startDate ?endDate WHERE {
           wd:%s p:P39 ?stmt .
           ?stmt ps:P39 ?role .
-          OPTIONAL { ?stmt pq:P642 ?org . }
+          ?role rdfs:label ?roleLabel FILTER(LANG(?roleLabel) = "en") .
+          OPTIONAL { ?stmt pq:P642 ?org . ?org rdfs:label ?orgLabel FILTER(LANG(?orgLabel) = "en") . }
           OPTIONAL { ?stmt pq:P580 ?startDate . }
           OPTIONAL { ?stmt pq:P582 ?endDate . }
-          SERVICE wikibase:label { bd:serviceParam wikibase:language "en,mul". }
         }
         LIMIT 5
         """ % person_qid

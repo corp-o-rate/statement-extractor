@@ -92,19 +92,26 @@ for stmt in ctx.labeled_statements:
 
 See [statement-extractor-lib/README.md](statement-extractor-lib/README.md) for full pipeline documentation.
 
-### Entity Database (v0.6.0)
+### Entity Database (v0.6.0+)
 
-Build an entity embedding database for fast organization qualification:
+Build an entity embedding database for fast organization and person qualification:
 
 ```bash
 # Import from authoritative sources
 corp-extractor db import-gleif --download      # 3.2M global entities (LEI)
 corp-extractor db import-sec --download        # 100K+ US SEC filers (CIK)
 corp-extractor db import-companies-house --download  # 5M UK companies
-corp-extractor db import-wikidata --limit 50000  # Notable organizations
+corp-extractor db import-wikidata --limit 50000  # Notable organizations (SPARQL)
+
+# Import notable people (v0.9.0)
+corp-extractor db import-people --all --limit 10000  # SPARQL-based
+
+# Import from Wikidata dump (v0.9.1) - avoids SPARQL timeouts
+corp-extractor db import-wikidata-dump --download --limit 50000  # Uses ~100GB dump
 
 # Search
 corp-extractor db search "Microsoft"
+corp-extractor db search-people "Tim Cook"
 
 # Download pre-built database from HuggingFace
 corp-extractor db download

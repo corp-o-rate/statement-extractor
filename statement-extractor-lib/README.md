@@ -349,7 +349,8 @@ v0.6.0 introduces an **entity embedding database** for fast entity qualification
 
 | Source | Records | Identifier | PersonType Classification |
 |--------|---------|------------|--------------------------|
-| Wikidata | Variable | Wikidata QID | executive, politician, athlete, artist, academic, scientist, journalist, entrepreneur, activist |
+| Wikidata (SPARQL) | Variable | Wikidata QID | executive, politician, athlete, artist, academic, scientist, journalist, entrepreneur, activist |
+| Wikidata (Dump) | All humans with enwiki | Wikidata QID | Classified from positions (P39) and occupations (P106) |
 
 **Date Fields**: All importers now include `from_date` and `to_date` where available:
 - **GLEIF**: LEI registration date
@@ -385,6 +386,10 @@ corp-extractor db import-people --type executive --limit 5000
 corp-extractor db import-people --all --limit 10000  # All person types
 corp-extractor db import-people --type executive --skip-existing  # Skip existing records
 corp-extractor db import-people --type executive --enrich-dates   # Fetch role start/end dates
+
+# Import from Wikidata dump (v0.9.1) - avoids SPARQL timeouts
+corp-extractor db import-wikidata-dump --download --limit 50000   # Downloads ~100GB dump
+corp-extractor db import-wikidata-dump --dump /path/to/dump.bz2 --people --no-orgs  # Local dump
 
 # Check status
 corp-extractor db status

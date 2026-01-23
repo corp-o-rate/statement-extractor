@@ -39,6 +39,8 @@ uv run corp-extractor db import-people --type executive --limit 5000  # Import n
 uv run corp-extractor db import-people --all --limit 10000            # All person types (v0.9.0)
 uv run corp-extractor db import-people --type executive --skip-existing  # Skip existing records
 uv run corp-extractor db import-people --type executive --enrich-dates   # Fetch role start/end dates (slower)
+uv run corp-extractor db import-wikidata-dump --download --limit 50000   # Import from Wikidata dump (v0.9.1)
+uv run corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --people --no-orgs  # From local dump
 uv run corp-extractor db upload              # Upload with lite/compressed variants
 uv run corp-extractor db download            # Download lite version (default)
 uv run corp-extractor db download --full     # Download full version
@@ -112,6 +114,7 @@ The `database/` module provides organization and person embedding storage and se
   - `companies_house.py` - UK Companies House bulk data (~5M records) - `from_date`/`to_date` from incorporation/dissolution
   - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - `from_date`/`to_date` from P571/P576
   - `wikidata_people.py` - Wikidata SPARQL queries for notable people - `from_date`/`to_date` from position qualifiers
+  - `wikidata_dump.py` - Wikidata JSON dump importer (~100GB) for people and orgs without SPARQL timeouts (v0.9.1)
 
 **EntityType Classification:**
 Each organization record is classified with an `entity_type` field:
