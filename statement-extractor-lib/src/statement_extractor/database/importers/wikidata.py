@@ -48,10 +48,12 @@ WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 # Simpler SPARQL query - directly query for companies with LEI codes (fastest, most reliable)
 # Avoids property path wildcards (wdt:P279*) which timeout on Wikidata
 LEI_COMPANY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P1278 ?lei.
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -60,10 +62,12 @@ OFFSET %d
 
 # Query for companies with stock exchange listing (has ticker)
 TICKER_COMPANY_QUERY = """
-SELECT ?company ?companyLabel ?ticker ?exchange ?exchangeLabel ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?ticker ?exchange ?exchangeLabel ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P414 ?exchange.
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -72,11 +76,13 @@ OFFSET %d
 
 # Query for direct instances of public company (Q891723) - no subclass traversal
 PUBLIC_COMPANY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q891723.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -85,11 +91,13 @@ OFFSET %d
 
 # Query for direct instances of business enterprise (Q4830453) - no subclass traversal
 BUSINESS_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q4830453.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -98,11 +106,13 @@ OFFSET %d
 
 # Query for direct instances of organization (Q43229) - includes NGOs, gov agencies, etc.
 ORGANIZATION_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q43229.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -111,11 +121,13 @@ OFFSET %d
 
 # Query for non-profit organizations (Q163740)
 NONPROFIT_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q163740.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -124,11 +136,13 @@ OFFSET %d
 
 # Query for government agencies (Q327333)
 GOV_AGENCY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q327333.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -137,11 +151,13 @@ OFFSET %d
 
 # Query for enterprises (Q6881511) - broader than business enterprise
 ENTERPRISE_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q6881511.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -150,11 +166,13 @@ OFFSET %d
 
 # Query for corporations (Q167037)
 CORPORATION_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q167037.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -163,11 +181,13 @@ OFFSET %d
 
 # Query for subsidiaries (Q658255)
 SUBSIDIARY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q658255.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -176,11 +196,13 @@ OFFSET %d
 
 # Query for banks (Q22687)
 BANK_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q22687.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -189,11 +211,13 @@ OFFSET %d
 
 # Query for insurance companies (Q6881511)
 INSURANCE_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q1145276.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -202,11 +226,13 @@ OFFSET %d
 
 # Query for airlines (Q46970)
 AIRLINE_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q46970.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -215,11 +241,13 @@ OFFSET %d
 
 # Query for law firms (Q613142)
 LAW_FIRM_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q613142.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -228,11 +256,13 @@ OFFSET %d
 
 # Query for educational institutions (Q2385804)
 EDUCATIONAL_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q2385804.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -241,11 +271,13 @@ OFFSET %d
 
 # Query for universities (Q3918)
 UNIVERSITY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q3918.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -254,11 +286,13 @@ OFFSET %d
 
 # Query for research institutes (Q31855)
 RESEARCH_INSTITUTE_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q31855.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -267,11 +301,13 @@ OFFSET %d
 
 # Query for political parties (Q7278)
 POLITICAL_PARTY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q7278.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -280,11 +316,13 @@ OFFSET %d
 
 # Query for trade unions (Q178790)
 TRADE_UNION_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q178790.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -293,11 +331,13 @@ OFFSET %d
 
 # Query for NGOs (Q79913)
 NGO_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q79913.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -306,11 +346,13 @@ OFFSET %d
 
 # Query for foundations (Q157031)
 FOUNDATION_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q157031.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -319,11 +361,13 @@ OFFSET %d
 
 # Query for international organizations (Q484652)
 INTL_ORG_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q484652.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -332,11 +376,13 @@ OFFSET %d
 
 # Query for sports teams/clubs (Q476028)
 SPORTS_CLUB_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q476028.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -345,11 +391,13 @@ OFFSET %d
 
 # Query for hospitals (Q16917)
 HOSPITAL_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q16917.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -358,11 +406,13 @@ OFFSET %d
 
 # Query for record labels (Q18127)
 RECORD_LABEL_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q18127.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -371,11 +421,13 @@ OFFSET %d
 
 # Query for film studios (Q1366047)
 FILM_STUDIO_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q1366047.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -384,11 +436,13 @@ OFFSET %d
 
 # Query for video game companies (Q1137109)
 VIDEO_GAME_COMPANY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q1137109.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -397,11 +451,13 @@ OFFSET %d
 
 # Query for pharmaceutical companies (Q507619)
 PHARMA_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q507619.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -410,11 +466,13 @@ OFFSET %d
 
 # Query for tech companies (Q2979960)
 TECH_COMPANY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q2979960.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -423,11 +481,13 @@ OFFSET %d
 
 # Query for retailers (Q1631111)
 RETAILER_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q1631111.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -436,11 +496,13 @@ OFFSET %d
 
 # Query for manufacturers (Q187652)
 MANUFACTURER_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q187652.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -449,11 +511,13 @@ OFFSET %d
 
 # Query for conglomerates (Q206652)
 CONGLOMERATE_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q206652.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -462,11 +526,13 @@ OFFSET %d
 
 # Query for investment companies (Q380649)
 INVESTMENT_COMPANY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P31 wd:Q380649.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -475,11 +541,13 @@ OFFSET %d
 
 # Property-based query: entities with a CEO (P169) - likely companies
 HAS_CEO_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P169 ?ceo.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -488,11 +556,13 @@ OFFSET %d
 
 # Property-based query: entities with subsidiaries (P355) - parent companies
 HAS_SUBSIDIARIES_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P355 ?subsidiary.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -501,11 +571,13 @@ OFFSET %d
 
 # Property-based query: entities owned by another entity (P127) - subsidiaries/companies
 OWNED_BY_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P127 ?owner.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -514,11 +586,13 @@ OFFSET %d
 
 # Property-based query: entities with legal form (P1454) - structured companies
 HAS_LEGAL_FORM_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P1454 ?legalForm.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -527,11 +601,13 @@ OFFSET %d
 
 # Property-based query: entities with employees count (P1128) - organizations
 HAS_EMPLOYEES_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P1128 ?employees.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -540,11 +616,13 @@ OFFSET %d
 
 # Property-based query: entities with revenue (P2139) - companies
 HAS_REVENUE_QUERY = """
-SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel WHERE {
+SELECT ?company ?companyLabel ?lei ?ticker ?country ?countryLabel ?inception ?dissolution WHERE {
   ?company wdt:P2139 ?revenue.
   OPTIONAL { ?company wdt:P1278 ?lei. }
   OPTIONAL { ?company wdt:P249 ?ticker. }
   OPTIONAL { ?company wdt:P17 ?country. }
+  OPTIONAL { ?company wdt:P571 ?inception. }
+  OPTIONAL { ?company wdt:P576 ?dissolution. }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
 }
 LIMIT %d
@@ -877,6 +955,27 @@ class WikidataImporter:
 
         logger.info(f"Completed all query types: {total_count} total records")
 
+    @staticmethod
+    def _parse_wikidata_date(date_str: Optional[str]) -> Optional[str]:
+        """
+        Parse a Wikidata date string into ISO format (YYYY-MM-DD).
+
+        Wikidata returns dates like "2020-01-15T00:00:00Z" or just "2020".
+        Returns None if the date cannot be parsed.
+        """
+        if not date_str:
+            return None
+        # Handle ISO datetime format (e.g., "2020-01-15T00:00:00Z")
+        if "T" in date_str:
+            return date_str.split("T")[0]
+        # Handle year-only format (e.g., "2020")
+        if len(date_str) == 4 and date_str.isdigit():
+            return f"{date_str}-01-01"
+        # Return as-is if it looks like a date
+        if len(date_str) >= 4:
+            return date_str[:10]  # Take first 10 chars (YYYY-MM-DD)
+        return None
+
     def _execute_sparql(self, query: str) -> dict[str, Any]:
         """Execute a SPARQL query against Wikidata."""
         params = urllib.parse.urlencode({
@@ -924,10 +1023,15 @@ class WikidataImporter:
             ticker = binding.get("ticker", {}).get("value")
             exchange_label = binding.get("exchangeLabel", {}).get("value")
             country_label = binding.get("countryLabel", {}).get("value")
-            inception = binding.get("inception", {}).get("value")
+            inception_raw = binding.get("inception", {}).get("value")
+            dissolution_raw = binding.get("dissolution", {}).get("value")
+
+            # Parse dates (Wikidata returns ISO datetime, extract date part)
+            from_date = WikidataImporter._parse_wikidata_date(inception_raw)
+            to_date = WikidataImporter._parse_wikidata_date(dissolution_raw)
 
             # Build record data
-            record_data = {
+            record_data: dict[str, Any] = {
                 "wikidata_id": wikidata_id,
                 "label": label,
             }
@@ -939,8 +1043,10 @@ class WikidataImporter:
                 record_data["exchange"] = exchange_label
             if country_label:
                 record_data["country"] = country_label
-            if inception:
-                record_data["inception"] = inception
+            if from_date:
+                record_data["inception"] = from_date
+            if to_date:
+                record_data["dissolution"] = to_date
 
             return CompanyRecord(
                 name=label.strip(),
@@ -948,6 +1054,8 @@ class WikidataImporter:
                 source_id=wikidata_id,
                 region=country_label or "",
                 entity_type=entity_type,
+                from_date=from_date,
+                to_date=to_date,
                 record=record_data,
             )
 

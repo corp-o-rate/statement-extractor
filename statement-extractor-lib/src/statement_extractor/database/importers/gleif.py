@@ -269,6 +269,15 @@ class GleifImporter:
                     if name_elem.text:
                         other_names.append(name_elem.text)
 
+            # Get registration dates from Registration element
+            registration_elem = find_elem(lei_record, 'Registration')
+            initial_reg_date = None
+            if registration_elem is not None:
+                initial_reg_date = find_text(registration_elem, 'InitialRegistrationDate')
+                # Extract just the date part (YYYY-MM-DD) from ISO datetime
+                if initial_reg_date and "T" in initial_reg_date:
+                    initial_reg_date = initial_reg_date.split("T")[0]
+
             # Build record
             name = legal_name.strip()
             record_data = {
@@ -281,6 +290,8 @@ class GleifImporter:
                 "entity_category": entity_category,
                 "other_names": other_names,
             }
+            if initial_reg_date:
+                record_data["initial_registration_date"] = initial_reg_date
 
             return CompanyRecord(
                 name=name,
@@ -288,6 +299,7 @@ class GleifImporter:
                 source_id=lei,
                 region=country,
                 entity_type=entity_type,
+                from_date=initial_reg_date,
                 record=record_data,
             )
 
@@ -362,6 +374,14 @@ class GleifImporter:
                 country = ""
                 city = ""
 
+            # Get registration dates
+            initial_reg_date = registration.get("initialRegistrationDate")
+            if not initial_reg_date:
+                initial_reg_date = registration.get("InitialRegistrationDate")
+            # Extract just the date part (YYYY-MM-DD) from ISO datetime
+            if initial_reg_date and "T" in initial_reg_date:
+                initial_reg_date = initial_reg_date.split("T")[0]
+
             # Build record with relevant data
             record_data = {
                 "lei": lei,
@@ -373,6 +393,8 @@ class GleifImporter:
                 "entity_category": entity_category,
                 "other_names": other_names,
             }
+            if initial_reg_date:
+                record_data["initial_registration_date"] = initial_reg_date
 
             return CompanyRecord(
                 name=name,
@@ -380,6 +402,7 @@ class GleifImporter:
                 source_id=lei,
                 region=country,
                 entity_type=entity_type,
+                from_date=initial_reg_date,
                 record=record_data,
             )
 

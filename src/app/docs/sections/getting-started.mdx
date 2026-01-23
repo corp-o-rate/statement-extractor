@@ -59,11 +59,15 @@ for stmt in statements:
     print(f"  confidence: {stmt.confidence_score:.2f}")
 ```
 
-**v0.5.0 features**: 6-stage pipeline with entity qualification, canonicalization, labeling, and taxonomy classification. GLiNER2 entity recognition, entity-based scoring, plugin architecture.
+**v0.5.0 features**: Plugin-based pipeline architecture with entity qualification, labeling, and taxonomy classification. GLiNER2 entity recognition, entity-based scoring.
 
 **v0.6.0 features**: Entity embedding database with ~100K+ SEC filers, ~3M GLEIF records, ~5M UK organizations for fast entity qualification.
 
 **v0.7.0 features**: Document processing for files, URLs, and PDFs with automatic chunking, deduplication, and citation tracking.
+
+**v0.8.0 features**: Merged qualification and canonicalization into single stage. EntityType classification for organizations (business, nonprofit, government, etc.).
+
+**v0.9.0 features**: Person database with Wikidata import for notable people (executives, politicians, athletes, artists). PersonQualifier for canonical person identification with role/org context.
 
 ### Pipeline Quick Start (v0.5.0)
 

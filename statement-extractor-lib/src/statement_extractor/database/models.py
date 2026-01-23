@@ -77,6 +77,8 @@ class CompanyRecord(BaseModel):
     source_id: str = Field(..., description="Unique identifier from source (LEI, CIK, CH number)")
     region: str = Field(default="", description="Geographic region/country (e.g., 'UK', 'US', 'DE')")
     entity_type: EntityType = Field(default=EntityType.UNKNOWN, description="Organization type classification")
+    from_date: Optional[str] = Field(default=None, description="Start date (ISO format YYYY-MM-DD)")
+    to_date: Optional[str] = Field(default=None, description="End date (ISO format YYYY-MM-DD)")
     record: dict[str, Any] = Field(default_factory=dict, description="Original record from source")
 
     @property
@@ -92,6 +94,8 @@ class CompanyRecord(BaseModel):
             "source_id": self.source_id,
             "region": self.region,
             "entity_type": self.entity_type.value,
+            "from_date": self.from_date or "",
+            "to_date": self.to_date or "",
             "record": self.record,
         }
 
@@ -111,8 +115,11 @@ class PersonRecord(BaseModel):
     source_id: str = Field(..., description="Unique identifier from source (Wikidata QID)")
     country: str = Field(default="", description="Country code or name (e.g., 'US', 'Germany')")
     person_type: PersonType = Field(default=PersonType.UNKNOWN, description="Person type classification")
-    known_for_role: str = Field(default="", description="Primary role from Wikipedia (e.g., 'CEO', 'President')")
-    known_for_org: str = Field(default="", description="Primary org from Wikipedia (e.g., 'Apple Inc', 'Tesla')")
+    known_for_role: str = Field(default="", description="Primary role (e.g., 'CEO', 'President')")
+    known_for_org: str = Field(default="", description="Primary org (e.g., 'Apple Inc', 'Tesla')")
+    known_for_org_id: Optional[int] = Field(default=None, description="Foreign key to organizations table")
+    from_date: Optional[str] = Field(default=None, description="Start date of role (ISO format YYYY-MM-DD)")
+    to_date: Optional[str] = Field(default=None, description="End date of role (ISO format YYYY-MM-DD)")
     record: dict[str, Any] = Field(default_factory=dict, description="Original record from source")
 
     @property
@@ -130,6 +137,9 @@ class PersonRecord(BaseModel):
             "person_type": self.person_type.value,
             "known_for_role": self.known_for_role,
             "known_for_org": self.known_for_org,
+            "known_for_org_id": self.known_for_org_id,  # Can be None
+            "from_date": self.from_date or "",
+            "to_date": self.to_date or "",
             "record": self.record,
         }
 

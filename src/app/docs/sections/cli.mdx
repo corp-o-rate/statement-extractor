@@ -606,6 +606,36 @@ corp-extractor db compress entities.db            # Compress with gzip
   </tbody>
 </table>
 
+#### Person Import Options
+
+<table>
+  <thead>
+    <tr>
+      <th>Option</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>--skip-existing</code></td>
+      <td>Skip existing records instead of updating them</td>
+    </tr>
+    <tr>
+      <td><code>--enrich-dates</code></td>
+      <td>Query individual records for start/end dates (slower)</td>
+    </tr>
+  </tbody>
+</table>
+
+**Note:** Use `-v` (verbose) to see detailed logs of skipped records during import:
+```bash
+corp-extractor db import-people --type executive -v
+```
+
+People records include `from_date` and `to_date` for role tenure. The same person can have multiple records with different role/org combinations (unique on `source_id + role + org`).
+
+Organizations discovered during people import (employers, affiliated orgs) are automatically inserted into the organizations table if they don't already exist. This creates foreign key links via `known_for_org_id`.
+
 #### Database Variants
 
 <table>

@@ -342,13 +342,18 @@ class CompaniesHouseImporter:
             raw_company_type = item.get("company_type", "")
             entity_type = _get_entity_type_from_company_type(raw_company_type)
 
+            # Get dates
+            date_of_creation = item.get("date_of_creation")
+            date_of_cessation = item.get("date_of_cessation")  # For dissolved companies
+
             # Build record
             record_data = {
                 "company_number": company_number,
                 "title": title,
                 "company_status": company_status,
                 "company_type": raw_company_type,
-                "date_of_creation": item.get("date_of_creation"),
+                "date_of_creation": date_of_creation,
+                "date_of_cessation": date_of_cessation,
                 "locality": locality,
                 "region": region,
                 "country": country,
@@ -360,6 +365,8 @@ class CompaniesHouseImporter:
                 source_id=company_number,
                 region=country,
                 entity_type=entity_type,
+                from_date=date_of_creation,
+                to_date=date_of_cessation,
                 record=record_data,
             )
 
@@ -397,12 +404,17 @@ class CompaniesHouseImporter:
             raw_company_type = row.get("CompanyCategory", "").strip()
             entity_type = _get_entity_type_from_company_type(raw_company_type)
 
+            # Get dates from CSV
+            date_of_creation = row.get("IncorporationDate", "").strip() or None
+            date_of_cessation = row.get("DissolutionDate", "").strip() or None
+
             record_data = {
                 "company_number": company_number,
                 "title": company_name,
                 "company_status": company_status,
                 "company_type": raw_company_type,
-                "date_of_creation": row.get("IncorporationDate", "").strip(),
+                "date_of_creation": date_of_creation,
+                "date_of_cessation": date_of_cessation,
                 "country": row.get("CountryOfOrigin", "United Kingdom").strip(),
                 "sic_code": row.get("SICCode.SicText_1", "").strip(),
             }
@@ -416,6 +428,8 @@ class CompaniesHouseImporter:
                 source_id=company_number,
                 region=region,
                 entity_type=entity_type,
+                from_date=date_of_creation,
+                to_date=date_of_cessation,
                 record=record_data,
             )
 

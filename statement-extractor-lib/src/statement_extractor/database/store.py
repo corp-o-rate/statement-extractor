@@ -24,11 +24,44 @@ logger = logging.getLogger(__name__)
 # Default database location
 DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "entities.db"
 
+# Module-level shared connections by path (both databases share the same connection)
+_shared_connections: dict[str, sqlite3.Connection] = {}
+
 # Module-level singleton for OrganizationDatabase to prevent multiple loads
 _database_instances: dict[str, "OrganizationDatabase"] = {}
 
 # Module-level singleton for PersonDatabase
 _person_database_instances: dict[str, "PersonDatabase"] = {}
+
+
+def _get_shared_connection(db_path: Path, embedding_dim: int = 768) -> sqlite3.Connection:
+    """Get or create a shared database connection for the given path."""
+    path_key = str(db_path)
+    if path_key not in _shared_connections:
+        # Ensure directory exists
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+
+        # Load sqlite-vec extension
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+
+        _shared_connections[path_key] = conn
+        logger.debug(f"Created shared database connection for {path_key}")
+
+    return _shared_connections[path_key]
+
+
+def close_shared_connection(db_path: Optional[Path] = None) -> None:
+    """Close a shared database connection."""
+    path_key = str(db_path or DEFAULT_DB_PATH)
+    if path_key in _shared_connections:
+        _shared_connections[path_key].close()
+        del _shared_connections[path_key]
+        logger.debug(f"Closed shared database connection for {path_key}")
 
 # Comprehensive set of corporate legal suffixes (international)
 COMPANY_SUFFIXES: set[str] = {
@@ -256,20 +289,13 @@ class OrganizationDatabase:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _connect(self) -> sqlite3.Connection:
-        """Get or create database connection with sqlite-vec loaded."""
+        """Get or create database connection using shared connection pool."""
         if self._conn is not None:
             return self._conn
 
-        self._ensure_dir()
-        self._conn = sqlite3.connect(str(self._db_path))
-        self._conn.row_factory = sqlite3.Row
+        self._conn = _get_shared_connection(self._db_path, self._embedding_dim)
 
-        # Load sqlite-vec extension
-        self._conn.enable_load_extension(True)
-        sqlite_vec.load(self._conn)
-        self._conn.enable_load_extension(False)
-
-        # Create tables
+        # Create tables (idempotent)
         self._create_tables()
 
         return self._conn
@@ -289,6 +315,8 @@ class OrganizationDatabase:
                 source_id TEXT NOT NULL,
                 region TEXT NOT NULL DEFAULT '',
                 entity_type TEXT NOT NULL DEFAULT 'unknown',
+                from_date TEXT NOT NULL DEFAULT '',
+                to_date TEXT NOT NULL DEFAULT '',
                 record TEXT NOT NULL,
                 UNIQUE(source, source_id)
             )
@@ -305,6 +333,20 @@ class OrganizationDatabase:
         try:
             conn.execute("ALTER TABLE organizations ADD COLUMN entity_type TEXT NOT NULL DEFAULT 'unknown'")
             logger.info("Added entity_type column to organizations table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add from_date column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE organizations ADD COLUMN from_date TEXT NOT NULL DEFAULT ''")
+            logger.info("Added from_date column to organizations table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add to_date column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE organizations ADD COLUMN to_date TEXT NOT NULL DEFAULT ''")
+            logger.info("Added to_date column to organizations table")
         except sqlite3.OperationalError:
             pass  # Column already exists
 
@@ -329,10 +371,8 @@ class OrganizationDatabase:
         conn.commit()
 
     def close(self) -> None:
-        """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        """Clear connection reference (shared connection remains open)."""
+        self._conn = None
 
     def insert(self, record: CompanyRecord, embedding: np.ndarray) -> int:
         """
@@ -353,8 +393,8 @@ class OrganizationDatabase:
 
         cursor = conn.execute("""
             INSERT OR REPLACE INTO organizations
-            (name, name_normalized, source, source_id, region, entity_type, record)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (name, name_normalized, source, source_id, region, entity_type, from_date, to_date, record)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.name,
             name_normalized,
@@ -362,6 +402,8 @@ class OrganizationDatabase:
             record.source_id,
             record.region,
             record.entity_type.value,
+            record.from_date or "",
+            record.to_date or "",
             record_json,
         ))
 
@@ -369,10 +411,11 @@ class OrganizationDatabase:
         assert row_id is not None
 
         # Insert embedding into vec table
-        # sqlite-vec expects the embedding as a blob
+        # sqlite-vec virtual tables don't support INSERT OR REPLACE, so delete first
         embedding_blob = embedding.astype(np.float32).tobytes()
+        conn.execute("DELETE FROM organization_embeddings WHERE org_id = ?", (row_id,))
         conn.execute("""
-            INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
+            INSERT INTO organization_embeddings (org_id, embedding)
             VALUES (?, ?)
         """, (row_id, embedding_blob))
 
@@ -405,8 +448,8 @@ class OrganizationDatabase:
 
             cursor = conn.execute("""
                 INSERT OR REPLACE INTO organizations
-                (name, name_normalized, source, source_id, region, entity_type, record)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (name, name_normalized, source, source_id, region, entity_type, from_date, to_date, record)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.name,
                 name_normalized,
@@ -414,16 +457,19 @@ class OrganizationDatabase:
                 record.source_id,
                 record.region,
                 record.entity_type.value,
+                record.from_date or "",
+                record.to_date or "",
                 record_json,
             ))
 
             row_id = cursor.lastrowid
             assert row_id is not None
 
-            # Insert embedding
+            # Insert embedding (delete first since sqlite-vec doesn't support REPLACE)
             embedding_blob = embedding.astype(np.float32).tobytes()
+            conn.execute("DELETE FROM organization_embeddings WHERE org_id = ?", (row_id,))
             conn.execute("""
-                INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
+                INSERT INTO organization_embeddings (org_id, embedding)
                 VALUES (?, ?)
             """, (row_id, embedding_blob))
 
@@ -694,6 +740,20 @@ class OrganizationDatabase:
             )
         return None
 
+    def get_id_by_source_id(self, source: str, source_id: str) -> Optional[int]:
+        """Get the internal database ID for an organization by source and source_id."""
+        conn = self._connect()
+
+        cursor = conn.execute("""
+            SELECT id FROM organizations
+            WHERE source = ? AND source_id = ?
+        """, (source, source_id))
+
+        row = cursor.fetchone()
+        if row:
+            return row["id"]
+        return None
+
     def get_stats(self) -> DatabaseStats:
         """Get database statistics."""
         conn = self._connect()
@@ -867,8 +927,9 @@ class OrganizationDatabase:
         assert conn is not None
 
         for org_id, embedding_blob in batch:
+            conn.execute("DELETE FROM organization_embeddings WHERE org_id = ?", (org_id,))
             conn.execute("""
-                INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
+                INSERT INTO organization_embeddings (org_id, embedding)
                 VALUES (?, ?)
             """, (org_id, embedding_blob))
 
@@ -1107,8 +1168,9 @@ class OrganizationDatabase:
 
         for org_id, embedding in zip(org_ids, embeddings):
             embedding_blob = embedding.astype(np.float32).tobytes()
+            conn.execute("DELETE FROM organization_embeddings WHERE org_id = ?", (org_id,))
             conn.execute("""
-                INSERT OR REPLACE INTO organization_embeddings (org_id, embedding)
+                INSERT INTO organization_embeddings (org_id, embedding)
                 VALUES (?, ?)
             """, (org_id, embedding_blob))
             count += 1
@@ -1167,20 +1229,13 @@ class PersonDatabase:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _connect(self) -> sqlite3.Connection:
-        """Get or create database connection with sqlite-vec loaded."""
+        """Get or create database connection using shared connection pool."""
         if self._conn is not None:
             return self._conn
 
-        self._ensure_dir()
-        self._conn = sqlite3.connect(str(self._db_path))
-        self._conn.row_factory = sqlite3.Row
+        self._conn = _get_shared_connection(self._db_path, self._embedding_dim)
 
-        # Load sqlite-vec extension
-        self._conn.enable_load_extension(True)
-        sqlite_vec.load(self._conn)
-        self._conn.enable_load_extension(False)
-
-        # Create tables
+        # Create tables (idempotent)
         self._create_tables()
 
         return self._conn
@@ -1190,7 +1245,12 @@ class PersonDatabase:
         conn = self._conn
         assert conn is not None
 
+        # Check if we need to migrate from old schema (unique on source+source_id only)
+        self._migrate_people_schema_if_needed(conn)
+
         # Main people records table
+        # Unique constraint on source+source_id+role+org allows multiple records
+        # for the same person with different role/org combinations
         conn.execute("""
             CREATE TABLE IF NOT EXISTS people (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1202,8 +1262,12 @@ class PersonDatabase:
                 person_type TEXT NOT NULL DEFAULT 'unknown',
                 known_for_role TEXT NOT NULL DEFAULT '',
                 known_for_org TEXT NOT NULL DEFAULT '',
+                known_for_org_id INTEGER DEFAULT NULL,
+                from_date TEXT NOT NULL DEFAULT '',
+                to_date TEXT NOT NULL DEFAULT '',
                 record TEXT NOT NULL,
-                UNIQUE(source, source_id)
+                UNIQUE(source, source_id, known_for_role, known_for_org),
+                FOREIGN KEY (known_for_org_id) REFERENCES organizations(id)
             )
         """)
 
@@ -1211,8 +1275,36 @@ class PersonDatabase:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_people_name ON people(name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_people_name_normalized ON people(name_normalized)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_people_source ON people(source)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_people_source_id ON people(source, source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_people_source_id ON people(source, source_id, known_for_role, known_for_org)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_people_known_for_org ON people(known_for_org)")
+
+        # Add from_date column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE people ADD COLUMN from_date TEXT NOT NULL DEFAULT ''")
+            logger.info("Added from_date column to people table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add to_date column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE people ADD COLUMN to_date TEXT NOT NULL DEFAULT ''")
+            logger.info("Added to_date column to people table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add known_for_org_id column if it doesn't exist (migration for existing DBs)
+        # This is a foreign key to the organizations table (nullable)
+        try:
+            conn.execute("ALTER TABLE people ADD COLUMN known_for_org_id INTEGER DEFAULT NULL")
+            logger.info("Added known_for_org_id column to people table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Create index on known_for_org_id for joins (only if column exists)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_people_known_for_org_id ON people(known_for_org_id)")
+        except sqlite3.OperationalError:
+            pass  # Column doesn't exist yet (will be added on next connection)
 
         # Create sqlite-vec virtual table for embeddings
         conn.execute(f"""
@@ -1224,11 +1316,84 @@ class PersonDatabase:
 
         conn.commit()
 
+    def _migrate_people_schema_if_needed(self, conn: sqlite3.Connection) -> None:
+        """Migrate people table from old schema if needed."""
+        # Check if people table exists
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='people'"
+        )
+        if not cursor.fetchone():
+            return  # Table doesn't exist, no migration needed
+
+        # Check the unique constraint - look at index info
+        # Old schema: UNIQUE(source, source_id)
+        # New schema: UNIQUE(source, source_id, known_for_role, known_for_org)
+        cursor = conn.execute("PRAGMA index_list(people)")
+        indexes = cursor.fetchall()
+
+        needs_migration = False
+        for idx in indexes:
+            idx_name = idx[1]
+            if "sqlite_autoindex_people" in idx_name:
+                # Check columns in this unique index
+                cursor = conn.execute(f"PRAGMA index_info('{idx_name}')")
+                cols = [row[2] for row in cursor.fetchall()]
+                # Old schema has only 2 columns in unique constraint
+                if cols == ["source", "source_id"]:
+                    needs_migration = True
+                    logger.info("Detected old people schema, migrating to new unique constraint...")
+                    break
+
+        if not needs_migration:
+            return
+
+        # Migrate: create new table, copy data, drop old, rename new
+        logger.info("Migrating people table to new schema with (source, source_id, role, org) unique constraint...")
+
+        conn.execute("""
+            CREATE TABLE people_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                name_normalized TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'wikidata',
+                source_id TEXT NOT NULL,
+                country TEXT NOT NULL DEFAULT '',
+                person_type TEXT NOT NULL DEFAULT 'unknown',
+                known_for_role TEXT NOT NULL DEFAULT '',
+                known_for_org TEXT NOT NULL DEFAULT '',
+                known_for_org_id INTEGER DEFAULT NULL,
+                from_date TEXT NOT NULL DEFAULT '',
+                to_date TEXT NOT NULL DEFAULT '',
+                record TEXT NOT NULL,
+                UNIQUE(source, source_id, known_for_role, known_for_org),
+                FOREIGN KEY (known_for_org_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # Copy data (old IDs will change, but embeddings table references them)
+        # Note: old table may not have from_date/to_date columns, so use defaults
+        conn.execute("""
+            INSERT INTO people_new (name, name_normalized, source, source_id, country,
+                                    person_type, known_for_role, known_for_org, record)
+            SELECT name, name_normalized, source, source_id, country,
+                   person_type, known_for_role, known_for_org, record
+            FROM people
+        """)
+
+        # Drop old table and embeddings (IDs changed, embeddings are invalid)
+        conn.execute("DROP TABLE IF EXISTS person_embeddings")
+        conn.execute("DROP TABLE people")
+        conn.execute("ALTER TABLE people_new RENAME TO people")
+
+        # Drop old index if it exists
+        conn.execute("DROP INDEX IF EXISTS idx_people_source_id")
+
+        conn.commit()
+        logger.info("Migration complete. Note: person embeddings were cleared and need to be regenerated.")
+
     def close(self) -> None:
-        """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        """Clear connection reference (shared connection remains open)."""
+        self._conn = None
 
     def insert(self, record: PersonRecord, embedding: np.ndarray) -> int:
         """
@@ -1249,8 +1414,9 @@ class PersonDatabase:
 
         cursor = conn.execute("""
             INSERT OR REPLACE INTO people
-            (name, name_normalized, source, source_id, country, person_type, known_for_role, known_for_org, record)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (name, name_normalized, source, source_id, country, person_type,
+             known_for_role, known_for_org, known_for_org_id, from_date, to_date, record)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.name,
             name_normalized,
@@ -1260,16 +1426,20 @@ class PersonDatabase:
             record.person_type.value,
             record.known_for_role,
             record.known_for_org,
+            record.known_for_org_id,  # Can be None
+            record.from_date or "",
+            record.to_date or "",
             record_json,
         ))
 
         row_id = cursor.lastrowid
         assert row_id is not None
 
-        # Insert embedding into vec table
+        # Insert embedding into vec table (delete first since sqlite-vec doesn't support REPLACE)
         embedding_blob = embedding.astype(np.float32).tobytes()
+        conn.execute("DELETE FROM person_embeddings WHERE person_id = ?", (row_id,))
         conn.execute("""
-            INSERT OR REPLACE INTO person_embeddings (person_id, embedding)
+            INSERT INTO person_embeddings (person_id, embedding)
             VALUES (?, ?)
         """, (row_id, embedding_blob))
 
@@ -1302,8 +1472,9 @@ class PersonDatabase:
 
             cursor = conn.execute("""
                 INSERT OR REPLACE INTO people
-                (name, name_normalized, source, source_id, country, person_type, known_for_role, known_for_org, record)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (name, name_normalized, source, source_id, country, person_type,
+                 known_for_role, known_for_org, known_for_org_id, from_date, to_date, record)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.name,
                 name_normalized,
@@ -1313,16 +1484,20 @@ class PersonDatabase:
                 record.person_type.value,
                 record.known_for_role,
                 record.known_for_org,
+                record.known_for_org_id,  # Can be None
+                record.from_date or "",
+                record.to_date or "",
                 record_json,
             ))
 
             row_id = cursor.lastrowid
             assert row_id is not None
 
-            # Insert embedding
+            # Insert embedding (delete first since sqlite-vec doesn't support REPLACE)
             embedding_blob = embedding.astype(np.float32).tobytes()
+            conn.execute("DELETE FROM person_embeddings WHERE person_id = ?", (row_id,))
             conn.execute("""
-                INSERT OR REPLACE INTO person_embeddings (person_id, embedding)
+                INSERT INTO person_embeddings (person_id, embedding)
                 VALUES (?, ?)
             """, (row_id, embedding_blob))
 
@@ -1334,6 +1509,88 @@ class PersonDatabase:
 
         conn.commit()
         return count
+
+    def update_dates(self, source: str, source_id: str, from_date: Optional[str], to_date: Optional[str]) -> bool:
+        """
+        Update the from_date and to_date for a person record.
+
+        Args:
+            source: Data source (e.g., 'wikidata')
+            source_id: Source identifier (e.g., QID)
+            from_date: Start date in ISO format or None
+            to_date: End date in ISO format or None
+
+        Returns:
+            True if record was updated, False if not found
+        """
+        conn = self._connect()
+
+        cursor = conn.execute("""
+            UPDATE people SET from_date = ?, to_date = ?
+            WHERE source = ? AND source_id = ?
+        """, (from_date or "", to_date or "", source, source_id))
+
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def update_role_org(
+        self,
+        source: str,
+        source_id: str,
+        known_for_role: str,
+        known_for_org: str,
+        known_for_org_id: Optional[int],
+        new_embedding: np.ndarray,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> bool:
+        """
+        Update the role/org/dates data for a person record and re-embed.
+
+        Args:
+            source: Data source (e.g., 'wikidata')
+            source_id: Source identifier (e.g., QID)
+            known_for_role: Role/position title
+            known_for_org: Organization name
+            known_for_org_id: Organization internal ID (FK) or None
+            new_embedding: New embedding vector based on updated data
+            from_date: Start date in ISO format or None
+            to_date: End date in ISO format or None
+
+        Returns:
+            True if record was updated, False if not found
+        """
+        conn = self._connect()
+
+        # First get the person's internal ID
+        row = conn.execute(
+            "SELECT id FROM people WHERE source = ? AND source_id = ?",
+            (source, source_id)
+        ).fetchone()
+
+        if not row:
+            return False
+
+        person_id = row[0]
+
+        # Update the person record (including dates)
+        conn.execute("""
+            UPDATE people SET
+                known_for_role = ?, known_for_org = ?, known_for_org_id = ?,
+                from_date = COALESCE(?, from_date, ''),
+                to_date = COALESCE(?, to_date, '')
+            WHERE id = ?
+        """, (known_for_role, known_for_org, known_for_org_id, from_date, to_date, person_id))
+
+        # Update the embedding
+        embedding_bytes = new_embedding.astype(np.float32).tobytes()
+        conn.execute("""
+            UPDATE people_vec SET embedding = ?
+            WHERE rowid = ?
+        """, (embedding_bytes, person_id))
+
+        conn.commit()
+        return True
 
     def search(
         self,
@@ -1516,7 +1773,7 @@ class PersonDatabase:
         assert conn is not None
 
         cursor = conn.execute("""
-            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
             FROM people WHERE id = ?
         """, (person_id,))
 
@@ -1530,6 +1787,7 @@ class PersonDatabase:
                 person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
                 known_for_role=row["known_for_role"] or "",
                 known_for_org=row["known_for_org"] or "",
+                known_for_org_id=row["known_for_org_id"],  # Can be None
                 record=json.loads(row["record"]),
             )
         return None
@@ -1539,7 +1797,7 @@ class PersonDatabase:
         conn = self._connect()
 
         cursor = conn.execute("""
-            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
             FROM people
             WHERE source = ? AND source_id = ?
         """, (source, source_id))
@@ -1554,6 +1812,7 @@ class PersonDatabase:
                 person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
                 known_for_role=row["known_for_role"] or "",
                 known_for_org=row["known_for_org"] or "",
+                known_for_org_id=row["known_for_org_id"],  # Can be None
                 record=json.loads(row["record"]),
             )
         return None
@@ -1586,13 +1845,13 @@ class PersonDatabase:
 
         if source:
             cursor = conn.execute("""
-                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
                 FROM people
                 WHERE source = ?
             """, (source,))
         else:
             cursor = conn.execute("""
-                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, record
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
                 FROM people
             """)
 
@@ -1605,5 +1864,6 @@ class PersonDatabase:
                 person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
                 known_for_role=row["known_for_role"] or "",
                 known_for_org=row["known_for_org"] or "",
+                known_for_org_id=row["known_for_org_id"],  # Can be None
                 record=json.loads(row["record"]),
             )

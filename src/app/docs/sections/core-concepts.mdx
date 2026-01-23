@@ -656,7 +656,7 @@ The entity embedding database provides fast qualification for both **organizatio
       <th>Source</th>
       <th>Records</th>
       <th>Identifier</th>
-      <th>EntityType Mapping</th>
+      <th>Date Fields</th>
     </tr>
   </thead>
   <tbody>
@@ -664,25 +664,25 @@ The entity embedding database provides fast qualification for both **organizatio
       <td>GLEIF</td>
       <td>~3.2M</td>
       <td>LEI (Legal Entity Identifier)</td>
-      <td>GENERAL→business, FUND→fund, BRANCH→branch</td>
+      <td><code>from_date</code>: LEI registration date</td>
     </tr>
     <tr>
       <td>SEC Edgar</td>
       <td>~100K+</td>
       <td>CIK (Central Index Key)</td>
-      <td>business (or fund via SIC codes)</td>
+      <td><code>from_date</code>: First SEC filing date</td>
     </tr>
     <tr>
       <td>Companies House</td>
       <td>~5M</td>
       <td>UK Company Number</td>
-      <td>Maps company_type to business/nonprofit</td>
+      <td><code>from_date</code>: Incorporation, <code>to_date</code>: Dissolution</td>
     </tr>
     <tr>
       <td>Wikidata</td>
       <td>Variable</td>
       <td>QID</td>
-      <td>35+ query types mapped to EntityType</td>
+      <td><code>from_date</code>: Inception (P571), <code>to_date</code>: Dissolution (P576)</td>
     </tr>
   </tbody>
 </table>
@@ -752,6 +752,12 @@ People are imported from **Wikidata** with English Wikipedia articles (ensuring 
 - **known_for_org**: Primary organization (e.g., "Apple Inc", "Tesla")
 - **country**: Country of citizenship
 - **person_type**: Classification category
+- **from_date**: Role start date (ISO format)
+- **to_date**: Role end date (ISO format)
+
+**Note:** The same person can have multiple records with different role/org combinations (e.g., Tim Cook as "CEO at Apple" and "Board Director at Nike"). The unique constraint is on `(source, source_id, known_for_role, known_for_org)`.
+
+When organizations are discovered during people import (employers, affiliated orgs), they are automatically inserted into the organizations table if not already present. Each person record has a `known_for_org_id` foreign key linking to the organizations table, enabling efficient joins and lookups.
 
 #### EntityType Classification
 

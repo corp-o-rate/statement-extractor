@@ -37,6 +37,8 @@ uv run corp-extractor db import-companies-house --download --limit 10000  # Impo
 uv run corp-extractor db import-wikidata --limit 5000  # Import Wikidata orgs
 uv run corp-extractor db import-people --type executive --limit 5000  # Import notable people (v0.9.0)
 uv run corp-extractor db import-people --all --limit 10000            # All person types (v0.9.0)
+uv run corp-extractor db import-people --type executive --skip-existing  # Skip existing records
+uv run corp-extractor db import-people --type executive --enrich-dates   # Fetch role start/end dates (slower)
 uv run corp-extractor db upload              # Upload with lite/compressed variants
 uv run corp-extractor db download            # Download lite version (default)
 uv run corp-extractor db download --full     # Download full version
@@ -100,16 +102,16 @@ Plugins are sorted by `priority` property (lower = runs first). Default is 100.
 The `database/` module provides organization and person embedding storage and search:
 
 - `database/models.py` - `CompanyRecord`, `CompanyMatch`, `PersonRecord`, `PersonMatch`, `PersonType`, `DatabaseStats`, `EntityType` Pydantic models
-- `database/store.py` - `OrganizationDatabase` and `PersonDatabase` SQLite+sqlite-vec storage
+- `database/store.py` - `OrganizationDatabase` and `PersonDatabase` SQLite+sqlite-vec storage (shared connection pool)
 - `database/embeddings.py` - `CompanyEmbedder` using google/embeddinggemma-300m
 - `database/hub.py` - HuggingFace Hub upload/download with lite/compressed variants
 - `database/resolver.py` - `OrganizationResolver` shared utility for org lookups (used by person.py and embedding_company.py)
-- `database/importers/` - Data source importers:
-  - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records) - maps EntityCategory to EntityType
-  - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers) - maps SIC codes to EntityType
-  - `companies_house.py` - UK Companies House bulk data (~5M records) - maps company_type to EntityType
-  - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - maps query types to EntityType
-  - `wikidata_people.py` - Wikidata SPARQL queries for notable people (executives, politicians, athletes, etc.)
+- `database/importers/` - Data source importers (all support `from_date`/`to_date`):
+  - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records) - `from_date` from InitialRegistrationDate
+  - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers) - `from_date` from oldest filingDate
+  - `companies_house.py` - UK Companies House bulk data (~5M records) - `from_date`/`to_date` from incorporation/dissolution
+  - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - `from_date`/`to_date` from P571/P576
+  - `wikidata_people.py` - Wikidata SPARQL queries for notable people - `from_date`/`to_date` from position qualifiers
 
 **EntityType Classification:**
 Each organization record is classified with an `entity_type` field:
@@ -130,6 +132,13 @@ Each person record is classified with a `person_type` field:
 - `activist` - Advocates, campaigners
 - `scientist` - Scientists, inventors
 - `unknown` - Type not determined
+
+**People Database Features (v0.9.0):**
+- Organizations discovered during people import are auto-inserted into the organizations table
+- `known_for_org_id` foreign key links people to organizations table
+- Same person can have multiple records with different role/org combinations (unique on source_id + role + org)
+- `--skip-existing` flag to skip existing records instead of updating
+- `--enrich-dates` flag to fetch individual role start/end dates (slower, queries per person)
 
 **Database variants:**
 - `entities.db` - Full database with complete record metadata

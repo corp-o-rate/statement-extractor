@@ -351,6 +351,15 @@ v0.6.0 introduces an **entity embedding database** for fast entity qualification
 |--------|---------|------------|--------------------------|
 | Wikidata | Variable | Wikidata QID | executive, politician, athlete, artist, academic, scientist, journalist, entrepreneur, activist |
 
+**Date Fields**: All importers now include `from_date` and `to_date` where available:
+- **GLEIF**: LEI registration date
+- **SEC Edgar**: First SEC filing date
+- **Companies House**: Incorporation and dissolution dates
+- **Wikidata Orgs**: Inception (P571) and dissolution (P576) dates
+- **Wikidata People**: Position start (P580) and end (P582) dates
+
+**Note**: The same person can have multiple records with different role/org combinations (unique on `source_id + role + org`). Organizations discovered during people import are automatically inserted into the organizations table with `known_for_org_id` foreign key linking people to their organizations.
+
 ### EntityType Classification
 
 Each organization record is classified with an `entity_type` field:
@@ -374,6 +383,8 @@ corp-extractor db import-wikidata --limit 50000
 # Import notable people (v0.9.0)
 corp-extractor db import-people --type executive --limit 5000
 corp-extractor db import-people --all --limit 10000  # All person types
+corp-extractor db import-people --type executive --skip-existing  # Skip existing records
+corp-extractor db import-people --type executive --enrich-dates   # Fetch role start/end dates
 
 # Check status
 corp-extractor db status

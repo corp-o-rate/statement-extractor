@@ -947,23 +947,32 @@ def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size:
     "academic", "scientist", "journalist", "entrepreneur", "activist"
 ]), default="executive", help="Person type to import")
 @click.option("--all", "import_all", is_flag=True, help="Run all person type queries sequentially")
+@click.option("--enrich", is_flag=True, help="Query individual people to get role/org data (slower, resumable)")
+@click.option("--enrich-only", is_flag=True, help="Only enrich existing people (skip bulk import)")
+@click.option("--enrich-dates", is_flag=True, help="Query individual people to get start/end dates (slower)")
+@click.option("--skip-existing", is_flag=True, help="Skip records that already exist (default: update them)")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
-def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: int, query_type: str, import_all: bool, verbose: bool):
+def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: int, query_type: str, import_all: bool, enrich: bool, enrich_only: bool, enrich_dates: bool, skip_existing: bool, verbose: bool):
     """
     Import notable people data from Wikidata via SPARQL.
 
+    Uses a two-phase approach for reliability:
+    1. Bulk import: Fast fetch of QID, name, country (no timeouts)
+    2. Enrich (optional): Per-person queries for role/org/dates
+
     Imports people with English Wikipedia articles (ensures notability).
-    Includes executives, politicians, athletes, artists, academics, and more.
 
     \b
     Examples:
         corp-extractor db import-people --type executive --limit 5000
         corp-extractor db import-people --all --limit 10000
+        corp-extractor db import-people --type executive --enrich
+        corp-extractor db import-people --enrich-only --limit 100
         corp-extractor db import-people --type politician -v
     """
     _configure_logging(verbose)
 
-    from .database.store import get_person_database, DEFAULT_DB_PATH
+    from .database.store import get_person_database, get_database, DEFAULT_DB_PATH
     from .database.embeddings import CompanyEmbedder
     from .database.importers.wikidata_people import WikidataPeopleImporter
 
@@ -977,33 +986,133 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
 
     # Initialize components
     database = get_person_database(db_path=db_path_obj)
+    org_database = get_database(db_path=db_path_obj)
     embedder = CompanyEmbedder()
-    importer = WikidataPeopleImporter(batch_size=batch_size)
+    importer = WikidataPeopleImporter(batch_size=500)  # Smaller batch for SPARQL reliability
 
-    # Batch processing
-    records = []
     count = 0
 
-    for record in importer.import_from_sparql(limit=limit, query_type=query_type, import_all=import_all):
-        records.append(record)
+    # Phase 1: Bulk import (fast, minimal data) - skip if --enrich-only
+    if not enrich_only:
+        records = []
+        skipped_existing = 0
 
-        if len(records) >= batch_size:
-            # Generate embeddings using the combined name|role|org format
+        click.echo("Phase 1: Bulk import (QID, name, country)...", err=True)
+
+        for record in importer.import_from_sparql(limit=limit, query_type=query_type, import_all=import_all):
+            # Skip existing records if flag is set
+            if skip_existing:
+                existing = database.get_by_source_id(record.source, record.source_id)
+                if existing is not None:
+                    skipped_existing += 1
+                    continue
+
+            records.append(record)
+
+            if len(records) >= batch_size:
+                # Generate embeddings (just name for now, will re-embed after enrichment)
+                embedding_texts = [r.get_embedding_text() for r in records]
+                embeddings = embedder.embed_batch(embedding_texts)
+                database.insert_batch(records, embeddings)
+                count += len(records)
+
+                click.echo(f"  Imported {count} people...", err=True)
+                records = []
+
+        # Final batch
+        if records:
             embedding_texts = [r.get_embedding_text() for r in records]
             embeddings = embedder.embed_batch(embedding_texts)
             database.insert_batch(records, embeddings)
             count += len(records)
-            click.echo(f"  Imported {count} people...", err=True)
-            records = []
 
-    # Final batch
-    if records:
-        embedding_texts = [r.get_embedding_text() for r in records]
-        embeddings = embedder.embed_batch(embedding_texts)
-        database.insert_batch(records, embeddings)
-        count += len(records)
+        if skip_existing and skipped_existing > 0:
+            click.echo(f"\nPhase 1 complete: {count} people imported (skipped {skipped_existing} existing).", err=True)
+        else:
+            click.echo(f"\nPhase 1 complete: {count} people imported.", err=True)
+    else:
+        click.echo("Skipping Phase 1 (bulk import) - using existing database records.", err=True)
+        # Enable enrich if enrich_only is set
+        enrich = True
 
-    click.echo(f"\nImported {count} people successfully.", err=True)
+    # Phase 2: Enrich with role/org/dates (optional, slower but resumable)
+    if enrich:
+        click.echo("\nPhase 2: Enriching with role/org/dates (parallel queries)...", err=True)
+        # Get all people without role/org
+        people_to_enrich = []
+        enriched_count = 0
+        for record in database.iter_records():
+            if not record.known_for_role and not record.known_for_org:
+                people_to_enrich.append(record)
+                enriched_count += 1
+                # Apply limit if --enrich-only
+                if enrich_only and limit and enriched_count >= limit:
+                    break
+
+        if people_to_enrich:
+            click.echo(f"Found {len(people_to_enrich)} people to enrich...", err=True)
+            importer.enrich_people_role_org_batch(people_to_enrich, delay_seconds=0.1, max_workers=5)
+
+            # Persist the enriched data and re-generate embeddings
+            updated = 0
+            org_count = 0
+            date_count = 0
+            for person in people_to_enrich:
+                if person.known_for_role or person.known_for_org:
+                    # Look up org ID if we have org_qid
+                    org_qid = person.record.get("org_qid", "")
+                    if org_qid:
+                        org_id = org_database.get_id_by_source_id("wikipedia", org_qid)
+                        if org_id is not None:
+                            person.known_for_org_id = org_id
+
+                    # Update the record with new role/org/dates and re-embed
+                    new_embedding_text = person.get_embedding_text()
+                    new_embedding = embedder.embed(new_embedding_text)
+                    if database.update_role_org(
+                        person.source, person.source_id,
+                        person.known_for_role, person.known_for_org,
+                        person.known_for_org_id, new_embedding,
+                        person.from_date, person.to_date,
+                    ):
+                        updated += 1
+                        if person.known_for_org:
+                            org_count += 1
+                        if person.from_date or person.to_date:
+                            date_count += 1
+                        if verbose:
+                            date_str = ""
+                            if person.from_date or person.to_date:
+                                date_str = f" ({person.from_date or '?'} - {person.to_date or '?'})"
+                            click.echo(f"  {person.name}: {person.known_for_role} at {person.known_for_org}{date_str}", err=True)
+
+            click.echo(f"Updated {updated} people ({org_count} with orgs, {date_count} with dates).", err=True)
+
+    # Phase 3: Enrich with dates (optional, even slower)
+    if enrich_dates:
+        click.echo("\nPhase 3: Enriching with dates...", err=True)
+        # Get all people without dates but with role (dates are associated with positions)
+        people_to_enrich = []
+        for record in database.iter_records():
+            if not record.from_date and not record.to_date and record.known_for_role:
+                people_to_enrich.append(record)
+
+        if people_to_enrich:
+            click.echo(f"Found {len(people_to_enrich)} people to enrich with dates...", err=True)
+            enriched = importer.enrich_people_batch(people_to_enrich, delay_seconds=0.3)
+
+            # Persist the enriched dates
+            updated = 0
+            for person in people_to_enrich:
+                if person.from_date or person.to_date:
+                    if database.update_dates(person.source, person.source_id, person.from_date, person.to_date):
+                        updated += 1
+                        if verbose:
+                            click.echo(f"  {person.name}: {person.from_date or '?'} - {person.to_date or '?'}", err=True)
+
+            click.echo(f"Updated {updated} people with dates.", err=True)
+
+    org_database.close()
     database.close()
 
 

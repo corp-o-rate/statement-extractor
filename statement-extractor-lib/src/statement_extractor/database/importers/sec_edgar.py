@@ -274,6 +274,20 @@ class SecEdgarImporter:
             exchanges = data.get("exchanges", [])
             exchange = exchanges[0] if exchanges else ""
 
+            # Get dates from filings history
+            # Use oldest filing date as from_date (when company started filing with SEC)
+            filings = data.get("filings", {})
+            recent_filings = filings.get("recent", {})
+            filing_dates = recent_filings.get("filingDate", [])
+
+            # Get the oldest filing date (last in the list, as they're typically newest-first)
+            from_date = None
+            if filing_dates:
+                # Filing dates are in YYYY-MM-DD format
+                oldest_date = filing_dates[-1] if filing_dates else None
+                if oldest_date and len(oldest_date) >= 10:
+                    from_date = oldest_date[:10]
+
             # Build record
             record_data = {
                 "cik": cik,
@@ -292,6 +306,8 @@ class SecEdgarImporter:
                     "zip": business_addr.get("zipCode", ""),
                 },
             }
+            if from_date:
+                record_data["first_filing_date"] = from_date
 
             # Use stateOrCountry for region (2-letter US state or country code)
             region = business_addr.get("stateOrCountry", "US")
@@ -302,6 +318,7 @@ class SecEdgarImporter:
                 source_id=cik,
                 region=region,
                 entity_type=record_entity_type,
+                from_date=from_date,
                 record=record_data,
             )
 

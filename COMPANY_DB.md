@@ -21,24 +21,28 @@ The database uses `sqlite-vec` for vector similarity search, storing **two types
 - **person_type**: Classification (executive, politician, athlete, artist, etc.)
 - **known_for_role**: Primary role from Wikipedia (e.g., "CEO", "President")
 - **known_for_org**: Primary organization (e.g., "Apple Inc", "Tesla")
+- **from_date**: Role start date (ISO format YYYY-MM-DD)
+- **to_date**: Role end date (ISO format YYYY-MM-DD)
 - **record**: Full JSON record from source
+
+**Note:** The same person can have multiple records with different role/org combinations. The unique constraint is on `(source, source_id, known_for_role, known_for_org)`.
 
 ## Data Sources
 
 ### Organizations
 
-| Source | Records | Identifier | Coverage |
-|--------|---------|------------|----------|
-| [GLEIF](https://www.gleif.org/) | ~3.2M | LEI (Legal Entity Identifier) | Global companies with LEI |
-| [SEC Edgar](https://www.sec.gov/) | ~100K+ | CIK (Central Index Key) | All SEC filers (not just public companies) |
-| [Companies House](https://www.gov.uk/government/organisations/companies-house) | ~5M | Company Number | UK registered companies |
-| [Wikidata](https://www.wikidata.org/) | Variable | QID | Notable companies worldwide |
+| Source | Records | Identifier | Date Fields | Coverage |
+|--------|---------|------------|-------------|----------|
+| [GLEIF](https://www.gleif.org/) | ~3.2M | LEI (Legal Entity Identifier) | `from_date`: LEI registration date | Global companies with LEI |
+| [SEC Edgar](https://www.sec.gov/) | ~100K+ | CIK (Central Index Key) | `from_date`: First SEC filing date | All SEC filers (not just public companies) |
+| [Companies House](https://www.gov.uk/government/organisations/companies-house) | ~5M | Company Number | `from_date`: Incorporation, `to_date`: Dissolution | UK registered companies |
+| [Wikidata](https://www.wikidata.org/) | Variable | QID | `from_date`: Inception (P571), `to_date`: Dissolution (P576) | Notable companies worldwide |
 
 ### People *(v0.9.0)*
 
-| Source | Records | Identifier | Coverage |
-|--------|---------|------------|----------|
-| [Wikidata](https://www.wikidata.org/) | Variable | QID | Notable people with English Wikipedia articles |
+| Source | Records | Identifier | Date Fields | Coverage |
+|--------|---------|------------|-------------|----------|
+| [Wikidata](https://www.wikidata.org/) | Variable | QID | `from_date`: Position start (P580), `to_date`: Position end (P582) | Notable people with English Wikipedia articles |
 
 **Person Types:**
 
@@ -134,9 +138,17 @@ corp-extractor db import-people --type artist --limit 5000
 
 # Import all person types (runs all queries sequentially)
 corp-extractor db import-people --all --limit 10000
+
+# Skip existing records instead of updating them
+corp-extractor db import-people --type executive --skip-existing
+
+# Enrich people with start/end dates (slower, queries individual records)
+corp-extractor db import-people --type executive --enrich-dates
 ```
 
 Available person types: `executive`, `politician`, `athlete`, `artist`, `academic`, `scientist`, `journalist`, `entrepreneur`, `activist`
+
+**Note**: Organizations discovered during people import (employers, affiliated orgs) are automatically inserted into the organizations table if they don't already exist. This creates foreign key links via `known_for_org_id`.
 
 ### Full Build (Recommended)
 
@@ -383,7 +395,10 @@ corp-extractor db compress entities.db
 │  ├── entity_type (TEXT)                                                    │
 │  ├── source (TEXT: gleif|sec_edgar|companies_house|wikidata)               │
 │  ├── source_id (TEXT)                                                      │
+│  ├── from_date (TEXT) - founding/registration date (ISO format)            │
+│  ├── to_date (TEXT) - dissolution date (ISO format)                        │
 │  └── record (JSON) - omitted in lite version                               │
+│  UNIQUE(source, source_id)                                                 │
 ├───────────────────────────────────────────────────────────────────────────┤
 │  organization_embeddings (sqlite-vec virtual table)                        │
 │  ├── org_id (INTEGER)                                                      │
@@ -399,7 +414,11 @@ corp-extractor db compress entities.db
 │  ├── person_type (TEXT: executive|politician|athlete|artist|...)           │
 │  ├── known_for_role (TEXT) - e.g., "CEO", "President"                      │
 │  ├── known_for_org (TEXT) - e.g., "Apple Inc", "Tesla"                     │
+│  ├── known_for_org_id (INTEGER FK) - references organizations(id)          │
+│  ├── from_date (TEXT) - role start date (ISO format)                       │
+│  ├── to_date (TEXT) - role end date (ISO format)                           │
 │  └── record (JSON) - omitted in lite version                               │
+│  UNIQUE(source, source_id, known_for_role, known_for_org)                  │
 ├───────────────────────────────────────────────────────────────────────────┤
 │  person_embeddings (sqlite-vec virtual table)                              │
 │  ├── person_id (INTEGER)                                                   │
@@ -479,6 +498,8 @@ class CompanyRecord(BaseModel):
     source: str         # Data source identifier
     source_id: str      # Unique ID from source
     canonical_id: str   # Full canonical ID (e.g., "SEC-CIK:0000789019")
+    from_date: str      # Founding/registration date (ISO format YYYY-MM-DD)
+    to_date: str        # Dissolution date (ISO format YYYY-MM-DD)
     record: dict        # Full record from source (omitted in lite version)
 ```
 
@@ -493,6 +514,8 @@ class PersonRecord(BaseModel):
     person_type: PersonType # Classification (executive, politician, etc.)
     known_for_role: str     # Primary role from Wikipedia (e.g., "CEO")
     known_for_org: str      # Primary org from Wikipedia (e.g., "Apple Inc")
+    from_date: str          # Role start date (ISO format YYYY-MM-DD)
+    to_date: str            # Role end date (ISO format YYYY-MM-DD)
     record: dict            # Full record from source (omitted in lite version)
 
 class PersonType(Enum):
@@ -508,6 +531,8 @@ class PersonType(Enum):
     UNKNOWN = "unknown"          # Type not determined
 ```
 
+**Note on person records:** The same person (same `source_id`) can have multiple records with different `known_for_role` and `known_for_org` combinations. For example, Tim Cook may have records for both "CEO at Apple Inc" and "Board Director at Nike".
+
 **Source identifier prefixes:**
 
 | Source | Prefix | Example Canonical ID |
@@ -522,10 +547,11 @@ class PersonType(Enum):
 
 | Source | Key Fields |
 |--------|------------|
-| GLEIF | `lei`, `jurisdiction`, `country`, `city`, `status`, `other_names` |
-| SEC Edgar | `cik`, `ticker`, `title` |
-| Companies House | `company_number`, `company_status`, `company_type`, `date_of_creation`, `sic_code` |
-| Wikidata | `wikidata_id`, `label`, `lei`, `ticker`, `exchange`, `country` |
+| GLEIF | `lei`, `jurisdiction`, `country`, `city`, `status`, `other_names`, `initial_registration_date` |
+| SEC Edgar | `cik`, `ticker`, `title`, `first_filing_date` |
+| Companies House | `company_number`, `company_status`, `company_type`, `date_of_creation`, `date_of_cessation`, `sic_code` |
+| Wikidata (orgs) | `wikidata_id`, `label`, `lei`, `ticker`, `exchange`, `country`, `inception`, `dissolution` |
+| Wikidata (people) | `wikidata_id`, `label`, `role`, `org`, `country`, `from_date`, `to_date` |
 
 ### Import Pipeline
 
