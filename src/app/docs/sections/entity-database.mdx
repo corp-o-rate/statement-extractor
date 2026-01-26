@@ -59,12 +59,12 @@ corp-extractor db download --full
   <tbody>
     <tr>
       <td><code>entities-lite.db</code></td>
-      <td>~500MB</td>
+      <td>~50GB</td>
       <td>Core fields + embeddings only</td>
     </tr>
     <tr>
       <td><code>entities.db</code></td>
-      <td>~2GB</td>
+      <td>~74GB</td>
       <td>Full records with source metadata</td>
     </tr>
   </tbody>
@@ -513,13 +513,25 @@ Link equivalent records across sources:
 corp-extractor db canonicalize
 ```
 
-This matches records by:
+#### Organizations
+
+Matches organizations by:
 - **Global identifiers**: LEI, CIK, ticker (no region check needed)
 - **Normalized name + region**: Handles suffix variations (Ltd → Limited, Corp → Corporation)
 
 **Source priority**: gleif > sec_edgar > companies_house > wikipedia
 
-Canonicalization enables prominence-based search re-ranking that boosts companies with records from multiple authoritative sources.
+#### People
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.3</span>
+
+Matches people by:
+- **Normalized name + same organization**: Uses org canonical group to link people across sources
+- **Normalized name + overlapping date ranges**: Links records with matching tenure periods
+
+**Source priority**: wikidata > sec_edgar > companies_house
+
+Canonicalization enables prominence-based search re-ranking that boosts entities with records from multiple authoritative sources.
 
 ---
 

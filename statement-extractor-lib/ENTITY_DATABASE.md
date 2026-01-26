@@ -38,8 +38,8 @@ corp-extractor db download --full
 
 | File | Size | Contents |
 |------|------|----------|
-| `entities-lite.db` | ~500MB | Core fields + embeddings only |
-| `entities.db` | ~2GB | Full records with source metadata |
+| `entities-lite.db` | ~50GB | Core fields + embeddings only |
+| `entities.db` | ~74GB | Full records with source metadata |
 
 The lite version is recommended for most use cases. It contains all the information needed for entity resolution.
 
@@ -275,11 +275,17 @@ Link equivalent records across sources:
 corp-extractor db canonicalize
 ```
 
-This matches records by:
+**Organizations** are matched by:
 - Global identifiers (LEI, CIK, ticker)
 - Normalized name + region
 
 Source priority: gleif > sec_edgar > companies_house > wikipedia
+
+**People** (v0.9.3) are matched by:
+- Normalized name + same organization (using org canonical group)
+- Normalized name + overlapping date ranges
+
+Source priority: wikidata > sec_edgar > companies_house
 
 ### Download and Upload
 

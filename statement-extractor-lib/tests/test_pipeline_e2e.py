@@ -107,9 +107,9 @@ class TestPipelineModelsE2E:
         assert "Apple" in canonical.fqn
 
     def test_complete_statement_flow(self):
-        """Test statement data flowing through all pipeline stages."""
+        """Test statement data flowing through pipeline stages 2-5."""
         from statement_extractor.models import (
-            RawTriple,
+            SplitSentence,
             PipelineStatement,
             ExtractedEntity,
             EntityType,
@@ -119,28 +119,25 @@ class TestPipelineModelsE2E:
             StatementLabel,
         )
 
-        # Stage 1: RawTriple
-        raw = RawTriple(
-            subject_text="Apple Inc.",
-            predicate_text="announced",
-            object_text="iPhone 15",
-            source_sentence="Apple Inc. announced the new iPhone 15.",
+        # Stage 1: SplitSentence (atomic sentence from splitting)
+        split = SplitSentence(
+            text="Apple Inc. announced the new iPhone 15.",
         )
 
-        # Stage 2: PipelineStatement
+        # Stage 2: PipelineStatement (extracted subject-predicate-object)
         stmt = PipelineStatement(
             subject=ExtractedEntity(
-                text=raw.subject_text,
+                text="Apple Inc.",
                 type=EntityType.ORG,
                 confidence=0.95,
             ),
-            predicate=raw.predicate_text,
+            predicate="announced",
             object=ExtractedEntity(
-                text=raw.object_text,
+                text="iPhone 15",
                 type=EntityType.PRODUCT,
                 confidence=0.9,
             ),
-            source_text=raw.source_sentence,
+            source_text=split.text,
             confidence_score=0.92,
         )
 
