@@ -60,7 +60,7 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
         self,
         db_path: Optional[str] = None,
         top_k: int = 20,
-        min_similarity: float = 0.5,
+        min_similarity: float = 0.3,
         use_llm_confirmation: bool = True,
         auto_download_db: bool = True,
     ):
@@ -215,11 +215,13 @@ class EmbeddingCompanyQualifier(BaseQualifierPlugin):
             self._cache[cache_key] = None
             return None
 
-        # Log all candidates
-        logger.info(f"    Found {len(results)} candidates for '{entity.text}':")
-        for i, (record, sim) in enumerate(results[:10], 1):
+        # Log all candidates (scores are prominence-adjusted)
+        logger.info(f"    Found {len(results)} candidates for '{entity.text}' (prominence-adjusted):")
+        for i, (record, score) in enumerate(results[:10], 1):
             region_str = f" [{record.region}]" if record.region else ""
-            logger.info(f"      {i}. {record.name}{region_str} (sim={sim:.3f}, source={record.source})")
+            ticker = record.record.get("ticker", "")
+            ticker_str = f" ticker={ticker}" if ticker else ""
+            logger.info(f"      {i}. {record.name}{region_str} (score={score:.3f}, source={record.source}{ticker_str})")
 
         # Get best match (optionally with LLM confirmation)
         logger.info(f"    Selecting best match (LLM={self._use_llm_confirmation})...")

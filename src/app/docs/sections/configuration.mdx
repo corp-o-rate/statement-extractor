@@ -135,7 +135,7 @@ Configuration for quality scoring, filtering, and beam selection. Use this to tu
       <td><code>quality_weight</code></td>
       <td>float</td>
       <td>1.0</td>
-      <td>Weight for groundedness scores</td>
+      <td>Weight for confidence scores</td>
     </tr>
     <tr>
       <td><code>coverage_weight</code></td>
@@ -312,7 +312,7 @@ result = extract_statements("Google bought YouTube in 2006.", options)
 
 <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.5.0</span>
 
-Configuration for the 6-stage extraction pipeline. Controls which stages run, which plugins are enabled, and stage-specific options.
+Configuration for the 5-stage extraction pipeline. Controls which stages run, which plugins are enabled, and stage-specific options.
 
 <table>
   <thead>
@@ -327,7 +327,7 @@ Configuration for the 6-stage extraction pipeline. Controls which stages run, wh
     <tr>
       <td><code>enabled_stages</code></td>
       <td>set[int]</td>
-      <td>{"{1, 2, 3, 4, 5, 6}"}</td>
+      <td>{"{1, 2, 3, 4, 5}"}</td>
       <td>Stages to run (1-6)</td>
     </tr>
     <tr>
@@ -379,7 +379,7 @@ config = PipelineConfig.from_stage_string("1-3")  # {1, 2, 3}
 config = PipelineConfig.from_stage_string("1,2,5")  # {1, 2, 5}
 
 # Use presets
-config = PipelineConfig.default()   # All 6 stages
+config = PipelineConfig.default()   # All 5 stages
 config = PipelineConfig.minimal()   # Stages 1-2 only
 ```
 
@@ -519,7 +519,7 @@ Common stage combinations for different use cases:
     </tr>
     <tr>
       <td>Complete pipeline</td>
-      <td>{"{1, 2, 3, 4, 5, 6}"}</td>
+      <td>{"{1, 2, 3, 4, 5}"}</td>
       <td>All stages including taxonomy</td>
     </tr>
     <tr>
@@ -539,7 +539,7 @@ full_config = PipelineConfig.default()
 
 # Custom: qualifiers without external APIs
 internal_config = PipelineConfig(
-    enabled_stages={1, 2, 3, 4, 5, 6},
+    enabled_stages={1, 2, 3, 4, 5},
     disabled_plugins={"gleif_qualifier", "companies_house_qualifier", "sec_edgar_qualifier"},
 )
 ```

@@ -226,7 +226,7 @@ Quality scoring parameters for beam selection and triple assessment. Added in v0
 
 ```python
 class ScoringConfig(BaseModel):
-    quality_weight: float = 1.0           # >= 0.0, weight for groundedness scores
+    quality_weight: float = 1.0           # >= 0.0, weight for confidence scores
     coverage_weight: float = 0.5          # >= 0.0, bonus for source text coverage
     redundancy_penalty: float = 0.3       # >= 0.0, penalty for duplicate triples
     length_penalty: float = 0.1           # >= 0.0, penalty for verbosity
@@ -333,7 +333,7 @@ class Statement(BaseModel):
     source_text: Optional[str] = None            # Original text span
 
     # Quality scoring fields (v0.2.0)
-    confidence_score: Optional[float] = None     # 0.0-1.0, groundedness score
+    confidence_score: Optional[float] = None     # 0.0-1.0, quality score (semantic + entity)
     evidence_span: Optional[tuple[int, int]] = None  # Character offsets in source
     canonical_predicate: Optional[str] = None    # Canonical form if taxonomy used
 

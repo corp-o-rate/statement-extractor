@@ -41,6 +41,9 @@ uv run corp-extractor db import-people --type executive --skip-existing  # Skip 
 uv run corp-extractor db import-people --type executive --enrich-dates   # Fetch role start/end dates (slower)
 uv run corp-extractor db import-wikidata-dump --download --limit 50000   # Import from Wikidata dump (v0.9.1)
 uv run corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --people --no-orgs  # From local dump
+uv run corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Resume interrupted import
+uv run corp-extractor db import-wikidata-dump --download --require-enwiki  # Only orgs with English Wikipedia
+uv run corp-extractor db canonicalize        # Link equivalent records across sources
 uv run corp-extractor db upload              # Upload with lite/compressed variants
 uv run corp-extractor db download            # Download lite version (default)
 uv run corp-extractor db download --full     # Download full version
@@ -123,25 +126,40 @@ Each organization record is classified with an `entity_type` field:
 - Government: `government`, `international_org`, `political_party`
 - Other: `educational`, `research`, `healthcare`, `media`, `sports`, `religious`, `unknown`
 
-**PersonType Classification (v0.9.0):**
+**PersonType Classification (v0.9.2):**
 Each person record is classified with a `person_type` field:
 - `executive` - CEOs, board members, C-suite
-- `politician` - Elected officials, diplomats
+- `politician` - Elected officials (presidents, MPs, mayors)
+- `government` - Civil servants, diplomats, appointed officials
+- `military` - Military officers, armed forces personnel
+- `legal` - Judges, lawyers, legal professionals
+- `professional` - Known for profession (doctors, engineers, architects)
 - `academic` - Professors, researchers
-- `artist` - Musicians, actors, directors, writers
+- `artist` - Traditional creatives (musicians, actors, painters, writers)
+- `media` - Internet/social media personalities (YouTubers, influencers)
 - `athlete` - Sports figures
 - `entrepreneur` - Founders, business owners
-- `journalist` - Reporters, media personalities
+- `journalist` - Reporters, news presenters, columnists
 - `activist` - Advocates, campaigners
 - `scientist` - Scientists, inventors
 - `unknown` - Type not determined
 
-**People Database Features (v0.9.0):**
+**People Database Features (v0.9.2):**
 - Organizations discovered during people import are auto-inserted into the organizations table
 - `known_for_org_id` foreign key links people to organizations table
 - Same person can have multiple records with different role/org combinations (unique on source_id + role + org)
 - `--skip-existing` flag to skip existing records instead of updating
 - `--enrich-dates` flag to fetch individual role start/end dates (slower, queries per person)
+- `birth_date` and `death_date` fields track life dates; `is_historic` property for deceased people
+- `--resume` flag to skip already-imported Q codes when restarting import
+- `--require-enwiki` flag to only import orgs with English Wikipedia articles
+
+**Organization Canonicalization (v0.9.2):**
+The `db canonicalize` command links equivalent records across sources:
+- Records matched by LEI, ticker, CIK (globally unique, no region check)
+- Records matched by normalized name + region (using pycountry for region normalization)
+- Source priority: gleif > sec_edgar > companies_house > wikipedia
+- Enables prominence-based search re-ranking that boosts companies with records from multiple sources
 
 **Database variants:**
 - `entities.db` - Full database with complete record metadata

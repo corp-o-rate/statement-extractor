@@ -217,7 +217,7 @@ class ScoringConfig(BaseModel):
     quality_weight: float = Field(
         default=1.0,
         ge=0.0,
-        description="Weight for groundedness/quality scores in beam selection"
+        description="Weight for confidence scores in beam selection"
     )
     coverage_weight: float = Field(
         default=0.5,

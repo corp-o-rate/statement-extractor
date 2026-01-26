@@ -392,7 +392,7 @@ class StatementExtractor:
         This is the new extraction pipeline that:
         1. Generates multiple candidates via DBS
         2. Parses each to statements
-        3. Scores each triple for groundedness
+        3. Scores each triple for quality (semantic + entity)
         4. Merges top beams or selects best beam
         5. Deduplicates using embeddings (if enabled)
         """

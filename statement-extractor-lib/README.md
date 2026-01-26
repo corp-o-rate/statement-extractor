@@ -8,7 +8,8 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 ## Features
 
-- **Person Database** *(v0.9.0)*: Qualify notable people (executives, politicians, athletes, etc.) against Wikidata with canonical IDs
+- **Person Database** *(v0.9.2)*: Qualify notable people (executives, politicians, athletes, etc.) against Wikidata with canonical IDs
+- **Organization Canonicalization** *(v0.9.2)*: Link equivalent records across sources (LEI, ticker, CIK, name matching)
 - **5-Stage Pipeline** *(v0.8.0)*: Modular plugin-based architecture for full entity resolution
 - **Document Processing** *(v0.7.0)*: Process documents, URLs, and PDFs with chunking and deduplication
 - **Entity Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (~100K+ SEC, ~3M GLEIF, ~5M UK organizations)
@@ -165,10 +166,10 @@ Pipeline Options:
   -o, --output [table|json|yaml|triples]  Output format
 ```
 
-## New in v0.2.0: Quality Scoring & Beam Merging
+## Quality Scoring & Beam Merging
 
-By default, the library now:
-- **Scores each triple** for groundedness based on whether entities appear in source text
+By default, the library:
+- **Scores each triple** using semantic similarity (50%) + GLiNER2 entity recognition (50%)
 - **Merges top beams** instead of selecting one, improving coverage
 - **Uses embeddings** to detect semantically similar predicates ("bought" ≈ "acquired")
 
@@ -702,7 +703,7 @@ for text in texts:
 This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam Search** ([Vijayakumar et al., 2016](https://arxiv.org/abs/1610.02424)):
 
 1. **Diverse Beam Search**: Generates 4+ candidate outputs using beam groups with diversity penalty
-2. **Quality Scoring**: Each triple scored for groundedness in source text
+2. **Quality Scoring**: Each triple scored via semantic similarity + GLiNER2 entity recognition
 3. **Beam Merging**: Top beams combined for better coverage
 4. **Embedding Dedup**: Semantic similarity removes near-duplicate predicates
 5. **Predicate Normalization**: Optional taxonomy matching via embeddings

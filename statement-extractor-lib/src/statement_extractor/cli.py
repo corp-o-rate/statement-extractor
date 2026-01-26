@@ -670,6 +670,7 @@ def db_cmd():
         import-wikidata        Import Wikidata organizations (SPARQL, may timeout)
         import-people          Import Wikidata notable people (SPARQL, may timeout)
         import-wikidata-dump   Import from Wikidata JSON dump (recommended)
+        canonicalize           Link equivalent records across sources
         status                 Show database status
         search                 Search for an organization
         search-people          Search for a person
@@ -682,6 +683,7 @@ def db_cmd():
         corp-extractor db import-sec --download
         corp-extractor db import-gleif --download --limit 100000
         corp-extractor db import-wikidata-dump --download --limit 50000
+        corp-extractor db canonicalize
         corp-extractor db status
         corp-extractor db search "Apple Inc"
         corp-extractor db search-people "Tim Cook"
@@ -1124,6 +1126,8 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
 @click.option("--db", "db_path", type=click.Path(), help="Database path")
 @click.option("--people/--no-people", default=True, help="Import people (default: yes)")
 @click.option("--orgs/--no-orgs", default=True, help="Import organizations (default: yes)")
+@click.option("--require-enwiki", is_flag=True, help="Only import orgs with English Wikipedia articles")
+@click.option("--resume", is_flag=True, help="Resume import by skipping existing Q codes")
 @click.option("--limit", type=int, help="Max records per type (people and/or orgs)")
 @click.option("--batch-size", type=int, default=10000, help="Batch size for commits (default: 10000)")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
@@ -1135,6 +1139,8 @@ def db_import_wikidata_dump(
     db_path: Optional[str],
     people: bool,
     orgs: bool,
+    require_enwiki: bool,
+    resume: bool,
     limit: Optional[int],
     batch_size: int,
     verbose: bool,
@@ -1152,7 +1158,7 @@ def db_import_wikidata_dump(
     Features:
     - No timeouts (processes locally)
     - Complete coverage (all notable people/orgs)
-    - Resumable (can restart from same dump)
+    - Resumable with --resume (loads existing Q codes and skips them)
     - People like Andy Burnham are captured via occupation (P106)
 
     \b
@@ -1160,6 +1166,7 @@ def db_import_wikidata_dump(
         corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --limit 10000
         corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 50000
         corp-extractor db import-wikidata-dump --dump dump.json.bz2 --orgs --no-people
+        corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Continue from last run
     """
     _configure_logging(verbose)
 
@@ -1252,16 +1259,50 @@ def db_import_wikidata_dump(
     # Initialize embedder
     embedder = CompanyEmbedder()
 
+    # Load existing QID labels from database and seed the importer's cache
+    database = get_person_database(db_path=db_path_obj)
+    existing_labels = database.get_all_qid_labels()
+    if existing_labels:
+        click.echo(f"Loaded {len(existing_labels):,} existing QID labels from DB", err=True)
+        importer.set_label_cache(existing_labels)
+    known_qids_at_start = set(existing_labels.keys())
+
+    # Load existing source_ids for resume mode
+    existing_people_ids: set[str] = set()
+    existing_org_ids: set[str] = set()
+    if resume:
+        click.echo("Loading existing records for resume...", err=True)
+        if people:
+            existing_people_ids = database.get_all_source_ids(source="wikidata")
+            click.echo(f"  Found {len(existing_people_ids):,} existing people Q codes", err=True)
+        if orgs:
+            org_database = get_database(db_path=db_path_obj)
+            existing_org_ids = org_database.get_all_source_ids(source="wikipedia")
+            click.echo(f"  Found {len(existing_org_ids):,} existing org Q codes", err=True)
+
+    # Helper to persist new labels after each batch
+    def persist_new_labels() -> int:
+        new_labels = importer.get_new_labels_since(known_qids_at_start)
+        if new_labels:
+            database.insert_qid_labels(new_labels)
+            known_qids_at_start.update(new_labels.keys())
+            return len(new_labels)
+        return 0
+
     # Import people
     if people:
         click.echo("\n=== Importing People ===", err=True)
         if limit:
             click.echo(f"  Target: up to {limit:,} records", err=True)
+        if resume and existing_people_ids:
+            click.echo(f"  Resume mode: skipping {len(existing_people_ids):,} existing Q codes", err=True)
         database = get_person_database(db_path=db_path_obj)
+
+        # Pass skip_ids to importer so it skips early (before QID resolution)
+        skip_ids = existing_people_ids if resume else None
 
         records = []
         count = 0
-        scanned = 0
 
         # Use progress bar if limit is set, otherwise show counter
         if limit:
@@ -1271,15 +1312,15 @@ def db_import_wikidata_dump(
                 show_percent=True,
                 show_pos=True,
             ) as pbar:
-                for record in importer.import_people(limit=limit):
+                for record in importer.import_people(limit=limit, skip_ids=skip_ids):
                     records.append(record)
-                    scanned += 1
                     pbar.update(1)
 
                     if len(records) >= batch_size:
                         embedding_texts = [r.get_embedding_text() for r in records]
                         embeddings = embedder.embed_batch(embedding_texts)
                         database.insert_batch(records, embeddings)
+                        persist_new_labels()
                         count += len(records)
                         records = []
 
@@ -1288,19 +1329,20 @@ def db_import_wikidata_dump(
                     embedding_texts = [r.get_embedding_text() for r in records]
                     embeddings = embedder.embed_batch(embedding_texts)
                     database.insert_batch(records, embeddings)
+                    persist_new_labels()
                     count += len(records)
         else:
             # No limit - show counter updates
-            for record in importer.import_people(limit=limit):
+            for record in importer.import_people(limit=limit, skip_ids=skip_ids):
                 records.append(record)
-                scanned += 1
 
                 if len(records) >= batch_size:
                     embedding_texts = [r.get_embedding_text() for r in records]
                     embeddings = embedder.embed_batch(embedding_texts)
                     database.insert_batch(records, embeddings)
+                    persist_new_labels()
                     count += len(records)
-                    click.echo(f"\r  Processed {scanned:,} entities, imported {count:,} people...", nl=False, err=True)
+                    click.echo(f"\r  Imported {count:,} people...", nl=False, err=True)
                     records = []
 
             # Final batch
@@ -1308,22 +1350,31 @@ def db_import_wikidata_dump(
                 embedding_texts = [r.get_embedding_text() for r in records]
                 embeddings = embedder.embed_batch(embedding_texts)
                 database.insert_batch(records, embeddings)
+                persist_new_labels()
                 count += len(records)
             click.echo("", err=True)  # Newline after counter
 
         click.echo(f"People import complete: {count:,} records", err=True)
-        database.close()
+        # Don't close database yet - needed for persist_new_labels in orgs import
 
     # Import organizations
     if orgs:
         click.echo("\n=== Importing Organizations ===", err=True)
         if limit:
             click.echo(f"  Target: up to {limit:,} records", err=True)
+        if require_enwiki:
+            click.echo("  Filter: only orgs with English Wikipedia articles", err=True)
+        else:
+            click.echo("  Filter: all orgs (no enwiki requirement)", err=True)
+        if resume and existing_org_ids:
+            click.echo(f"  Resume mode: skipping {len(existing_org_ids):,} existing Q codes", err=True)
         org_database = get_database(db_path=db_path_obj)
+
+        # Pass skip_ids to importer so it skips early (before QID resolution)
+        skip_ids = existing_org_ids if resume else None
 
         records = []
         count = 0
-        scanned = 0
 
         # Use progress bar if limit is set, otherwise show counter
         if limit:
@@ -1333,15 +1384,15 @@ def db_import_wikidata_dump(
                 show_percent=True,
                 show_pos=True,
             ) as pbar:
-                for record in importer.import_organizations(limit=limit):
+                for record in importer.import_organizations(limit=limit, require_enwiki=require_enwiki, skip_ids=skip_ids):
                     records.append(record)
-                    scanned += 1
                     pbar.update(1)
 
                     if len(records) >= batch_size:
                         names = [r.name for r in records]
                         embeddings = embedder.embed_batch(names)
                         org_database.insert_batch(records, embeddings)
+                        persist_new_labels()
                         count += len(records)
                         records = []
 
@@ -1350,19 +1401,20 @@ def db_import_wikidata_dump(
                     names = [r.name for r in records]
                     embeddings = embedder.embed_batch(names)
                     org_database.insert_batch(records, embeddings)
+                    persist_new_labels()
                     count += len(records)
         else:
             # No limit - show counter updates
-            for record in importer.import_organizations(limit=limit):
+            for record in importer.import_organizations(limit=limit, require_enwiki=require_enwiki, skip_ids=skip_ids):
                 records.append(record)
-                scanned += 1
 
                 if len(records) >= batch_size:
                     names = [r.name for r in records]
                     embeddings = embedder.embed_batch(names)
                     org_database.insert_batch(records, embeddings)
+                    persist_new_labels()
                     count += len(records)
-                    click.echo(f"\r  Processed {scanned:,} entities, imported {count:,} orgs...", nl=False, err=True)
+                    click.echo(f"\r  Imported {count:,} orgs...", nl=False, err=True)
                     records = []
 
             # Final batch
@@ -1370,11 +1422,59 @@ def db_import_wikidata_dump(
                 names = [r.name for r in records]
                 embeddings = embedder.embed_batch(names)
                 org_database.insert_batch(records, embeddings)
+                persist_new_labels()
                 count += len(records)
             click.echo("", err=True)  # Newline after counter
 
         click.echo(f"Organization import complete: {count:,} records", err=True)
         org_database.close()
+
+    # Final label resolution pass for any remaining unresolved QIDs
+    click.echo("\n=== Final QID Label Resolution ===", err=True)
+
+    # Get the full label cache (includes labels from DB + new ones from import)
+    all_labels = importer.get_label_cache()
+    click.echo(f"  Total labels in cache: {len(all_labels):,}", err=True)
+
+    # Check for any remaining unresolved QIDs in the database
+    people_unresolved = database.get_unresolved_qids()
+    click.echo(f"  Unresolved QIDs in people: {len(people_unresolved):,}", err=True)
+
+    org_unresolved: set[str] = set()
+    if orgs:
+        org_database = get_database(db_path=db_path_obj)
+        org_unresolved = org_database.get_unresolved_qids()
+        click.echo(f"  Unresolved QIDs in orgs: {len(org_unresolved):,}", err=True)
+
+    all_unresolved = people_unresolved | org_unresolved
+    need_sparql = all_unresolved - set(all_labels.keys())
+
+    if need_sparql:
+        click.echo(f"  Resolving {len(need_sparql):,} remaining QIDs via SPARQL...", err=True)
+        sparql_resolved = importer.resolve_qids_via_sparql(need_sparql)
+        all_labels.update(sparql_resolved)
+        # Persist newly resolved labels
+        if sparql_resolved:
+            database.insert_qid_labels(sparql_resolved)
+            click.echo(f"  SPARQL resolved and stored: {len(sparql_resolved):,}", err=True)
+
+    # Update records with any newly resolved labels
+    if all_labels:
+        updates, deletes = database.resolve_qid_labels(all_labels)
+        if updates or deletes:
+            click.echo(f"  People: {updates:,} updated, {deletes:,} duplicates deleted", err=True)
+
+        if orgs:
+            org_database = get_database(db_path=db_path_obj)
+            org_updates = org_database.resolve_qid_labels(all_labels)
+            if org_updates:
+                click.echo(f"  Updated orgs: {org_updates:,} regions", err=True)
+            org_database.close()
+
+    # Final stats
+    final_label_count = database.get_qid_labels_count()
+    click.echo(f"  Total labels in DB: {final_label_count:,}", err=True)
+    database.close()
 
     click.echo("\nWikidata dump import complete!", err=True)
 
@@ -1557,10 +1657,72 @@ def db_status(db_path: Optional[str]):
             for source, count in stats.by_source.items():
                 click.echo(f"  {source}: {count:,}")
 
+        # Show canonicalization stats
+        canon_stats = database.get_canon_stats()
+        if canon_stats["canonicalized_records"] > 0:
+            click.echo("\nCanonicalization:")
+            click.echo(f"  Canonicalized: {canon_stats['canonicalized_records']:,} / {canon_stats['total_records']:,}")
+            click.echo(f"  Canonical groups: {canon_stats['canonical_groups']:,}")
+            click.echo(f"  Multi-record groups: {canon_stats['multi_record_groups']:,}")
+            click.echo(f"  Records in multi-groups: {canon_stats['records_in_multi_groups']:,}")
+        else:
+            click.echo("\nCanonicalization: Not run yet")
+            click.echo("   Run 'corp-extractor db canonicalize' to link equivalent records")
+
         database.close()
 
     except Exception as e:
         raise click.ClickException(f"Failed to read database: {e}")
+
+
+@db_cmd.command("canonicalize")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--batch-size", type=int, default=10000, help="Batch size for updates (default: 10000)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_canonicalize(db_path: Optional[str], batch_size: int, verbose: bool):
+    """
+    Canonicalize organizations by linking equivalent records across sources.
+
+    Records are considered equivalent if they share:
+    - Same LEI (globally unique legal entity identifier)
+    - Same ticker symbol
+    - Same CIK (SEC identifier)
+    - Same normalized name (after lowercasing, removing dots)
+    - Same name with suffix expansion (Ltd -> Limited, etc.)
+
+    For each group, the highest-priority source becomes canonical:
+    gleif > sec_edgar > companies_house > wikipedia
+
+    Canonicalization enables better search re-ranking by boosting results
+    that have records from multiple authoritative sources.
+
+    \b
+    Examples:
+        corp-extractor db canonicalize
+        corp-extractor db canonicalize -v
+        corp-extractor db canonicalize --db /path/to/entities.db
+    """
+    _configure_logging(verbose)
+
+    from .database import OrganizationDatabase
+
+    try:
+        database = OrganizationDatabase(db_path=db_path)
+        click.echo("Running canonicalization...", err=True)
+
+        result = database.canonicalize(batch_size=batch_size)
+
+        click.echo("\nCanonicalization Results")
+        click.echo("=" * 40)
+        click.echo(f"Total records processed: {result['total_records']:,}")
+        click.echo(f"Equivalence groups found: {result['groups_found']:,}")
+        click.echo(f"Multi-record groups: {result['multi_record_groups']:,}")
+        click.echo(f"Records updated: {result['records_updated']:,}")
+
+        database.close()
+
+    except Exception as e:
+        raise click.ClickException(f"Canonicalization failed: {e}")
 
 
 @db_cmd.command("search")

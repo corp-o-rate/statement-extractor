@@ -373,6 +373,9 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
                 "similarity": similarity,
                 "known_for_role": record.known_for_role,
                 "known_for_org": record.known_for_org,
+                "birth_date": record.birth_date,
+                "death_date": record.death_date,
+                "is_historic": record.is_historic,
             },
         )
 
@@ -524,8 +527,15 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
             role_str = f", {record.known_for_role}" if record.known_for_role else ""
             org_str = f" at {record.known_for_org}" if record.known_for_org else ""
             country_str = f", {record.country}" if record.country else ""
+            # Include life dates for context (helps identify historic figures)
+            dates_parts = []
+            if record.birth_date:
+                dates_parts.append(f"b. {record.birth_date[:4]}")  # Just year
+            if record.death_date:
+                dates_parts.append(f"d. {record.death_date[:4]}")  # Just year
+            dates_str = f" [{' - '.join(dates_parts)}]" if dates_parts else ""
             candidate_lines.append(
-                f"{i}. {record.name}{role_str}{org_str}{country_str} (score: {boosted:.2f})"
+                f"{i}. {record.name}{role_str}{org_str}{country_str}{dates_str} (score: {boosted:.2f})"
             )
 
         # Build context info from extracted role/org

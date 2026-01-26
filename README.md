@@ -108,6 +108,10 @@ corp-extractor db import-people --all --limit 10000  # SPARQL-based
 
 # Import from Wikidata dump (v0.9.1) - avoids SPARQL timeouts
 corp-extractor db import-wikidata-dump --download --limit 50000  # Uses ~100GB dump
+corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Resume interrupted import
+
+# Canonicalize organizations (v0.9.2) - link equivalent records
+corp-extractor db canonicalize
 
 # Search
 corp-extractor db search "Microsoft"

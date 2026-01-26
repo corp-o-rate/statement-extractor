@@ -83,19 +83,60 @@ EXECUTIVE_POSITION_QIDS = {
 }
 
 # Politician positions (P39 values)
+# Includes heads of state/government, legislators, and local officials
 POLITICIAN_POSITION_QIDS = {
+    # Heads of state/government
     "Q30461",     # president
     "Q14212",     # prime minister
     "Q83307",     # minister
     "Q2285706",   # head of government
+    "Q48352",     # head of state
+    "Q116",       # monarch
+    "Q382617",    # governor
+    "Q212071",    # mayor
+    "Q1553195",   # deputy prime minister
+    "Q1670573",   # cabinet minister
+    "Q13218630",  # secretary of state
+    "Q581682",    # vice president
+
+    # Legislators - national
     "Q4175034",   # legislator
     "Q486839",    # member of parliament
     "Q193391",    # member of national legislature
-    "Q212071",    # mayor
-    "Q382617",    # governor
-    "Q116",       # monarch
     "Q484529",    # member of congress
+    "Q1711695",   # senator
+    "Q18941264",  # member of the House of Representatives (US)
+    "Q16707842",  # member of the House of Commons (UK)
+    "Q18015642",  # member of the House of Lords (UK)
+    "Q17295570",  # member of the Bundestag (Germany)
+    "Q27169",     # member of the European Parliament
+    "Q64366569",  # member of Dáil Éireann (Ireland)
+    "Q19823090",  # member of the Riksdag (Sweden)
+    "Q18229048",  # member of Sejm (Poland)
+    "Q21032547",  # member of the National Assembly (France)
+    "Q64511800",  # member of the Knesset (Israel)
+    "Q50393121",  # member of the State Duma (Russia)
+    "Q18558055",  # member of the Diet (Japan)
+    "Q109862831", # member of Lok Sabha (India)
+    "Q63078776",  # member of the Canadian House of Commons
+    "Q83767637",  # member of the Australian House of Representatives
+
+    # Legislators - regional/local
+    "Q4382506",   # member of state legislature
+    "Q17765219",  # member of regional parliament
+    "Q1752514",   # councillor (local government)
+    "Q18824436",  # city councillor
+
+    # Other political offices
     "Q294414",    # public office (generic)
+    "Q889821",    # ambassador
+    "Q15966511",  # diplomat
+    "Q334344",    # lord lieutenant
+    "Q16533",     # judge (some are appointed politicians)
+    "Q3099732",   # ombudsman
+    "Q1500443",   # prefect
+    "Q611644",    # envoy
+    "Q2824523",   # political commissar
 }
 
 # =============================================================================
@@ -103,8 +144,31 @@ POLITICIAN_POSITION_QIDS = {
 # =============================================================================
 
 OCCUPATION_TO_TYPE: dict[str, PersonType] = {
-    # Politicians - catches people like Andy Burnham!
-    "Q82955": PersonType.POLITICIAN,     # politician occupation
+    # Politicians (elected officials)
+    "Q82955": PersonType.POLITICIAN,     # politician
+    "Q193391": PersonType.POLITICIAN,    # member of parliament
+    "Q372436": PersonType.POLITICIAN,    # statesperson
+
+    # Government (civil servants, diplomats, appointed officials)
+    "Q212238": PersonType.GOVERNMENT,    # civil servant
+    "Q806798": PersonType.GOVERNMENT,    # diplomat
+    "Q15627169": PersonType.GOVERNMENT,  # trade unionist (often govt-adjacent)
+
+    # Military
+    "Q189290": PersonType.MILITARY,      # military officer
+    "Q47064": PersonType.MILITARY,       # military personnel
+    "Q4991371": PersonType.MILITARY,     # soldier
+    "Q10669499": PersonType.MILITARY,    # naval officer
+    "Q11974939": PersonType.MILITARY,    # air force officer
+    "Q10974448": PersonType.MILITARY,    # army officer
+
+    # Legal professionals
+    "Q16533": PersonType.LEGAL,          # judge
+    "Q40348": PersonType.LEGAL,          # lawyer
+    "Q185351": PersonType.LEGAL,         # jurist
+    "Q3242871": PersonType.LEGAL,        # prosecutor
+    "Q1792450": PersonType.LEGAL,        # barrister
+    "Q3406182": PersonType.LEGAL,        # solicitor
 
     # Athletes
     "Q2066131": PersonType.ATHLETE,      # athlete
@@ -116,8 +180,11 @@ OCCUPATION_TO_TYPE: dict[str, PersonType] = {
     "Q13381376": PersonType.ATHLETE,     # golfer
     "Q11338576": PersonType.ATHLETE,     # boxer
     "Q10873124": PersonType.ATHLETE,     # swimmer
+    "Q11303721": PersonType.ATHLETE,     # racing driver
+    "Q10833314": PersonType.ATHLETE,     # cricket player
+    "Q13141064": PersonType.ATHLETE,     # rugby player
 
-    # Artists
+    # Artists (traditional creative professions)
     "Q33999": PersonType.ARTIST,         # actor
     "Q177220": PersonType.ARTIST,        # singer
     "Q639669": PersonType.ARTIST,        # musician
@@ -128,6 +195,61 @@ OCCUPATION_TO_TYPE: dict[str, PersonType] = {
     "Q753110": PersonType.ARTIST,        # songwriter
     "Q2405480": PersonType.ARTIST,       # voice actor
     "Q10800557": PersonType.ARTIST,      # film actor
+    "Q3455803": PersonType.ARTIST,       # director
+    "Q28389": PersonType.ARTIST,         # screenwriter
+    "Q6625963": PersonType.ARTIST,       # comedian
+    "Q2259451": PersonType.ARTIST,       # stand-up comedian
+    "Q2490358": PersonType.ARTIST,       # choreographer
+    "Q2722764": PersonType.ARTIST,       # DJ (disc jockey)
+    "Q183945": PersonType.ARTIST,        # record producer
+    "Q3282637": PersonType.ARTIST,       # film producer
+    "Q49757": PersonType.ARTIST,         # poet
+    "Q28640": PersonType.ARTIST,         # illustrator
+    "Q1028181": PersonType.ARTIST,       # painter
+    "Q1281618": PersonType.ARTIST,       # sculptor
+    "Q33231": PersonType.ARTIST,         # photographer
+    "Q806349": PersonType.ARTIST,        # band leader
+    "Q855091": PersonType.ARTIST,        # rapper
+    "Q4351403": PersonType.ARTIST,       # novelist
+    "Q158852": PersonType.ARTIST,        # conductor (music)
+    "Q486748": PersonType.ARTIST,        # pianist
+    "Q1415090": PersonType.ARTIST,       # guitarist
+
+    # Media (internet/social media personalities)
+    "Q6168364": PersonType.MEDIA,        # YouTuber
+    "Q15077007": PersonType.MEDIA,       # podcaster
+    "Q17125263": PersonType.MEDIA,       # social media influencer
+    "Q15981151": PersonType.MEDIA,       # internet celebrity
+    "Q2059704": PersonType.MEDIA,        # television personality
+    "Q4610556": PersonType.MEDIA,        # model
+    "Q578109": PersonType.MEDIA,         # television producer
+    "Q2516866": PersonType.MEDIA,        # publisher
+    "Q93191800": PersonType.MEDIA,       # content creator
+    "Q105756498": PersonType.MEDIA,      # streamer (Twitch etc.)
+
+    # Professionals (known for their profession/work)
+    "Q39631": PersonType.PROFESSIONAL,   # physician/doctor
+    "Q774306": PersonType.PROFESSIONAL,  # surgeon
+    "Q1234713": PersonType.PROFESSIONAL, # dentist
+    "Q15924224": PersonType.PROFESSIONAL, # psychiatrist
+    "Q212980": PersonType.PROFESSIONAL,  # psychologist
+    "Q81096": PersonType.PROFESSIONAL,   # engineer
+    "Q42603": PersonType.PROFESSIONAL,   # priest/clergy
+    "Q432386": PersonType.PROFESSIONAL,  # architect
+    "Q3621491": PersonType.PROFESSIONAL, # nurse
+    "Q18805": PersonType.PROFESSIONAL,   # pharmacist
+    "Q15895020": PersonType.PROFESSIONAL, # veterinarian
+    "Q131512": PersonType.PROFESSIONAL,  # chef
+    "Q3499072": PersonType.PROFESSIONAL, # pilot
+    "Q15895449": PersonType.PROFESSIONAL, # accountant
+    "Q806750": PersonType.PROFESSIONAL,  # consultant
+    "Q584301": PersonType.PROFESSIONAL,  # economist (often professional)
+    "Q1371925": PersonType.PROFESSIONAL, # real estate agent
+    "Q266569": PersonType.PROFESSIONAL,  # librarian
+    "Q5323050": PersonType.PROFESSIONAL, # electrical engineer
+    "Q13582652": PersonType.PROFESSIONAL, # civil engineer
+    "Q81965": PersonType.PROFESSIONAL,   # software engineer
+    "Q5482740": PersonType.PROFESSIONAL, # data scientist
 
     # Academics
     "Q121594": PersonType.ACADEMIC,      # professor
@@ -163,7 +285,7 @@ OCCUPATION_TO_TYPE: dict[str, PersonType] = {
 # =============================================================================
 
 ORG_TYPE_TO_ENTITY_TYPE: dict[str, EntityType] = {
-    # Business
+    # Business - core types
     "Q4830453": EntityType.BUSINESS,     # business
     "Q6881511": EntityType.BUSINESS,     # enterprise
     "Q783794": EntityType.BUSINESS,      # company
@@ -179,35 +301,150 @@ ORG_TYPE_TO_ENTITY_TYPE: dict[str, EntityType] = {
     "Q2979960": EntityType.BUSINESS,     # technology company
     "Q1631111": EntityType.BUSINESS,     # retailer
     "Q187652": EntityType.BUSINESS,      # manufacturer
+    # Business - additional types
+    "Q43229": EntityType.BUSINESS,       # organization (generic)
+    "Q4671277": EntityType.BUSINESS,     # academic institution (some are businesses)
+    "Q1664720": EntityType.BUSINESS,     # institute
+    "Q15911314": EntityType.BUSINESS,    # association
+    "Q15925165": EntityType.BUSINESS,    # private company
+    "Q5225895": EntityType.BUSINESS,     # credit union
+    "Q161726": EntityType.BUSINESS,      # multinational corporation
+    "Q134161": EntityType.BUSINESS,      # joint venture
+    "Q1589009": EntityType.BUSINESS,     # privately held company
+    "Q270791": EntityType.BUSINESS,      # state-owned enterprise
+    "Q1762059": EntityType.BUSINESS,     # online service provider
+    "Q17127659": EntityType.BUSINESS,    # energy company
+    "Q2695280": EntityType.BUSINESS,     # construction company
+    "Q1624464": EntityType.BUSINESS,     # telecommunications company
+    "Q1668024": EntityType.BUSINESS,     # car manufacturer
+    "Q3914": EntityType.BUSINESS,        # school (some are businesses)
+    "Q1030034": EntityType.BUSINESS,     # management consulting firm
+    "Q1370614": EntityType.BUSINESS,     # investment bank
+    "Q1785271": EntityType.BUSINESS,     # advertising agency
+    "Q4686042": EntityType.BUSINESS,     # automotive supplier
+    "Q431289": EntityType.BUSINESS,      # brand
+    "Q622438": EntityType.BUSINESS,      # supermarket chain
+    "Q6500733": EntityType.BUSINESS,     # licensed retailer
+    "Q2659904": EntityType.BUSINESS,     # government-owned corporation
+    "Q1065118": EntityType.BUSINESS,     # bookmaker
+    "Q179179": EntityType.BUSINESS,      # startup
+    "Q210167": EntityType.BUSINESS,      # video game developer
+    "Q18388277": EntityType.BUSINESS,    # video game publisher
+    "Q1762913": EntityType.BUSINESS,     # film production company
+    "Q18558478": EntityType.BUSINESS,    # money services business
+    "Q6463968": EntityType.BUSINESS,     # asset management company
+    "Q2864737": EntityType.BUSINESS,     # cooperative bank
+    "Q161380": EntityType.BUSINESS,      # cooperative
+    "Q15850590": EntityType.BUSINESS,    # real estate company
+    "Q1048835": EntityType.BUSINESS,     # political organization
+    "Q1254933": EntityType.BUSINESS,     # astronomical observatory (often research orgs)
+    "Q294414": EntityType.BUSINESS,      # public office
 
     # Funds
     "Q45400320": EntityType.FUND,        # investment fund
     "Q476028": EntityType.FUND,          # hedge fund
     "Q380649": EntityType.FUND,          # investment company
+    "Q1377053": EntityType.FUND,         # mutual fund
+    "Q3312546": EntityType.FUND,         # private equity firm
+    "Q751705": EntityType.FUND,          # venture capital firm
+    "Q2296920": EntityType.FUND,         # sovereign wealth fund
+    "Q2824951": EntityType.FUND,         # exchange-traded fund
+    "Q1755098": EntityType.FUND,         # pension fund
 
     # Nonprofits
     "Q163740": EntityType.NONPROFIT,     # nonprofit organization
     "Q79913": EntityType.NGO,            # non-governmental organization
     "Q157031": EntityType.FOUNDATION,    # foundation
+    "Q48204": EntityType.NONPROFIT,      # voluntary association
+    "Q988108": EntityType.NONPROFIT,     # club
+    "Q476436": EntityType.NONPROFIT,     # charitable organization
+    "Q3591957": EntityType.NONPROFIT,    # cultural institution
+    "Q162633": EntityType.NONPROFIT,     # academy
+    "Q270791": EntityType.NONPROFIT,     # learned society
+    "Q484652": EntityType.NONPROFIT,     # international organization
 
     # Government
     "Q327333": EntityType.GOVERNMENT,    # government agency
-    "Q484652": EntityType.INTERNATIONAL_ORG,  # international organization
     "Q7278": EntityType.POLITICAL_PARTY, # political party
     "Q178790": EntityType.TRADE_UNION,   # trade union
+    "Q7188": EntityType.GOVERNMENT,      # government
+    "Q2659904": EntityType.GOVERNMENT,   # government-owned corporation
+    "Q35798": EntityType.GOVERNMENT,     # executive branch
+    "Q35749": EntityType.GOVERNMENT,     # legislature
+    "Q12076836": EntityType.GOVERNMENT,  # law enforcement agency
+    "Q17362920": EntityType.GOVERNMENT,  # public body
+    "Q1063239": EntityType.GOVERNMENT,   # regulatory agency
+    "Q3624078": EntityType.GOVERNMENT,   # sovereign state
+    "Q133442": EntityType.GOVERNMENT,    # embassy
+    "Q174834": EntityType.GOVERNMENT,    # authority (government)
+
+    # International organizations
+    "Q484652": EntityType.INTERNATIONAL_ORG,  # international organization
+    "Q1335818": EntityType.INTERNATIONAL_ORG, # supranational organisation
+    "Q1616075": EntityType.INTERNATIONAL_ORG, # intergovernmental organization
 
     # Education/Research
     "Q2385804": EntityType.EDUCATIONAL,  # educational institution
     "Q3918": EntityType.EDUCATIONAL,     # university
     "Q31855": EntityType.RESEARCH,       # research institute
+    "Q875538": EntityType.EDUCATIONAL,   # public university
+    "Q23002039": EntityType.EDUCATIONAL, # private university
+    "Q38723": EntityType.EDUCATIONAL,    # higher education institution
+    "Q1371037": EntityType.EDUCATIONAL,  # secondary school
+    "Q9842": EntityType.EDUCATIONAL,     # primary school
+    "Q189004": EntityType.EDUCATIONAL,   # college
+    "Q1188663": EntityType.EDUCATIONAL,  # community college
+    "Q1321960": EntityType.RESEARCH,     # think tank
+    "Q31855": EntityType.RESEARCH,       # research institute
+    "Q3354859": EntityType.RESEARCH,     # observatory
+    "Q1298668": EntityType.RESEARCH,     # research center
 
-    # Other
+    # Healthcare
     "Q16917": EntityType.HEALTHCARE,     # hospital
-    "Q476028": EntityType.SPORTS,        # sports club (hedge fund duplicate, fix below)
+    "Q1774898": EntityType.HEALTHCARE,   # health care organization
+    "Q180958": EntityType.HEALTHCARE,    # clinic
+    "Q4260475": EntityType.HEALTHCARE,   # medical facility
+    "Q871964": EntityType.HEALTHCARE,    # biotechnology company
+    "Q902104": EntityType.HEALTHCARE,    # health insurance company
+
+    # Sports
     "Q847017": EntityType.SPORTS,        # sports club
+    "Q476068": EntityType.SPORTS,        # sports team
+    "Q12973014": EntityType.SPORTS,      # sports organization
+    "Q14350": EntityType.SPORTS,         # association football club
+    "Q20639847": EntityType.SPORTS,      # American football team
+    "Q13393265": EntityType.SPORTS,      # basketball team
+    "Q13406463": EntityType.SPORTS,      # baseball team
+    "Q1410877": EntityType.SPORTS,       # ice hockey team
+    "Q18558301": EntityType.SPORTS,      # rugby union club
+    "Q2093802": EntityType.SPORTS,       # cricket team
+    "Q5137836": EntityType.SPORTS,       # motorsport racing team
+
+    # Media
     "Q18127": EntityType.MEDIA,          # record label
     "Q1366047": EntityType.MEDIA,        # film studio
     "Q1137109": EntityType.MEDIA,        # video game company
+    "Q11032": EntityType.MEDIA,          # newspaper
+    "Q1002697": EntityType.MEDIA,        # periodical
+    "Q5398426": EntityType.MEDIA,        # television series
+    "Q1110794": EntityType.MEDIA,        # daily newspaper
+    "Q1616075": EntityType.MEDIA,        # news agency
+    "Q14350": EntityType.MEDIA,          # magazine
+    "Q15265344": EntityType.MEDIA,       # broadcaster
+    "Q131436": EntityType.MEDIA,         # radio station
+    "Q1616075": EntityType.MEDIA,        # television station
+    "Q41298": EntityType.MEDIA,          # magazine
+    "Q30022": EntityType.MEDIA,          # television channel
+    "Q17232649": EntityType.MEDIA,       # publishing company
+    "Q28803812": EntityType.MEDIA,       # streaming service
+    "Q159334": EntityType.MEDIA,         # entertainment company
+
+    # Religious
+    "Q9174": EntityType.RELIGIOUS,       # religion
+    "Q1530022": EntityType.RELIGIOUS,    # religious organization
+    "Q2994867": EntityType.RELIGIOUS,    # religious community
+    "Q34651": EntityType.RELIGIOUS,      # church (building as org)
+    "Q44613": EntityType.RELIGIOUS,      # monastery
 }
 
 
@@ -235,6 +472,10 @@ class WikidataDumpImporter:
         self._dump_path = Path(dump_path) if dump_path else None
         # Track discovered organizations from people import
         self._discovered_orgs: dict[str, str] = {}
+        # Track QIDs that need label resolution (country, role)
+        self._unresolved_qids: set[str] = set()
+        # Label cache built during dump processing
+        self._label_cache: dict[str, str] = {}
 
     def download_dump(
         self,
@@ -446,8 +687,15 @@ class WikidataDumpImporter:
                     entity = json.loads(line)
                     entity_count += 1
 
+                    # Cache label for QID lookups (countries, roles, etc.)
+                    self._cache_entity_label(entity)
+
                     if entity_count % 1_000_000 == 0:
-                        logger.info(f"Processed {entity_count:,} entities...")
+                        logger.info(
+                            f"Processed {entity_count:,} entities, "
+                            f"label cache: {len(self._label_cache):,}, "
+                            f"unresolved QIDs: {len(self._unresolved_qids):,}"
+                        )
 
                     yield entity
 
@@ -459,86 +707,147 @@ class WikidataDumpImporter:
         self,
         dump_path: Optional[Path] = None,
         limit: Optional[int] = None,
+        require_enwiki: bool = False,
+        skip_ids: Optional[set[str]] = None,
     ) -> Iterator[PersonRecord]:
         """
-        Stream through dump, yielding ALL people with English Wikipedia articles.
+        Stream through dump, yielding ALL people (humans with P31=Q5).
 
         This method filters the dump for:
         - Items with type "item" (not properties)
         - Humans (P31 contains Q5)
-        - Has English Wikipedia article (enwiki sitelink)
+        - Optionally: Has English Wikipedia article (enwiki sitelink)
 
         PersonType is derived from positions (P39) and occupations (P106).
+        Parliamentary context (electoral district, term, party) is extracted from P39 qualifiers.
 
         Args:
             dump_path: Path to dump file (uses self._dump_path if not provided)
             limit: Optional maximum number of records to return
+            require_enwiki: If True, only include people with English Wikipedia articles
+            skip_ids: Optional set of source_ids (Q codes) to skip. Checked early before
+                     full processing to avoid unnecessary QID resolution.
 
         Yields:
             PersonRecord for each qualifying person
         """
         path = dump_path or self._dump_path
         count = 0
+        skipped = 0
 
         logger.info("Starting people import from Wikidata dump...")
+        if not require_enwiki:
+            logger.info("Importing ALL humans (no enwiki filter)")
+        if skip_ids:
+            logger.info(f"Skipping {len(skip_ids):,} existing Q codes")
 
         for entity in self.iter_entities(path):
             if limit and count >= limit:
                 break
 
-            record = self._process_person_entity(entity)
+            # Check skip_ids early, before full processing (avoids QID resolution)
+            entity_id = entity.get("id", "")
+            if skip_ids and entity_id in skip_ids:
+                skipped += 1
+                continue
+
+            record = self._process_person_entity(entity, require_enwiki=require_enwiki)
             if record:
                 count += 1
                 if count % 10_000 == 0:
-                    logger.info(f"Yielded {count:,} people records...")
+                    logger.info(f"Yielded {count:,} people records (skipped {skipped:,})...")
                 yield record
 
-        logger.info(f"People import complete: {count:,} records")
+        logger.info(f"People import complete: {count:,} records (skipped {skipped:,})")
 
     def import_organizations(
         self,
         dump_path: Optional[Path] = None,
         limit: Optional[int] = None,
+        require_enwiki: bool = False,
+        skip_ids: Optional[set[str]] = None,
     ) -> Iterator[CompanyRecord]:
         """
-        Stream through dump, yielding organizations with English Wikipedia articles.
+        Stream through dump, yielding organizations.
 
         This method filters the dump for:
         - Items with type "item"
         - Has P31 (instance of) matching an organization type
-        - Has English Wikipedia article (enwiki sitelink)
+        - Optionally: Has English Wikipedia article (enwiki sitelink)
 
         Args:
             dump_path: Path to dump file (uses self._dump_path if not provided)
             limit: Optional maximum number of records to return
+            require_enwiki: If True, only include orgs with English Wikipedia articles
+            skip_ids: Optional set of source_ids (Q codes) to skip. Checked early before
+                     full processing to avoid unnecessary QID resolution.
 
         Yields:
             CompanyRecord for each qualifying organization
         """
         path = dump_path or self._dump_path
         count = 0
+        skipped_existing = 0
+        skipped_no_type = 0
+        skipped_no_enwiki = 0
+        skipped_no_label = 0
 
         logger.info("Starting organization import from Wikidata dump...")
+        if not require_enwiki:
+            logger.info("Importing ALL organizations (no enwiki filter)")
+        if skip_ids:
+            logger.info(f"Skipping {len(skip_ids):,} existing Q codes")
 
         for entity in self.iter_entities(path):
             if limit and count >= limit:
                 break
 
-            record = self._process_org_entity(entity)
+            # Check skip_ids early, before full processing (avoids QID resolution)
+            entity_id = entity.get("id", "")
+            if skip_ids and entity_id in skip_ids:
+                skipped_existing += 1
+                continue
+
+            record = self._process_org_entity(entity, require_enwiki=require_enwiki)
             if record:
                 count += 1
                 if count % 10_000 == 0:
-                    logger.info(f"Yielded {count:,} organization records...")
+                    logger.info(f"Yielded {count:,} organization records (skipped {skipped_existing:,} existing)...")
                 yield record
+            elif entity.get("type") == "item":
+                # Track skip reasons for debugging
+                if self._get_org_type(entity) is None:
+                    skipped_no_type += 1
+                elif require_enwiki and "enwiki" not in entity.get("sitelinks", {}):
+                    skipped_no_enwiki += 1
+                else:
+                    skipped_no_label += 1
 
-        logger.info(f"Organization import complete: {count:,} records")
+                # Log skip stats periodically
+                total_skipped = skipped_no_type + skipped_no_enwiki + skipped_no_label
+                if total_skipped > 0 and total_skipped % 1_000_000 == 0:
+                    logger.debug(
+                        f"Skip stats: no_matching_type={skipped_no_type:,}, "
+                        f"no_enwiki={skipped_no_enwiki:,}, no_label={skipped_no_label:,}"
+                    )
 
-    def _process_person_entity(self, entity: dict) -> Optional[PersonRecord]:
+        logger.info(f"Organization import complete: {count:,} records (skipped {skipped_existing:,} existing)")
+        logger.info(
+            f"Skipped: no_matching_type={skipped_no_type:,}, "
+            f"no_enwiki={skipped_no_enwiki:,}, no_label={skipped_no_label:,}"
+        )
+
+    def _process_person_entity(
+        self,
+        entity: dict,
+        require_enwiki: bool = False,
+    ) -> Optional[PersonRecord]:
         """
-        Process a single entity, return PersonRecord if it's a human with enwiki.
+        Process a single entity, return PersonRecord if it's a human.
 
         Args:
             entity: Parsed Wikidata entity dictionary
+            require_enwiki: If True, only include people with English Wikipedia articles
 
         Returns:
             PersonRecord if entity qualifies, None otherwise
@@ -551,20 +860,26 @@ class WikidataDumpImporter:
         if not self._is_human(entity):
             return None
 
-        # Must have English Wikipedia article
-        sitelinks = entity.get("sitelinks", {})
-        if "enwiki" not in sitelinks:
-            return None
+        # Optionally require English Wikipedia article
+        if require_enwiki:
+            sitelinks = entity.get("sitelinks", {})
+            if "enwiki" not in sitelinks:
+                return None
 
         # Extract person data
         return self._extract_person_data(entity)
 
-    def _process_org_entity(self, entity: dict) -> Optional[CompanyRecord]:
+    def _process_org_entity(
+        self,
+        entity: dict,
+        require_enwiki: bool = False,
+    ) -> Optional[CompanyRecord]:
         """
-        Process a single entity, return CompanyRecord if it's an organization with enwiki.
+        Process a single entity, return CompanyRecord if it's an organization.
 
         Args:
             entity: Parsed Wikidata entity dictionary
+            require_enwiki: If True, only include orgs with English Wikipedia articles
 
         Returns:
             CompanyRecord if entity qualifies, None otherwise
@@ -578,10 +893,11 @@ class WikidataDumpImporter:
         if entity_type is None:
             return None
 
-        # Must have English Wikipedia article
-        sitelinks = entity.get("sitelinks", {})
-        if "enwiki" not in sitelinks:
-            return None
+        # Optionally require English Wikipedia article
+        if require_enwiki:
+            sitelinks = entity.get("sitelinks", {})
+            if "enwiki" not in sitelinks:
+                return None
 
         # Extract organization data
         return self._extract_org_data(entity, entity_type)
@@ -649,20 +965,45 @@ class WikidataDumpImporter:
                     values.append(qid)
         return values
 
+    def _get_qid_qualifier(self, qualifiers: dict, prop: str) -> Optional[str]:
+        """Extract first QID from a qualifier property."""
+        for qual in qualifiers.get(prop, []):
+            qual_datavalue = qual.get("datavalue", {})
+            qual_value = qual_datavalue.get("value", {})
+            if isinstance(qual_value, dict):
+                return qual_value.get("id")
+        return None
+
+    def _get_time_qualifier(self, qualifiers: dict, prop: str) -> Optional[str]:
+        """Extract first time value from a qualifier property."""
+        for qual in qualifiers.get(prop, []):
+            qual_datavalue = qual.get("datavalue", {})
+            qual_value = qual_datavalue.get("value", {})
+            if isinstance(qual_value, dict):
+                time_str = qual_value.get("time", "")
+                return self._parse_time_value(time_str)
+        return None
+
     def _get_positions_with_org(self, claims: dict) -> list[dict]:
         """
-        Extract P39 positions with qualifiers for org and dates.
+        Extract P39 positions with qualifiers for org, dates, and parliamentary context.
 
-        Qualifiers extracted:
-        - P642 (of) - the organization
+        Qualifiers extracted per WikiProject Parliaments guidelines:
         - P580 (start time) - when the position started
         - P582 (end time) - when the position ended
+        - P108 (employer) - organization they work for
+        - P642 (of) - the organization (legacy/fallback)
+        - P768 (electoral district) - constituency for MPs
+        - P2937 (parliamentary term) - which term they served in
+        - P4100 (parliamentary group) - political party/faction
+        - P1001 (applies to jurisdiction) - jurisdiction they represent
+        - P2715 (elected in) - which election elected them
 
         Args:
             claims: Claims dictionary from entity
 
         Returns:
-            List of position dictionaries with position_qid, org_qid, start_date, end_date
+            List of position dictionaries with position metadata
         """
         positions = []
         for claim in claims.get("P39", []):
@@ -675,40 +1016,34 @@ class WikidataDumpImporter:
 
             qualifiers = claim.get("qualifiers", {})
 
-            # Check for P642 qualifier (of - the organization)
-            org_qid = None
-            for qual in qualifiers.get("P642", []):
-                qual_datavalue = qual.get("datavalue", {})
-                qual_value = qual_datavalue.get("value", {})
-                if isinstance(qual_value, dict):
-                    org_qid = qual_value.get("id")
-                    break
+            # Extract organization from multiple possible qualifiers
+            # Priority: P108 (employer) > P642 (of) > P1001 (jurisdiction)
+            org_qid = (
+                self._get_qid_qualifier(qualifiers, "P108") or  # employer
+                self._get_qid_qualifier(qualifiers, "P642") or  # of (legacy)
+                self._get_qid_qualifier(qualifiers, "P1001")    # applies to jurisdiction
+            )
 
-            # Check for P580 qualifier (start time)
-            start_date = None
-            for qual in qualifiers.get("P580", []):
-                qual_datavalue = qual.get("datavalue", {})
-                qual_value = qual_datavalue.get("value", {})
-                if isinstance(qual_value, dict):
-                    time_str = qual_value.get("time", "")
-                    start_date = self._parse_time_value(time_str)
-                    break
+            # Extract dates
+            start_date = self._get_time_qualifier(qualifiers, "P580")
+            end_date = self._get_time_qualifier(qualifiers, "P582")
 
-            # Check for P582 qualifier (end time)
-            end_date = None
-            for qual in qualifiers.get("P582", []):
-                qual_datavalue = qual.get("datavalue", {})
-                qual_value = qual_datavalue.get("value", {})
-                if isinstance(qual_value, dict):
-                    time_str = qual_value.get("time", "")
-                    end_date = self._parse_time_value(time_str)
-                    break
+            # Extract parliamentary/political qualifiers
+            electoral_district = self._get_qid_qualifier(qualifiers, "P768")
+            parliamentary_term = self._get_qid_qualifier(qualifiers, "P2937")
+            parliamentary_group = self._get_qid_qualifier(qualifiers, "P4100")
+            elected_in = self._get_qid_qualifier(qualifiers, "P2715")
 
             positions.append({
                 "position_qid": pos_qid,
                 "org_qid": org_qid,
                 "start_date": start_date,
                 "end_date": end_date,
+                # Parliamentary context
+                "electoral_district": electoral_district,
+                "parliamentary_term": parliamentary_term,
+                "parliamentary_group": parliamentary_group,
+                "elected_in": elected_in,
             })
         return positions
 
@@ -766,16 +1101,25 @@ class WikidataDumpImporter:
         # Default
         return PersonType.UNKNOWN
 
+    def _get_org_or_context(self, pos: dict) -> str:
+        """Get org QID from position, falling back to electoral district or parliamentary group."""
+        return (
+            pos.get("org_qid") or
+            pos.get("electoral_district") or
+            pos.get("parliamentary_group") or
+            ""
+        )
+
     def _get_best_role_org(
         self,
         positions: list[dict],
-    ) -> tuple[str, str, str, Optional[str], Optional[str]]:
+    ) -> tuple[str, str, str, Optional[str], Optional[str], dict]:
         """
         Select best position for role/org display.
 
         Priority:
-        1. Positions with org and dates
-        2. Positions with org
+        1. Positions with org/context and dates
+        2. Positions with org/context
         3. Positions with dates
         4. Any position
 
@@ -783,29 +1127,49 @@ class WikidataDumpImporter:
             positions: List of position dictionaries
 
         Returns:
-            Tuple of (role_qid, org_label, org_qid, start_date, end_date)
+            Tuple of (role_qid, org_label, org_qid, start_date, end_date, extra_context)
             Note: In dump mode, we return QIDs since we don't have labels
+            extra_context contains parliamentary metadata
         """
-        # Priority 1: Position with org and dates
+        def has_context(pos: dict) -> bool:
+            return bool(
+                pos.get("org_qid") or
+                pos.get("electoral_district") or
+                pos.get("parliamentary_group")
+            )
+
+        def get_extra_context(pos: dict) -> dict:
+            return {
+                k: v for k, v in {
+                    "electoral_district": pos.get("electoral_district"),
+                    "parliamentary_term": pos.get("parliamentary_term"),
+                    "parliamentary_group": pos.get("parliamentary_group"),
+                    "elected_in": pos.get("elected_in"),
+                }.items() if v
+            }
+
+        # Priority 1: Position with org/context and dates
         for pos in positions:
-            if pos.get("org_qid") and (pos.get("start_date") or pos.get("end_date")):
+            if has_context(pos) and (pos.get("start_date") or pos.get("end_date")):
                 return (
                     pos["position_qid"],
                     "",
-                    pos["org_qid"],
+                    self._get_org_or_context(pos),
                     pos.get("start_date"),
                     pos.get("end_date"),
+                    get_extra_context(pos),
                 )
 
-        # Priority 2: Position with org
+        # Priority 2: Position with org/context
         for pos in positions:
-            if pos.get("org_qid"):
+            if has_context(pos):
                 return (
                     pos["position_qid"],
                     "",
-                    pos["org_qid"],
+                    self._get_org_or_context(pos),
                     pos.get("start_date"),
                     pos.get("end_date"),
+                    get_extra_context(pos),
                 )
 
         # Priority 3: Position with dates
@@ -814,9 +1178,10 @@ class WikidataDumpImporter:
                 return (
                     pos["position_qid"],
                     "",
-                    pos.get("org_qid", ""),
+                    self._get_org_or_context(pos),
                     pos.get("start_date"),
                     pos.get("end_date"),
+                    get_extra_context(pos),
                 )
 
         # Priority 4: Any position
@@ -825,12 +1190,13 @@ class WikidataDumpImporter:
             return (
                 pos["position_qid"],
                 "",
-                pos.get("org_qid", ""),
+                self._get_org_or_context(pos),
                 pos.get("start_date"),
                 pos.get("end_date"),
+                get_extra_context(pos),
             )
 
-        return "", "", "", None, None
+        return "", "", "", None, None, {}
 
     def _extract_person_data(self, entity: dict) -> Optional[PersonRecord]:
         """
@@ -846,7 +1212,14 @@ class WikidataDumpImporter:
         """
         qid = entity.get("id", "")
         labels = entity.get("labels", {})
+        # Try English label first, fall back to any available label
         label = labels.get("en", {}).get("value", "")
+        if not label:
+            # Try to get any label
+            for lang_data in labels.values():
+                if isinstance(lang_data, dict) and lang_data.get("value"):
+                    label = lang_data["value"]
+                    break
 
         if not label or not qid:
             return None
@@ -862,11 +1235,20 @@ class WikidataDumpImporter:
         person_type = self._classify_person_type(positions, occupations)
 
         # Get best role/org/dates from positions
-        role_qid, _, org_qid, start_date, end_date = self._get_best_role_org(positions)
+        role_qid, _, org_qid, start_date, end_date, extra_context = self._get_best_role_org(positions)
 
         # Get country (P27 - country of citizenship)
         countries = self._get_claim_values(entity, "P27")
         country_qid = countries[0] if countries else ""
+
+        # Resolve QIDs to labels using the cache (or track for later resolution)
+        country_label = self._resolve_qid(country_qid) if country_qid else ""
+        role_label = self._resolve_qid(role_qid) if role_qid else ""
+        org_label = self._resolve_qid(org_qid) if org_qid else ""
+
+        # Get birth and death dates (P569, P570)
+        birth_date = self._get_time_claim(claims, "P569")
+        death_date = self._get_time_claim(claims, "P570")
 
         # Get description
         descriptions = entity.get("descriptions", {})
@@ -874,27 +1256,38 @@ class WikidataDumpImporter:
 
         # Track discovered organization
         if org_qid:
-            self._discovered_orgs[org_qid] = ""  # Label not available from dump
+            self._discovered_orgs[org_qid] = org_label
+
+        # Build record with all position metadata
+        record_data = {
+            "wikidata_id": qid,
+            "label": label,
+            "description": description,
+            "positions": [p["position_qid"] for p in positions],
+            "occupations": occupations,
+            "org_qid": org_qid,
+            "country_qid": country_qid,
+            "role_qid": role_qid,
+            "birth_date": birth_date,
+            "death_date": death_date,
+        }
+        # Add parliamentary context if present
+        if extra_context:
+            record_data.update(extra_context)
 
         return PersonRecord(
             name=label,
             source="wikidata",
             source_id=qid,
-            country=country_qid,  # Store QID, can resolve later
+            country=country_label,
             person_type=person_type,
-            known_for_role=role_qid,  # Store QID, can resolve later
-            known_for_org="",  # Org label not available from dump
+            known_for_role=role_label,
+            known_for_org=org_label,
             from_date=start_date,
             to_date=end_date,
-            record={
-                "wikidata_id": qid,
-                "label": label,
-                "description": description,
-                "positions": [p["position_qid"] for p in positions],
-                "occupations": occupations,
-                "org_qid": org_qid,
-                "country_qid": country_qid,
-            },
+            birth_date=birth_date,
+            death_date=death_date,
+            record=record_data,
         )
 
     def _extract_org_data(
@@ -925,6 +1318,9 @@ class WikidataDumpImporter:
         countries = self._get_claim_values(entity, "P17")
         country_qid = countries[0] if countries else ""
 
+        # Resolve country QID to label
+        country_label = self._resolve_qid(country_qid) if country_qid else ""
+
         # Get LEI (P1278)
         lei = self._get_string_claim(claims, "P1278")
 
@@ -945,7 +1341,7 @@ class WikidataDumpImporter:
             name=label,
             source="wikipedia",  # Use "wikipedia" per existing convention
             source_id=qid,
-            region=country_qid,  # Store QID
+            region=country_label,
             entity_type=entity_type,
             from_date=inception,
             to_date=dissolution,
@@ -1036,3 +1432,212 @@ class WikidataDumpImporter:
     def clear_discovered_organizations(self) -> None:
         """Clear the discovered organizations cache."""
         self._discovered_orgs.clear()
+
+    def get_unresolved_qids(self) -> set[str]:
+        """Get QIDs that need label resolution."""
+        return self._unresolved_qids.copy()
+
+    def get_label_cache(self) -> dict[str, str]:
+        """Get the label cache built during import."""
+        return self._label_cache.copy()
+
+    def set_label_cache(self, labels: dict[str, str]) -> None:
+        """
+        Set initial label cache from existing data (e.g., from database).
+
+        Args:
+            labels: Mapping of QID -> label to seed the cache
+        """
+        self._label_cache.update(labels)
+        logger.info(f"Seeded label cache with {len(labels)} existing labels")
+
+    def get_new_labels_since(self, known_qids: set[str]) -> dict[str, str]:
+        """
+        Get labels that were added to cache since a known set.
+
+        Args:
+            known_qids: Set of QIDs that were already known
+
+        Returns:
+            Dict of new QID -> label mappings
+        """
+        return {qid: label for qid, label in self._label_cache.items() if qid not in known_qids}
+
+    def _cache_entity_label(self, entity: dict) -> None:
+        """
+        Cache the English label for an entity during dump processing.
+
+        This builds up a lookup table as we iterate through the dump,
+        so we can resolve QID references (countries, roles) to labels.
+        """
+        qid = entity.get("id", "")
+        if not qid:
+            return
+
+        labels = entity.get("labels", {})
+        en_label = labels.get("en", {}).get("value", "")
+        if en_label:
+            self._label_cache[qid] = en_label
+
+    def _resolve_qid(self, qid: str) -> str:
+        """
+        Resolve a QID to a label, using cache or SPARQL lookup.
+
+        Returns the label if found/resolved, otherwise returns the QID.
+        """
+        if not qid or not qid.startswith("Q"):
+            return qid
+
+        if qid in self._label_cache:
+            label = self._label_cache[qid]
+            logger.debug(f"Resolved QID (cache): {qid} -> {label}")
+            return label
+
+        # Not in cache - resolve via SPARQL immediately
+        label = self._resolve_single_qid_sparql(qid)
+        if label:
+            logger.info(f"Resolved QID (SPARQL): {qid} -> {label}")
+            self._label_cache[qid] = label
+            return label
+
+        # Track unresolved
+        if qid not in self._unresolved_qids:
+            logger.debug(f"Unresolved QID: {qid}")
+            self._unresolved_qids.add(qid)
+        return qid
+
+    def _resolve_single_qid_sparql(self, qid: str) -> Optional[str]:
+        """
+        Resolve a single QID to a label via SPARQL.
+
+        Args:
+            qid: Wikidata QID (e.g., 'Q30')
+
+        Returns:
+            Label string or None if not found
+        """
+        import json
+        import urllib.parse
+        import urllib.request
+
+        query = f"""
+        SELECT ?label WHERE {{
+          wd:{qid} rdfs:label ?label FILTER(LANG(?label) = "en") .
+        }}
+        LIMIT 1
+        """
+
+        try:
+            params = urllib.parse.urlencode({
+                "query": query,
+                "format": "json",
+            })
+            url = f"https://query.wikidata.org/sparql?{params}"
+
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "Accept": "application/sparql-results+json",
+                    "User-Agent": "corp-extractor/1.0 (QID resolver)",
+                }
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+            bindings = data.get("results", {}).get("bindings", [])
+            if bindings:
+                return bindings[0].get("label", {}).get("value")
+
+        except Exception as e:
+            logger.debug(f"SPARQL lookup failed for {qid}: {e}")
+
+        return None
+
+    def resolve_qids_via_sparql(
+        self,
+        qids: Optional[set[str]] = None,
+        batch_size: int = 50,
+        delay_seconds: float = 1.0,
+    ) -> dict[str, str]:
+        """
+        Resolve QIDs to labels via Wikidata SPARQL queries.
+
+        This is used after import to resolve any QIDs that weren't found
+        in the dump (e.g., if import was limited or dump was incomplete).
+
+        Args:
+            qids: Set of QIDs to resolve (defaults to unresolved_qids)
+            batch_size: Number of QIDs per SPARQL query (default 50)
+            delay_seconds: Delay between queries to avoid rate limiting
+
+        Returns:
+            Dict mapping QID -> label for resolved QIDs
+        """
+        import json
+        import time
+        import urllib.parse
+        import urllib.request
+
+        if qids is None:
+            qids = self._unresolved_qids
+
+        if not qids:
+            return {}
+
+        resolved: dict[str, str] = {}
+        qid_list = list(qids)
+
+        logger.info(f"Resolving {len(qid_list)} QIDs via SPARQL...")
+
+        for i in range(0, len(qid_list), batch_size):
+            batch = qid_list[i:i + batch_size]
+
+            # Build VALUES clause
+            values = " ".join(f"wd:{qid}" for qid in batch)
+            query = f"""
+            SELECT ?item ?itemLabel WHERE {{
+              VALUES ?item {{ {values} }}
+              ?item rdfs:label ?itemLabel FILTER(LANG(?itemLabel) = "en") .
+            }}
+            """
+
+            try:
+                params = urllib.parse.urlencode({
+                    "query": query,
+                    "format": "json",
+                })
+                url = f"https://query.wikidata.org/sparql?{params}"
+
+                req = urllib.request.Request(
+                    url,
+                    headers={
+                        "Accept": "application/sparql-results+json",
+                        "User-Agent": "corp-extractor/1.0 (QID resolver)",
+                    }
+                )
+
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+
+                for binding in data.get("results", {}).get("bindings", []):
+                    item_uri = binding.get("item", {}).get("value", "")
+                    label = binding.get("itemLabel", {}).get("value", "")
+                    if item_uri and label:
+                        qid = item_uri.split("/")[-1]
+                        resolved[qid] = label
+                        self._label_cache[qid] = label
+
+                logger.debug(f"Resolved batch {i // batch_size + 1}: {len(batch)} QIDs")
+
+            except Exception as e:
+                logger.warning(f"SPARQL batch failed: {e}")
+
+            if i + batch_size < len(qid_list):
+                time.sleep(delay_seconds)
+
+        # Update unresolved set
+        self._unresolved_qids -= set(resolved.keys())
+
+        logger.info(f"Resolved {len(resolved)} QIDs, {len(self._unresolved_qids)} remaining unresolved")
+        return resolved

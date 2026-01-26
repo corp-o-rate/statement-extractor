@@ -23,9 +23,13 @@ The database uses `sqlite-vec` for vector similarity search, storing **two types
 - **known_for_org**: Primary organization (e.g., "Apple Inc", "Tesla")
 - **from_date**: Role start date (ISO format YYYY-MM-DD)
 - **to_date**: Role end date (ISO format YYYY-MM-DD)
+- **birth_date**: Date of birth (ISO format YYYY-MM-DD) *(v0.9.2)*
+- **death_date**: Date of death (ISO format YYYY-MM-DD) - if set, person is historic *(v0.9.2)*
 - **record**: Full JSON record from source
 
 **Note:** The same person can have multiple records with different role/org combinations. The unique constraint is on `(source, source_id, known_for_role, known_for_org)`.
+
+**Historic detection:** Person records include an `is_historic` property that returns True for deceased individuals (those with a `death_date` set).
 
 ## Data Sources
 
@@ -49,12 +53,17 @@ The database uses `sqlite-vec` for vector similarity search, storing **two types
 | Type | Description | Example Roles |
 |------|-------------|---------------|
 | `executive` | C-suite, board members | CEO, CFO, Chairman, Director |
-| `politician` | Elected officials, diplomats | President, Senator, Ambassador |
+| `politician` | Elected officials (presidents, MPs, mayors) | President, Senator, Mayor |
+| `government` | Civil servants, diplomats, appointed officials | Ambassador, Agency head |
+| `military` | Military officers, armed forces personnel | General, Admiral, Commander |
+| `legal` | Judges, lawyers, legal professionals | Supreme Court Justice, Attorney |
+| `professional` | Known for profession (doctors, engineers) | Famous surgeon, Architect |
 | `athlete` | Sports figures | Players, coaches, team owners |
-| `artist` | Creative professionals | Actors, musicians, directors, writers |
+| `artist` | Traditional creatives (musicians, actors, painters) | Actors, musicians, directors, writers |
+| `media` | Internet/social media personalities | YouTuber, Influencer, Podcaster |
 | `academic` | Professors, researchers | Professor, Dean, Researcher |
 | `scientist` | Scientists, inventors | Research scientist, Lab director |
-| `journalist` | Media personalities | Reporter, Editor, Anchor |
+| `journalist` | Reporters, news presenters | Reporter, Editor, Anchor |
 | `entrepreneur` | Founders, business owners | Founder, Co-founder |
 | `activist` | Advocates, campaigners | Human rights activist |
 
@@ -146,7 +155,7 @@ corp-extractor db import-people --type executive --skip-existing
 corp-extractor db import-people --type executive --enrich-dates
 ```
 
-Available person types: `executive`, `politician`, `athlete`, `artist`, `academic`, `scientist`, `journalist`, `entrepreneur`, `activist`
+Available person types: `executive`, `politician`, `government`, `military`, `legal`, `professional`, `athlete`, `artist`, `media`, `academic`, `scientist`, `journalist`, `entrepreneur`, `activist`
 
 **Note**: Organizations discovered during people import (employers, affiliated orgs) are automatically inserted into the organizations table if they don't already exist. This creates foreign key links via `known_for_org_id`.
 
@@ -170,6 +179,12 @@ corp-extractor db import-wikidata-dump --dump /path/to/latest-all.json.bz2 --lim
 
 # Disable aria2c (use slower single-connection download)
 corp-extractor db import-wikidata-dump --download --no-aria2 --limit 10000
+
+# Resume interrupted import (v0.9.2) - loads existing Q codes and skips them
+corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume
+
+# Only import orgs with English Wikipedia articles (stricter filter)
+corp-extractor db import-wikidata-dump --download --require-enwiki --orgs --no-people
 ```
 
 **Fast download with aria2c:**
@@ -190,7 +205,9 @@ aria2c -x 32 -s 32 -k 10M \
 - Complete coverage (all notable people/orgs with English Wikipedia articles)
 - Captures people like Andy Burnham via occupation (P106) even if position type is generic
 - Extracts role dates from position qualifiers (P580/P582)
-- Resumable (can restart from same dump file)
+- Resumable with `--resume` flag (loads existing Q codes and skips them)
+- Region normalization using pycountry (handles "UK" → "GB", "California" → "US", etc.)
+- Automatic QID label resolution via SPARQL fallback for unresolved references
 
 **Download location:** `~/.cache/corp-extractor/wikidata-latest-all.json.bz2`
 
@@ -205,6 +222,9 @@ corp-extractor db import-sec --download
 corp-extractor db import-companies-house --download
 corp-extractor db import-wikidata --limit 100000
 corp-extractor db import-people --all --limit 50000  # Notable people
+
+# Canonicalize records (link equivalent entities across sources)
+corp-extractor db canonicalize
 
 # Check status
 corp-extractor db status
@@ -236,6 +256,52 @@ Override with `--db` flag:
 ```bash
 corp-extractor db import-gleif --download --db /path/to/entities.db
 ```
+
+### Organization Canonicalization *(v0.9.2)*
+
+After importing from multiple sources, run canonicalization to link equivalent records:
+
+```bash
+corp-extractor db canonicalize
+```
+
+**What it does:**
+- Finds equivalent organization records across different data sources
+- Links them via `canon_id` field pointing to the highest-priority source
+- Enables prominence-based search re-ranking
+
+**Matching criteria (in order of priority):**
+1. **Same LEI** - GLEIF source_id or Wikidata P1278 (globally unique, no region check)
+2. **Same ticker symbol** - globally unique, no region check
+3. **Same CIK** - SEC identifier (globally unique, no region check)
+4. **Same normalized name + region** - after lowercasing, removing dots
+5. **Name with suffix expansion + region** - "Ltd" → "Limited", "Corp" → "Corporation"
+
+**Region normalization** uses pycountry to handle:
+- Country codes/names: "GB", "United Kingdom", "Great Britain" → "GB"
+- US state codes/names: "CA", "California" → "US"
+- Common aliases: "UK" → "GB", "USA" → "US"
+
+**Source priority** (highest to lowest):
+1. `gleif` - Gold standard with globally unique LEI
+2. `sec_edgar` - Vetted US filers with CIK + ticker
+3. `companies_house` - Official UK registry
+4. `wikipedia` - Crowdsourced, less authoritative
+
+**Example output:**
+```
+Canonicalization Results
+========================================
+Total records processed: 8,400,000
+Equivalence groups found: 7,800,000
+Multi-record groups: 150,000
+Records updated: 8,400,000
+```
+
+**Benefits for search:**
+- Prominence-based re-ranking boosts companies with records from multiple authoritative sources
+- A search for "Microsoft" ranks SEC-filed + GLEIF-registered results higher than Wikipedia-only results
+- Canonicalized records get boosts from ALL sources in their group (e.g., +0.08 for ticker, +0.05 for GLEIF, +0.03 for SEC)
 
 ## Testing the Database
 
@@ -384,6 +450,7 @@ corp-extractor pipeline "Apple announced record earnings."
 | `db import-wikidata` | Import Wikidata organizations (SPARQL) |
 | `db import-people` | Import Wikidata notable people (SPARQL) *(v0.9.0)* |
 | `db import-wikidata-dump` | Import from Wikidata JSON dump (recommended) *(v0.9.1)* |
+| `db canonicalize` | Link equivalent records across sources *(v0.9.2)* |
 | `db gleif-info` | Show latest GLEIF file info |
 | `db download` | Download database from HuggingFace (lite by default) |
 | `db download --full` | Download full database with all metadata |
@@ -442,6 +509,8 @@ corp-extractor db compress entities.db
 │  ├── source_id (TEXT)                                                      │
 │  ├── from_date (TEXT) - founding/registration date (ISO format)            │
 │  ├── to_date (TEXT) - dissolution date (ISO format)                        │
+│  ├── canon_id (INTEGER) - ID of canonical record (v0.9.2)                  │
+│  ├── canon_size (INTEGER) - size of canonical group (v0.9.2)               │
 │  └── record (JSON) - omitted in lite version                               │
 │  UNIQUE(source, source_id)                                                 │
 ├───────────────────────────────────────────────────────────────────────────┤
@@ -449,25 +518,32 @@ corp-extractor db compress entities.db
 │  ├── org_id (INTEGER)                                                      │
 │  └── embedding (FLOAT[768])                                                │
 ├───────────────────────────────────────────────────────────────────────────┤
-│  people table (SQLite) - v0.9.0                                            │
+│  people table (SQLite) - v0.9.2                                            │
 │  ├── id (INTEGER PRIMARY KEY)                                              │
 │  ├── name (TEXT)                                                           │
 │  ├── name_normalized (TEXT)                                                │
 │  ├── source (TEXT: wikidata)                                               │
 │  ├── source_id (TEXT)                                                      │
 │  ├── country (TEXT)                                                        │
-│  ├── person_type (TEXT: executive|politician|athlete|artist|...)           │
+│  ├── person_type (TEXT: executive|politician|government|military|...)      │
 │  ├── known_for_role (TEXT) - e.g., "CEO", "President"                      │
 │  ├── known_for_org (TEXT) - e.g., "Apple Inc", "Tesla"                     │
 │  ├── known_for_org_id (INTEGER FK) - references organizations(id)          │
 │  ├── from_date (TEXT) - role start date (ISO format)                       │
 │  ├── to_date (TEXT) - role end date (ISO format)                           │
+│  ├── birth_date (TEXT) - date of birth (ISO format) (v0.9.2)               │
+│  ├── death_date (TEXT) - date of death (ISO format) (v0.9.2)               │
 │  └── record (JSON) - omitted in lite version                               │
 │  UNIQUE(source, source_id, known_for_role, known_for_org)                  │
 ├───────────────────────────────────────────────────────────────────────────┤
 │  person_embeddings (sqlite-vec virtual table)                              │
 │  ├── person_id (INTEGER)                                                   │
 │  └── embedding (FLOAT[768]) - combines name|role|org                       │
+├───────────────────────────────────────────────────────────────────────────┤
+│  qid_labels table (SQLite) - v0.9.2                                        │
+│  ├── qid (TEXT PRIMARY KEY) - Wikidata QID (e.g., "Q30")                   │
+│  └── label (TEXT) - resolved label (e.g., "United States")                 │
+│  Used for caching QID → label mappings during import                       │
 └───────────────────────────────────────────────────────────────────────────┘
          │
          │ Vector similarity search
@@ -548,7 +624,7 @@ class CompanyRecord(BaseModel):
     record: dict        # Full record from source (omitted in lite version)
 ```
 
-Each person record contains *(v0.9.0)*:
+Each person record contains *(v0.9.2)*:
 
 ```python
 class PersonRecord(BaseModel):
@@ -561,16 +637,28 @@ class PersonRecord(BaseModel):
     known_for_org: str      # Primary org from Wikipedia (e.g., "Apple Inc")
     from_date: str          # Role start date (ISO format YYYY-MM-DD)
     to_date: str            # Role end date (ISO format YYYY-MM-DD)
+    birth_date: str         # Date of birth (ISO format YYYY-MM-DD)
+    death_date: str         # Date of death (ISO format YYYY-MM-DD)
     record: dict            # Full record from source (omitted in lite version)
+
+    @property
+    def is_historic(self) -> bool:
+        """Return True if the person is deceased."""
+        return bool(self.death_date)
 
 class PersonType(Enum):
     EXECUTIVE = "executive"      # CEOs, board members, C-suite
-    POLITICIAN = "politician"    # Elected officials, diplomats
+    POLITICIAN = "politician"    # Elected officials (presidents, MPs, mayors)
+    GOVERNMENT = "government"    # Civil servants, diplomats, appointed officials
+    MILITARY = "military"        # Military officers, armed forces personnel
+    LEGAL = "legal"              # Judges, lawyers, legal professionals
+    PROFESSIONAL = "professional"# Known for profession (doctors, engineers)
     ACADEMIC = "academic"        # Professors, researchers
-    ARTIST = "artist"            # Musicians, actors, directors
+    ARTIST = "artist"            # Traditional creatives (musicians, actors, painters)
+    MEDIA = "media"              # Internet/social media personalities (YouTubers, influencers)
     ATHLETE = "athlete"          # Sports figures
     ENTREPRENEUR = "entrepreneur"# Founders, business owners
-    JOURNALIST = "journalist"    # Reporters, media personalities
+    JOURNALIST = "journalist"    # Reporters, news presenters, columnists
     ACTIVIST = "activist"        # Advocates, campaigners
     SCIENTIST = "scientist"      # Scientists, inventors
     UNKNOWN = "unknown"          # Type not determined

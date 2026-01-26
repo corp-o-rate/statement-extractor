@@ -54,12 +54,17 @@ class PersonType(str, Enum):
     Used for categorizing people in the person database.
     """
     EXECUTIVE = "executive"  # CEOs, board members, C-suite
-    POLITICIAN = "politician"  # Elected officials, diplomats
+    POLITICIAN = "politician"  # Elected officials (presidents, MPs, mayors)
+    GOVERNMENT = "government"  # Civil servants, diplomats, appointed officials
+    MILITARY = "military"  # Military officers, armed forces personnel
+    LEGAL = "legal"  # Judges, lawyers, legal professionals
+    PROFESSIONAL = "professional"  # Known for their profession (doctors, engineers, architects)
     ACADEMIC = "academic"  # Professors, researchers
-    ARTIST = "artist"  # Musicians, actors, directors, writers
+    ARTIST = "artist"  # Traditional creatives (musicians, actors, painters, writers)
+    MEDIA = "media"  # Internet/social media personalities (YouTubers, influencers, podcasters)
     ATHLETE = "athlete"  # Sports figures
     ENTREPRENEUR = "entrepreneur"  # Founders, business owners
-    JOURNALIST = "journalist"  # Reporters, media personalities
+    JOURNALIST = "journalist"  # Reporters, news presenters, columnists
     ACTIVIST = "activist"  # Advocates, campaigners
     SCIENTIST = "scientist"  # Scientists, inventors
     UNKNOWN = "unknown"  # Type not determined
@@ -120,12 +125,19 @@ class PersonRecord(BaseModel):
     known_for_org_id: Optional[int] = Field(default=None, description="Foreign key to organizations table")
     from_date: Optional[str] = Field(default=None, description="Start date of role (ISO format YYYY-MM-DD)")
     to_date: Optional[str] = Field(default=None, description="End date of role (ISO format YYYY-MM-DD)")
+    birth_date: Optional[str] = Field(default=None, description="Date of birth (ISO format YYYY-MM-DD)")
+    death_date: Optional[str] = Field(default=None, description="Date of death (ISO format YYYY-MM-DD) - if set, person is historic")
     record: dict[str, Any] = Field(default_factory=dict, description="Original record from source")
 
     @property
     def canonical_id(self) -> str:
         """Generate canonical ID in format source:source_id."""
         return f"{self.source}:{self.source_id}"
+
+    @property
+    def is_historic(self) -> bool:
+        """Return True if the person is deceased (has a death date)."""
+        return self.death_date is not None and self.death_date != ""
 
     def model_dump_for_db(self) -> dict[str, Any]:
         """Convert to dict suitable for database storage."""
@@ -140,6 +152,8 @@ class PersonRecord(BaseModel):
             "known_for_org_id": self.known_for_org_id,  # Can be None
             "from_date": self.from_date or "",
             "to_date": self.to_date or "",
+            "birth_date": self.birth_date or "",
+            "death_date": self.death_date or "",
             "record": self.record,
         }
 

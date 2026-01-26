@@ -151,21 +151,28 @@ The entity database supports both **organizations** and **people** (v0.9.0).
 | `political_party` | Political parties | Democratic Party |
 | `trade_union` | Labor unions | AFL-CIO |
 
-**Person Database (v0.9.0):**
+**Person Database (v0.9.2):**
 
 The person database stores notable people from Wikidata with role/org context for disambiguation:
 
 | PersonType | Description | Examples |
 |------------|-------------|----------|
 | `executive` | C-suite, board members | Tim Cook, Satya Nadella |
-| `politician` | Elected officials, diplomats | Joe Biden, Angela Merkel |
+| `politician` | Elected officials (presidents, MPs, mayors) | Joe Biden, Angela Merkel |
+| `government` | Civil servants, diplomats, appointed officials | Ambassadors, agency heads |
+| `military` | Military officers, armed forces personnel | Generals, admirals |
+| `legal` | Judges, lawyers, legal professionals | Supreme Court justices |
+| `professional` | Known for profession (doctors, engineers) | Famous surgeons, architects |
 | `athlete` | Sports figures | LeBron James, Lionel Messi |
-| `artist` | Actors, musicians, directors | Tom Hanks, Taylor Swift |
+| `artist` | Traditional creatives (musicians, actors, painters) | Tom Hanks, Taylor Swift |
+| `media` | Internet/social media personalities | YouTubers, influencers, podcasters |
 | `academic` | Professors, researchers | Neil deGrasse Tyson |
-| `scientist` | Scientists, inventors | Elon Musk (as founder) |
-| `journalist` | Media personalities | Anderson Cooper |
+| `scientist` | Scientists, inventors | Research scientists |
+| `journalist` | Reporters, news presenters | Anderson Cooper |
 | `entrepreneur` | Founders, business owners | Mark Zuckerberg |
 | `activist` | Advocates, campaigners | Greta Thunberg |
+
+Person records include `birth_date` and `death_date` fields, with an `is_historic` property that returns True for deceased individuals.
 
 ### GLiNER2 Integration (v0.4.0)
 The library uses GLiNER2 for:
@@ -227,6 +234,9 @@ corp-extractor db import-people --type executive --skip-existing  # Skip existin
 corp-extractor db import-people --type executive --enrich-dates   # Fetch role dates (slower)
 corp-extractor db import-wikidata-dump --download --limit 50000   # From Wikidata dump (v0.9.1)
 corp-extractor db import-wikidata-dump --dump /path/to/dump.bz2 --people --no-orgs  # Local dump
+corp-extractor db import-wikidata-dump --dump dump.bz2 --resume  # Resume interrupted import
+corp-extractor db import-wikidata-dump --download --require-enwiki  # Only orgs with English Wikipedia
+corp-extractor db canonicalize           # Link equivalent records across sources
 corp-extractor db search "Microsoft"     # Search organizations
 corp-extractor db search-people "Tim Cook"  # Search people (v0.9.0)
 corp-extractor db upload                 # Upload with lite/compressed variants

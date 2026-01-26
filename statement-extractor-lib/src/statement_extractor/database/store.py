@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 import numpy as np
+import pycountry
 import sqlite_vec
 
 from .models import CompanyRecord, DatabaseStats, EntityType, PersonRecord, PersonType
@@ -75,6 +76,215 @@ COMPANY_SUFFIXES: set[str] = {
     # Additional common suffixes
     'Group', 'Holdings', 'Holding', 'Partners', 'Trust', 'Fund', 'Bank', 'N.A.', 'The',
 }
+
+# Source priority for canonicalization (lower = higher priority)
+SOURCE_PRIORITY: dict[str, int] = {
+    "gleif": 1,       # Gold standard LEI - globally unique legal entity identifier
+    "sec_edgar": 2,   # Vetted US filers with CIK + ticker
+    "companies_house": 3,  # Official UK registry
+    "wikipedia": 4,   # Crowdsourced, less authoritative
+}
+
+# Suffix expansions for canonical name matching
+SUFFIX_EXPANSIONS: dict[str, str] = {
+    " ltd": " limited",
+    " corp": " corporation",
+    " inc": " incorporated",
+    " co": " company",
+    " intl": " international",
+    " natl": " national",
+}
+
+
+class UnionFind:
+    """Simple Union-Find (Disjoint Set Union) data structure for canonicalization."""
+
+    def __init__(self, elements: list[int]):
+        """Initialize with list of element IDs."""
+        self.parent: dict[int, int] = {e: e for e in elements}
+        self.rank: dict[int, int] = {e: 0 for e in elements}
+
+    def find(self, x: int) -> int:
+        """Find with path compression."""
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x: int, y: int) -> None:
+        """Union by rank."""
+        px, py = self.find(x), self.find(y)
+        if px == py:
+            return
+        if self.rank[px] < self.rank[py]:
+            px, py = py, px
+        self.parent[py] = px
+        if self.rank[px] == self.rank[py]:
+            self.rank[px] += 1
+
+    def groups(self) -> dict[int, list[int]]:
+        """Return dict of root -> list of members."""
+        result: dict[int, list[int]] = {}
+        for e in self.parent:
+            root = self.find(e)
+            result.setdefault(root, []).append(e)
+        return result
+
+
+# Common region aliases not handled well by pycountry fuzzy search
+REGION_ALIASES: dict[str, str] = {
+    "uk": "GB",
+    "u.k.": "GB",
+    "england": "GB",
+    "scotland": "GB",
+    "wales": "GB",
+    "northern ireland": "GB",
+    "usa": "US",
+    "u.s.a.": "US",
+    "u.s.": "US",
+    "united states of america": "US",
+    "america": "US",
+}
+
+# Cache for region normalization lookups
+_region_cache: dict[str, str] = {}
+
+
+def _normalize_region(region: str) -> str:
+    """
+    Normalize a region string to ISO 3166-1 alpha-2 country code.
+
+    Handles:
+    - Country codes (2-letter, 3-letter)
+    - Country names (with fuzzy matching)
+    - US state codes (CA, NY) -> US
+    - US state names (California, New York) -> US
+    - Common aliases (UK, USA, England) -> proper codes
+
+    Returns empty string if region cannot be normalized.
+    """
+    if not region:
+        return ""
+
+    # Check cache first
+    cache_key = region.lower().strip()
+    if cache_key in _region_cache:
+        return _region_cache[cache_key]
+
+    result = _normalize_region_uncached(region)
+    _region_cache[cache_key] = result
+    return result
+
+
+def _normalize_region_uncached(region: str) -> str:
+    """Uncached region normalization logic."""
+    region_clean = region.strip()
+
+    # Empty after stripping = empty result
+    if not region_clean:
+        return ""
+
+    region_lower = region_clean.lower()
+    region_upper = region_clean.upper()
+
+    # Check common aliases first
+    if region_lower in REGION_ALIASES:
+        return REGION_ALIASES[region_lower]
+
+    # For 2-letter codes, check country first, then US state
+    # This means ambiguous codes like "CA" (Canada vs California) prefer country
+    # But unambiguous codes like "NY" (not a country) will match as US state
+    if len(region_clean) == 2:
+        # Try as country alpha-2 first
+        country = pycountry.countries.get(alpha_2=region_upper)
+        if country:
+            return country.alpha_2
+
+        # If not a country, try as US state code
+        subdivision = pycountry.subdivisions.get(code=f"US-{region_upper}")
+        if subdivision:
+            return "US"
+
+    # Try alpha-3 lookup
+    if len(region_clean) == 3:
+        country = pycountry.countries.get(alpha_3=region_upper)
+        if country:
+            return country.alpha_2
+
+    # Try as US state name (e.g., "California", "New York")
+    try:
+        subdivisions = list(pycountry.subdivisions.search_fuzzy(region_clean))
+        if subdivisions:
+            # Check if it's a US state
+            if subdivisions[0].code.startswith("US-"):
+                return "US"
+            # Return the parent country code
+            return subdivisions[0].country_code
+    except LookupError:
+        pass
+
+    # Try country fuzzy search
+    try:
+        countries = pycountry.countries.search_fuzzy(region_clean)
+        if countries:
+            return countries[0].alpha_2
+    except LookupError:
+        pass
+
+    # Return empty if we can't normalize
+    return ""
+
+
+def _regions_match(region1: str, region2: str) -> bool:
+    """
+    Check if two regions match after normalization.
+
+    Empty regions match anything (lenient matching for incomplete data).
+    """
+    norm1 = _normalize_region(region1)
+    norm2 = _normalize_region(region2)
+
+    # Empty regions match anything
+    if not norm1 or not norm2:
+        return True
+
+    return norm1 == norm2
+
+
+def _normalize_for_canon(name: str) -> str:
+    """Normalize name for canonical matching (simpler than search normalization)."""
+    # Lowercase
+    result = name.lower()
+    # Remove trailing dots
+    result = result.rstrip(".")
+    # Remove extra whitespace
+    result = " ".join(result.split())
+    return result
+
+
+def _expand_suffix(name: str) -> str:
+    """Expand known suffix abbreviations."""
+    result = name.lower().rstrip(".")
+    for abbrev, full in SUFFIX_EXPANSIONS.items():
+        if result.endswith(abbrev):
+            result = result[:-len(abbrev)] + full
+            break  # Only expand one suffix
+    return result
+
+
+def _names_match_for_canon(name1: str, name2: str) -> bool:
+    """Check if two names match for canonicalization."""
+    n1 = _normalize_for_canon(name1)
+    n2 = _normalize_for_canon(name2)
+
+    # Exact match after normalization
+    if n1 == n2:
+        return True
+
+    # Try with suffix expansion
+    if _expand_suffix(n1) == _expand_suffix(n2):
+        return True
+
+    return False
 
 # Pre-compile the suffix pattern for performance
 _SUFFIX_PATTERN = re.compile(
@@ -350,6 +560,20 @@ class OrganizationDatabase:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Add canon_id column if it doesn't exist (migration for canonicalization)
+        try:
+            conn.execute("ALTER TABLE organizations ADD COLUMN canon_id INTEGER DEFAULT NULL")
+            logger.info("Added canon_id column to organizations table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add canon_size column if it doesn't exist (migration for canonicalization)
+        try:
+            conn.execute("ALTER TABLE organizations ADD COLUMN canon_size INTEGER DEFAULT 1")
+            logger.info("Added canon_size column to organizations table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Create indexes on main table
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_name ON organizations(name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_name_normalized ON organizations(name_normalized)")
@@ -358,6 +582,7 @@ class OrganizationDatabase:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_region ON organizations(region)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_entity_type ON organizations(entity_type)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_name_region_source ON organizations(name, region, source)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_canon_id ON organizations(canon_id)")
 
         # Create sqlite-vec virtual table for embeddings
         # vec0 is the recommended virtual table type
@@ -489,13 +714,15 @@ class OrganizationDatabase:
         source_filter: Optional[str] = None,
         query_text: Optional[str] = None,
         max_text_candidates: int = 5000,
+        rerank_min_candidates: int = 500,
     ) -> list[tuple[CompanyRecord, float]]:
         """
         Search for similar organizations using hybrid text + vector search.
 
-        Two-stage approach:
+        Three-stage approach:
         1. If query_text provided, use SQL LIKE to find candidates containing search terms
         2. Use sqlite-vec for vector similarity ranking on filtered candidates
+        3. Apply prominence-based re-ranking to boost major companies (SEC filers, tickers)
 
         Args:
             query_embedding: Query embedding vector
@@ -503,9 +730,10 @@ class OrganizationDatabase:
             source_filter: Optional filter by source (gleif, sec_edgar, etc.)
             query_text: Optional query text for text-based pre-filtering
             max_text_candidates: Max candidates to keep after text filtering
+            rerank_min_candidates: Minimum candidates to fetch for re-ranking (default 500)
 
         Returns:
-            List of (CompanyRecord, similarity_score) tuples
+            List of (CompanyRecord, adjusted_score) tuples sorted by prominence-adjusted score
         """
         start = time.time()
         self._connect()
@@ -519,6 +747,7 @@ class OrganizationDatabase:
 
         # Stage 1: Text-based pre-filtering (if query_text provided)
         candidate_ids: Optional[set[int]] = None
+        query_normalized_text = ""
         if query_text:
             query_normalized_text = _normalize_name(query_text)
             if query_normalized_text:
@@ -529,23 +758,167 @@ class OrganizationDatabase:
                 )
                 logger.info(f"Text filter: {len(candidate_ids)} candidates for '{query_text}'")
 
-        # Stage 2: Vector search
+        # Stage 2: Vector search - fetch more candidates for re-ranking
         if candidate_ids is not None and len(candidate_ids) == 0:
             # No text matches, return empty
             return []
 
+        # Fetch enough candidates for prominence re-ranking to be effective
+        # Use at least rerank_min_candidates, or all text-filtered candidates if fewer
+        if candidate_ids is not None:
+            fetch_k = min(len(candidate_ids), max(rerank_min_candidates, top_k * 5))
+        else:
+            fetch_k = max(rerank_min_candidates, top_k * 5)
+
         if candidate_ids is not None:
             # Search within text-filtered candidates
             results = self._vector_search_filtered(
-                query_blob, candidate_ids, top_k, source_filter
+                query_blob, candidate_ids, fetch_k, source_filter
             )
         else:
             # Full vector search
-            results = self._vector_search_full(query_blob, top_k, source_filter)
+            results = self._vector_search_full(query_blob, fetch_k, source_filter)
+
+        # Stage 3: Prominence-based re-ranking
+        if results and query_normalized_text:
+            results = self._apply_prominence_reranking(results, query_normalized_text, top_k)
+        else:
+            # No re-ranking, just trim to top_k
+            results = results[:top_k]
 
         elapsed = time.time() - start
         logger.debug(f"Hybrid search took {elapsed:.3f}s (results={len(results)})")
         return results
+
+    def _calculate_prominence_boost(
+        self,
+        record: CompanyRecord,
+        query_normalized: str,
+        canon_sources: Optional[set[str]] = None,
+    ) -> float:
+        """
+        Calculate prominence boost for re-ranking search results.
+
+        Boosts scores based on signals that indicate a major/prominent company:
+        - Has ticker symbol (publicly traded)
+        - GLEIF source (has LEI)
+        - SEC source (vetted US filers)
+        - Wikidata source (Wikipedia-notable)
+        - Exact normalized name match
+
+        When canon_sources is provided (from a canonical group), boosts are
+        applied for ALL sources in the canon group, not just this record's source.
+
+        Args:
+            record: The company record to evaluate
+            query_normalized: Normalized query text for exact match check
+            canon_sources: Optional set of sources in this record's canonical group
+
+        Returns:
+            Boost value to add to embedding similarity (0.0 to ~0.21)
+        """
+        boost = 0.0
+
+        # Get all sources to consider (canon group or just this record)
+        sources_to_check = canon_sources or {record.source}
+
+        # Has ticker symbol = publicly traded major company
+        # Check if ANY record in canon group has ticker
+        if record.record.get("ticker") or (canon_sources and "sec_edgar" in canon_sources):
+            boost += 0.08
+
+        # Source-based boosts - accumulate for all sources in canon group
+        if "gleif" in sources_to_check:
+            boost += 0.05  # Has LEI = verified legal entity
+        if "sec_edgar" in sources_to_check:
+            boost += 0.03  # SEC filer
+        if "wikipedia" in sources_to_check:
+            boost += 0.02  # Wikipedia notable
+
+        # Exact normalized name match bonus
+        record_normalized = _normalize_name(record.name)
+        if query_normalized == record_normalized:
+            boost += 0.05
+
+        return boost
+
+    def _apply_prominence_reranking(
+        self,
+        results: list[tuple[CompanyRecord, float]],
+        query_normalized: str,
+        top_k: int,
+        similarity_weight: float = 0.3,
+    ) -> list[tuple[CompanyRecord, float]]:
+        """
+        Apply prominence-based re-ranking to search results with canon group awareness.
+
+        When records have been canonicalized, boosts are applied based on ALL sources
+        in the canonical group, not just the matched record's source.
+
+        Args:
+            results: List of (record, similarity) from vector search
+            query_normalized: Normalized query text
+            top_k: Number of results to return after re-ranking
+            similarity_weight: Weight for similarity score (0-1), lower = prominence matters more
+
+        Returns:
+            Re-ranked list of (record, adjusted_score) tuples
+        """
+        conn = self._conn
+        assert conn is not None
+
+        # Build canon_id -> sources mapping for all results that have canon_id
+        canon_sources_map: dict[int, set[str]] = {}
+        canon_ids = [
+            r.record.get("canon_id")
+            for r, _ in results
+            if r.record.get("canon_id") is not None
+        ]
+
+        if canon_ids:
+            # Fetch all sources for each canon_id in one query
+            unique_canon_ids = list(set(canon_ids))
+            placeholders = ",".join("?" * len(unique_canon_ids))
+            rows = conn.execute(f"""
+                SELECT canon_id, source
+                FROM organizations
+                WHERE canon_id IN ({placeholders})
+            """, unique_canon_ids).fetchall()
+
+            for row in rows:
+                canon_id = row["canon_id"]
+                canon_sources_map.setdefault(canon_id, set()).add(row["source"])
+
+        # Calculate boosted scores with canon group awareness
+        # Formula: adjusted = (similarity * weight) + boost
+        # With weight=0.3, a sim=0.65 SEC+ticker (boost=0.11) beats sim=0.75 no-boost
+        boosted_results: list[tuple[CompanyRecord, float, float, float]] = []
+        for record, similarity in results:
+            canon_id = record.record.get("canon_id")
+            # Get all sources in this record's canon group (if any)
+            canon_sources = canon_sources_map.get(canon_id) if canon_id else None
+
+            boost = self._calculate_prominence_boost(record, query_normalized, canon_sources)
+            adjusted_score = (similarity * similarity_weight) + boost
+            boosted_results.append((record, similarity, boost, adjusted_score))
+
+        # Sort by adjusted score (descending)
+        boosted_results.sort(key=lambda x: x[3], reverse=True)
+
+        # Log re-ranking details for top results
+        logger.debug(f"Prominence re-ranking for '{query_normalized}':")
+        for record, sim, boost, adj in boosted_results[:10]:
+            ticker = record.record.get("ticker", "")
+            ticker_str = f" ticker={ticker}" if ticker else ""
+            canon_id = record.record.get("canon_id")
+            canon_str = f" canon={canon_id}" if canon_id else ""
+            logger.debug(
+                f"  {record.name}: sim={sim:.3f} + boost={boost:.3f} = {adj:.3f} "
+                f"[{record.source}{ticker_str}{canon_str}]"
+            )
+
+        # Return top_k with adjusted scores
+        return [(r, adj) for r, _, _, adj in boosted_results[:top_k]]
 
     def _text_filter_candidates(
         self,
@@ -697,24 +1070,28 @@ class OrganizationDatabase:
         return results
 
     def _get_record_by_id(self, org_id: int) -> Optional[CompanyRecord]:
-        """Get an organization record by ID."""
+        """Get an organization record by ID, including db_id and canon_id in record dict."""
         conn = self._conn
         assert conn is not None
 
         cursor = conn.execute("""
-            SELECT name, source, source_id, region, entity_type, record
+            SELECT id, name, source, source_id, region, entity_type, record, canon_id
             FROM organizations WHERE id = ?
         """, (org_id,))
 
         row = cursor.fetchone()
         if row:
+            record_data = json.loads(row["record"])
+            # Add db_id and canon_id to record dict for canon-aware search
+            record_data["db_id"] = row["id"]
+            record_data["canon_id"] = row["canon_id"]
             return CompanyRecord(
                 name=row["name"],
                 source=row["source"],
                 source_id=row["source_id"],
                 region=row["region"] or "",
                 entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
-                record=json.loads(row["record"]),
+                record=record_data,
             )
         return None
 
@@ -776,6 +1153,30 @@ class OrganizationDatabase:
             database_size_bytes=db_size,
         )
 
+    def get_all_source_ids(self, source: Optional[str] = None) -> set[str]:
+        """
+        Get all source_ids from the organizations table.
+
+        Useful for resume operations to skip already-imported records.
+
+        Args:
+            source: Optional source filter (e.g., "wikipedia" for Wikidata orgs)
+
+        Returns:
+            Set of source_id strings (e.g., Q codes for Wikidata)
+        """
+        conn = self._connect()
+
+        if source:
+            cursor = conn.execute(
+                "SELECT DISTINCT source_id FROM organizations WHERE source = ?",
+                (source,)
+            )
+        else:
+            cursor = conn.execute("SELECT DISTINCT source_id FROM organizations")
+
+        return {row[0] for row in cursor}
+
     def iter_records(self, source: Optional[str] = None) -> Iterator[CompanyRecord]:
         """Iterate over all records, optionally filtered by source."""
         conn = self._connect()
@@ -801,6 +1202,245 @@ class OrganizationDatabase:
                 entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
                 record=json.loads(row["record"]),
             )
+
+    def canonicalize(self, batch_size: int = 10000) -> dict[str, int]:
+        """
+        Canonicalize all organizations by linking equivalent records.
+
+        Records are considered equivalent if they match by:
+        1. Same LEI (GLEIF source_id or Wikidata P1278) - globally unique, no region check
+        2. Same ticker symbol - globally unique, no region check
+        3. Same CIK - globally unique, no region check
+        4. Same normalized name AND same normalized region
+        5. Name match with suffix expansion AND same region
+
+        Region normalization uses pycountry to handle:
+        - Country codes/names (GB, United Kingdom, Great Britain -> GB)
+        - US state codes/names (CA, California -> US)
+        - Common aliases (UK -> GB, USA -> US)
+
+        For each group of equivalent records, the highest-priority source
+        (gleif > sec_edgar > companies_house > wikipedia) becomes canonical.
+
+        Args:
+            batch_size: Commit batch size for updates
+
+        Returns:
+            Dict with stats: total_records, groups_found, records_updated
+        """
+        conn = self._connect()
+        logger.info("Starting canonicalization...")
+
+        # Phase 1: Load all organization data and build indexes
+        logger.info("Phase 1: Building indexes...")
+
+        lei_index: dict[str, list[int]] = {}
+        ticker_index: dict[str, list[int]] = {}
+        cik_index: dict[str, list[int]] = {}
+        # Name indexes now keyed by (normalized_name, normalized_region)
+        # Region-less matching only applies for identifier-based matching
+        name_region_index: dict[tuple[str, str], list[int]] = {}
+        expanded_name_region_index: dict[tuple[str, str], list[int]] = {}
+
+        sources: dict[int, str] = {}  # org_id -> source
+        all_org_ids: list[int] = []
+
+        cursor = conn.execute("""
+            SELECT id, source, source_id, name, region, record
+            FROM organizations
+        """)
+
+        count = 0
+        for row in cursor:
+            org_id = row["id"]
+            source = row["source"]
+            name = row["name"]
+            region = row["region"] or ""
+            record = json.loads(row["record"])
+
+            all_org_ids.append(org_id)
+            sources[org_id] = source
+
+            # Index by LEI (GLEIF source_id or Wikidata's P1278)
+            # LEI is globally unique - no region check needed
+            if source == "gleif":
+                lei = row["source_id"]
+            else:
+                lei = record.get("lei")
+            if lei:
+                lei_index.setdefault(lei.upper(), []).append(org_id)
+
+            # Index by ticker - globally unique, no region check
+            ticker = record.get("ticker")
+            if ticker:
+                ticker_index.setdefault(ticker.upper(), []).append(org_id)
+
+            # Index by CIK - globally unique, no region check
+            if source == "sec_edgar":
+                cik = row["source_id"]
+            else:
+                cik = record.get("cik")
+            if cik:
+                cik_index.setdefault(str(cik), []).append(org_id)
+
+            # Index by (normalized_name, normalized_region)
+            # Same name in different regions = different legal entities
+            norm_name = _normalize_for_canon(name)
+            norm_region = _normalize_region(region)
+            if norm_name:
+                key = (norm_name, norm_region)
+                name_region_index.setdefault(key, []).append(org_id)
+
+            # Index by (expanded_name, normalized_region)
+            expanded_name = _expand_suffix(name)
+            if expanded_name and expanded_name != norm_name:
+                key = (expanded_name, norm_region)
+                expanded_name_region_index.setdefault(key, []).append(org_id)
+
+            count += 1
+            if count % 100000 == 0:
+                logger.info(f"  Indexed {count} organizations...")
+
+        logger.info(f"  Indexed {count} organizations total")
+        logger.info(f"  LEI index: {len(lei_index)} unique LEIs")
+        logger.info(f"  Ticker index: {len(ticker_index)} unique tickers")
+        logger.info(f"  CIK index: {len(cik_index)} unique CIKs")
+        logger.info(f"  Name+region index: {len(name_region_index)} unique (name, region) pairs")
+        logger.info(f"  Expanded name+region index: {len(expanded_name_region_index)} unique pairs")
+
+        # Phase 2: Build equivalence groups using Union-Find
+        logger.info("Phase 2: Building equivalence groups...")
+
+        uf = UnionFind(all_org_ids)
+
+        # Merge by LEI (globally unique identifier)
+        for _lei, ids in lei_index.items():
+            for i in range(1, len(ids)):
+                uf.union(ids[0], ids[i])
+
+        # Merge by ticker (globally unique identifier)
+        for _ticker, ids in ticker_index.items():
+            for i in range(1, len(ids)):
+                uf.union(ids[0], ids[i])
+
+        # Merge by CIK (globally unique identifier)
+        for _cik, ids in cik_index.items():
+            for i in range(1, len(ids)):
+                uf.union(ids[0], ids[i])
+
+        # Merge by (normalized_name, normalized_region)
+        for _name_region, ids in name_region_index.items():
+            for i in range(1, len(ids)):
+                uf.union(ids[0], ids[i])
+
+        # Merge by (expanded_name, normalized_region)
+        # This connects "Amazon Ltd" with "Amazon Limited" in same region
+        for key, expanded_ids in expanded_name_region_index.items():
+            # Find org_ids with the expanded form as their normalized name in same region
+            if key in name_region_index:
+                # Link first expanded_id to first name_id
+                uf.union(expanded_ids[0], name_region_index[key][0])
+
+        groups = uf.groups()
+        logger.info(f"  Found {len(groups)} equivalence groups")
+
+        # Count groups with multiple records
+        multi_record_groups = sum(1 for ids in groups.values() if len(ids) > 1)
+        logger.info(f"  Groups with multiple records: {multi_record_groups}")
+
+        # Phase 3: Select canonical record for each group and update database
+        logger.info("Phase 3: Updating database...")
+
+        updated_count = 0
+        batch_updates: list[tuple[int, int, int]] = []  # (org_id, canon_id, canon_size)
+
+        for _root, group_ids in groups.items():
+            if len(group_ids) == 1:
+                # Single record - canonical to itself
+                batch_updates.append((group_ids[0], group_ids[0], 1))
+            else:
+                # Multiple records - find highest priority source
+                best_id = min(
+                    group_ids,
+                    key=lambda oid: (SOURCE_PRIORITY.get(sources[oid], 99), oid)
+                )
+                group_size = len(group_ids)
+
+                # All records in group point to the best one
+                for oid in group_ids:
+                    # canon_size is only set on the canonical record
+                    size = group_size if oid == best_id else 1
+                    batch_updates.append((oid, best_id, size))
+
+            # Commit batch
+            if len(batch_updates) >= batch_size:
+                self._apply_canon_updates(batch_updates)
+                updated_count += len(batch_updates)
+                logger.info(f"  Updated {updated_count} records...")
+                batch_updates = []
+
+        # Final batch
+        if batch_updates:
+            self._apply_canon_updates(batch_updates)
+            updated_count += len(batch_updates)
+
+        conn.commit()
+        logger.info(f"Canonicalization complete: {updated_count} records updated, {multi_record_groups} multi-record groups")
+
+        return {
+            "total_records": count,
+            "groups_found": len(groups),
+            "multi_record_groups": multi_record_groups,
+            "records_updated": updated_count,
+        }
+
+    def _apply_canon_updates(self, updates: list[tuple[int, int, int]]) -> None:
+        """Apply batch of canon updates: (org_id, canon_id, canon_size)."""
+        conn = self._conn
+        assert conn is not None
+
+        for org_id, canon_id, canon_size in updates:
+            conn.execute(
+                "UPDATE organizations SET canon_id = ?, canon_size = ? WHERE id = ?",
+                (canon_id, canon_size, org_id)
+            )
+
+        conn.commit()
+
+    def get_canon_stats(self) -> dict[str, int]:
+        """Get statistics about canonicalization status."""
+        conn = self._connect()
+
+        # Total records
+        cursor = conn.execute("SELECT COUNT(*) FROM organizations")
+        total = cursor.fetchone()[0]
+
+        # Records with canon_id set
+        cursor = conn.execute("SELECT COUNT(*) FROM organizations WHERE canon_id IS NOT NULL")
+        canonicalized = cursor.fetchone()[0]
+
+        # Number of canonical groups (unique canon_ids)
+        cursor = conn.execute("SELECT COUNT(DISTINCT canon_id) FROM organizations WHERE canon_id IS NOT NULL")
+        groups = cursor.fetchone()[0]
+
+        # Multi-record groups (canon_size > 1)
+        cursor = conn.execute("SELECT COUNT(*) FROM organizations WHERE canon_size > 1")
+        multi_record_groups = cursor.fetchone()[0]
+
+        # Records in multi-record groups
+        cursor = conn.execute("""
+            SELECT COUNT(*) FROM organizations o1
+            WHERE EXISTS (SELECT 1 FROM organizations o2 WHERE o2.id = o1.canon_id AND o2.canon_size > 1)
+        """)
+        records_in_multi = cursor.fetchone()[0]
+
+        return {
+            "total_records": total,
+            "canonicalized_records": canonicalized,
+            "canonical_groups": groups,
+            "multi_record_groups": multi_record_groups,
+            "records_in_multi_groups": records_in_multi,
+        }
 
     def migrate_name_normalized(self, batch_size: int = 50000) -> int:
         """
@@ -1178,6 +1818,68 @@ class OrganizationDatabase:
         conn.commit()
         return count
 
+    def resolve_qid_labels(
+        self,
+        label_map: dict[str, str],
+        batch_size: int = 1000,
+    ) -> int:
+        """
+        Update organization records that have QIDs instead of labels in region field.
+
+        Args:
+            label_map: Mapping of QID -> label for resolution
+            batch_size: Commit batch size
+
+        Returns:
+            Number of records updated
+        """
+        conn = self._connect()
+
+        # Find records with QIDs in region field (starts with 'Q' followed by digits)
+        region_updates = 0
+        cursor = conn.execute("""
+            SELECT id, region FROM organizations
+            WHERE region LIKE 'Q%' AND region GLOB 'Q[0-9]*'
+        """)
+        rows = cursor.fetchall()
+
+        for row in rows:
+            org_id = row["id"]
+            qid = row["region"]
+            if qid in label_map:
+                conn.execute(
+                    "UPDATE organizations SET region = ? WHERE id = ?",
+                    (label_map[qid], org_id)
+                )
+                region_updates += 1
+
+                if region_updates % batch_size == 0:
+                    conn.commit()
+                    logger.info(f"Updated {region_updates} organization region labels...")
+
+        conn.commit()
+        logger.info(f"Resolved QID labels: {region_updates} organization regions")
+        return region_updates
+
+    def get_unresolved_qids(self) -> set[str]:
+        """
+        Get all QIDs that still need resolution in the organizations table.
+
+        Returns:
+            Set of QIDs (starting with 'Q') found in region field
+        """
+        conn = self._connect()
+        qids: set[str] = set()
+
+        cursor = conn.execute("""
+            SELECT DISTINCT region FROM organizations
+            WHERE region LIKE 'Q%' AND region GLOB 'Q[0-9]*'
+        """)
+        for row in cursor:
+            qids.add(row["region"])
+
+        return qids
+
 
 def get_person_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "PersonDatabase":
     """
@@ -1265,6 +1967,8 @@ class PersonDatabase:
                 known_for_org_id INTEGER DEFAULT NULL,
                 from_date TEXT NOT NULL DEFAULT '',
                 to_date TEXT NOT NULL DEFAULT '',
+                birth_date TEXT NOT NULL DEFAULT '',
+                death_date TEXT NOT NULL DEFAULT '',
                 record TEXT NOT NULL,
                 UNIQUE(source, source_id, known_for_role, known_for_org),
                 FOREIGN KEY (known_for_org_id) REFERENCES organizations(id)
@@ -1306,11 +2010,33 @@ class PersonDatabase:
         except sqlite3.OperationalError:
             pass  # Column doesn't exist yet (will be added on next connection)
 
+        # Add birth_date column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE people ADD COLUMN birth_date TEXT NOT NULL DEFAULT ''")
+            logger.info("Added birth_date column to people table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add death_date column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute("ALTER TABLE people ADD COLUMN death_date TEXT NOT NULL DEFAULT ''")
+            logger.info("Added death_date column to people table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Create sqlite-vec virtual table for embeddings
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS person_embeddings USING vec0(
                 person_id INTEGER PRIMARY KEY,
                 embedding float[{self._embedding_dim}]
+            )
+        """)
+
+        # Create QID labels lookup table for Wikidata QID -> label mappings
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS qid_labels (
+                qid TEXT PRIMARY KEY,
+                label TEXT NOT NULL
             )
         """)
 
@@ -1415,8 +2141,9 @@ class PersonDatabase:
         cursor = conn.execute("""
             INSERT OR REPLACE INTO people
             (name, name_normalized, source, source_id, country, person_type,
-             known_for_role, known_for_org, known_for_org_id, from_date, to_date, record)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             known_for_role, known_for_org, known_for_org_id, from_date, to_date,
+             birth_date, death_date, record)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.name,
             name_normalized,
@@ -1429,6 +2156,8 @@ class PersonDatabase:
             record.known_for_org_id,  # Can be None
             record.from_date or "",
             record.to_date or "",
+            record.birth_date or "",
+            record.death_date or "",
             record_json,
         ))
 
@@ -1473,8 +2202,9 @@ class PersonDatabase:
             cursor = conn.execute("""
                 INSERT OR REPLACE INTO people
                 (name, name_normalized, source, source_id, country, person_type,
-                 known_for_role, known_for_org, known_for_org_id, from_date, to_date, record)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 known_for_role, known_for_org, known_for_org_id, from_date, to_date,
+                 birth_date, death_date, record)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.name,
                 name_normalized,
@@ -1487,6 +2217,8 @@ class PersonDatabase:
                 record.known_for_org_id,  # Can be None
                 record.from_date or "",
                 record.to_date or "",
+                record.birth_date or "",
+                record.death_date or "",
                 record_json,
             ))
 
@@ -1773,7 +2505,7 @@ class PersonDatabase:
         assert conn is not None
 
         cursor = conn.execute("""
-            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
+            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
             FROM people WHERE id = ?
         """, (person_id,))
 
@@ -1788,6 +2520,8 @@ class PersonDatabase:
                 known_for_role=row["known_for_role"] or "",
                 known_for_org=row["known_for_org"] or "",
                 known_for_org_id=row["known_for_org_id"],  # Can be None
+                birth_date=row["birth_date"] or "",
+                death_date=row["death_date"] or "",
                 record=json.loads(row["record"]),
             )
         return None
@@ -1797,7 +2531,7 @@ class PersonDatabase:
         conn = self._connect()
 
         cursor = conn.execute("""
-            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
+            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
             FROM people
             WHERE source = ? AND source_id = ?
         """, (source, source_id))
@@ -1813,6 +2547,8 @@ class PersonDatabase:
                 known_for_role=row["known_for_role"] or "",
                 known_for_org=row["known_for_org"] or "",
                 known_for_org_id=row["known_for_org_id"],  # Can be None
+                birth_date=row["birth_date"] or "",
+                death_date=row["death_date"] or "",
                 record=json.loads(row["record"]),
             )
         return None
@@ -1839,19 +2575,43 @@ class PersonDatabase:
             "by_source": by_source,
         }
 
+    def get_all_source_ids(self, source: Optional[str] = None) -> set[str]:
+        """
+        Get all source_ids from the people table.
+
+        Useful for resume operations to skip already-imported records.
+
+        Args:
+            source: Optional source filter (e.g., "wikidata")
+
+        Returns:
+            Set of source_id strings (e.g., Q codes for Wikidata)
+        """
+        conn = self._connect()
+
+        if source:
+            cursor = conn.execute(
+                "SELECT DISTINCT source_id FROM people WHERE source = ?",
+                (source,)
+            )
+        else:
+            cursor = conn.execute("SELECT DISTINCT source_id FROM people")
+
+        return {row[0] for row in cursor}
+
     def iter_records(self, source: Optional[str] = None) -> Iterator[PersonRecord]:
         """Iterate over all person records, optionally filtered by source."""
         conn = self._connect()
 
         if source:
             cursor = conn.execute("""
-                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
                 FROM people
                 WHERE source = ?
             """, (source,))
         else:
             cursor = conn.execute("""
-                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, record
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
                 FROM people
             """)
 
@@ -1865,5 +2625,198 @@ class PersonDatabase:
                 known_for_role=row["known_for_role"] or "",
                 known_for_org=row["known_for_org"] or "",
                 known_for_org_id=row["known_for_org_id"],  # Can be None
+                birth_date=row["birth_date"] or "",
+                death_date=row["death_date"] or "",
                 record=json.loads(row["record"]),
             )
+
+    def resolve_qid_labels(
+        self,
+        label_map: dict[str, str],
+        batch_size: int = 1000,
+    ) -> tuple[int, int]:
+        """
+        Update records that have QIDs instead of labels.
+
+        This is called after dump import to resolve any QIDs that were
+        stored because labels weren't available in the cache at import time.
+
+        If resolving would create a duplicate of an existing record with
+        resolved labels, the QID version is deleted instead.
+
+        Args:
+            label_map: Mapping of QID -> label for resolution
+            batch_size: Commit batch size
+
+        Returns:
+            Tuple of (updates, deletes)
+        """
+        conn = self._connect()
+
+        # Find all records with QIDs in any field (role or org - these are in unique constraint)
+        # Country is not part of unique constraint so can be updated directly
+        cursor = conn.execute("""
+            SELECT id, source, source_id, country, known_for_role, known_for_org
+            FROM people
+            WHERE (country LIKE 'Q%' AND country GLOB 'Q[0-9]*')
+               OR (known_for_role LIKE 'Q%' AND known_for_role GLOB 'Q[0-9]*')
+               OR (known_for_org LIKE 'Q%' AND known_for_org GLOB 'Q[0-9]*')
+        """)
+        rows = cursor.fetchall()
+
+        updates = 0
+        deletes = 0
+
+        for row in rows:
+            person_id = row["id"]
+            source = row["source"]
+            source_id = row["source_id"]
+            country = row["country"]
+            role = row["known_for_role"]
+            org = row["known_for_org"]
+
+            # Resolve QIDs to labels
+            new_country = label_map.get(country, country) if country.startswith("Q") and country[1:].isdigit() else country
+            new_role = label_map.get(role, role) if role.startswith("Q") and role[1:].isdigit() else role
+            new_org = label_map.get(org, org) if org.startswith("Q") and org[1:].isdigit() else org
+
+            # Skip if nothing changed
+            if new_country == country and new_role == role and new_org == org:
+                continue
+
+            # Check if resolved values would duplicate an existing record
+            # (unique constraint is on source, source_id, known_for_role, known_for_org)
+            if new_role != role or new_org != org:
+                cursor2 = conn.execute("""
+                    SELECT id FROM people
+                    WHERE source = ? AND source_id = ? AND known_for_role = ? AND known_for_org = ?
+                    AND id != ?
+                """, (source, source_id, new_role, new_org, person_id))
+                existing = cursor2.fetchone()
+
+                if existing:
+                    # Duplicate would exist - delete the QID version
+                    conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
+                    conn.execute("DELETE FROM person_embeddings WHERE person_id = ?", (person_id,))
+                    deletes += 1
+                    logger.debug(f"Deleted duplicate QID record {person_id} (source_id={source_id})")
+                    continue
+
+            # No duplicate - update in place
+            conn.execute("""
+                UPDATE people SET country = ?, known_for_role = ?, known_for_org = ?
+                WHERE id = ?
+            """, (new_country, new_role, new_org, person_id))
+            updates += 1
+
+            if (updates + deletes) % batch_size == 0:
+                conn.commit()
+                logger.info(f"Resolved QID labels: {updates} updates, {deletes} deletes...")
+
+        conn.commit()
+        logger.info(f"Resolved QID labels: {updates} updates, {deletes} deletes")
+        return updates, deletes
+
+    def get_unresolved_qids(self) -> set[str]:
+        """
+        Get all QIDs that still need resolution in the database.
+
+        Returns:
+            Set of QIDs (starting with 'Q') found in country, role, or org fields
+        """
+        conn = self._connect()
+        qids: set[str] = set()
+
+        # Get QIDs from country field
+        cursor = conn.execute("""
+            SELECT DISTINCT country FROM people
+            WHERE country LIKE 'Q%' AND country GLOB 'Q[0-9]*'
+        """)
+        for row in cursor:
+            qids.add(row["country"])
+
+        # Get QIDs from known_for_role field
+        cursor = conn.execute("""
+            SELECT DISTINCT known_for_role FROM people
+            WHERE known_for_role LIKE 'Q%' AND known_for_role GLOB 'Q[0-9]*'
+        """)
+        for row in cursor:
+            qids.add(row["known_for_role"])
+
+        # Get QIDs from known_for_org field
+        cursor = conn.execute("""
+            SELECT DISTINCT known_for_org FROM people
+            WHERE known_for_org LIKE 'Q%' AND known_for_org GLOB 'Q[0-9]*'
+        """)
+        for row in cursor:
+            qids.add(row["known_for_org"])
+
+        return qids
+
+    def insert_qid_labels(
+        self,
+        label_map: dict[str, str],
+        batch_size: int = 1000,
+    ) -> int:
+        """
+        Insert QID -> label mappings into the lookup table.
+
+        Args:
+            label_map: Mapping of QID -> label
+            batch_size: Commit batch size
+
+        Returns:
+            Number of labels inserted/updated
+        """
+        conn = self._connect()
+        count = 0
+
+        for qid, label in label_map.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO qid_labels (qid, label) VALUES (?, ?)",
+                (qid, label)
+            )
+            count += 1
+
+            if count % batch_size == 0:
+                conn.commit()
+                logger.debug(f"Inserted {count} QID labels...")
+
+        conn.commit()
+        logger.info(f"Inserted {count} QID labels into lookup table")
+        return count
+
+    def get_qid_label(self, qid: str) -> Optional[str]:
+        """
+        Get the label for a QID from the lookup table.
+
+        Args:
+            qid: Wikidata QID (e.g., 'Q30')
+
+        Returns:
+            Label string or None if not found
+        """
+        conn = self._connect()
+        cursor = conn.execute(
+            "SELECT label FROM qid_labels WHERE qid = ?",
+            (qid,)
+        )
+        row = cursor.fetchone()
+        return row["label"] if row else None
+
+    def get_all_qid_labels(self) -> dict[str, str]:
+        """
+        Get all QID -> label mappings from the lookup table.
+
+        Returns:
+            Dict mapping QID -> label
+        """
+        conn = self._connect()
+        cursor = conn.execute("SELECT qid, label FROM qid_labels")
+        return {row["qid"]: row["label"] for row in cursor}
+
+    def get_qid_labels_count(self) -> int:
+        """Get the number of QID labels in the lookup table."""
+        conn = self._connect()
+        cursor = conn.execute("SELECT COUNT(*) FROM qid_labels")
+        return cursor.fetchone()[0]
