@@ -43,7 +43,7 @@ else:
 
 # New pipeline models
 from .entity import ExtractedEntity
-from .statement import RawTriple, PipelineStatement
+from .statement import SplitSentence, RawTriple, PipelineStatement
 from .qualifiers import EntityQualifiers, QualifiedEntity, ResolvedRole, ResolvedOrganization
 from .canonical import CanonicalMatch, CanonicalEntity
 from .labels import StatementLabel, LabeledStatement, TaxonomyResult
@@ -69,7 +69,8 @@ __all__ = [
     "ExtractionOptions",
     # New pipeline models
     "ExtractedEntity",
-    "RawTriple",
+    "SplitSentence",
+    "RawTriple",  # Backwards compatibility alias for SplitSentence
     "PipelineStatement",
     "EntityQualifiers",
     "QualifiedEntity",

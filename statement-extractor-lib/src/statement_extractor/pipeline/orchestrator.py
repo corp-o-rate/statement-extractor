@@ -2,8 +2,8 @@
 ExtractionPipeline - Main orchestrator for the 5-stage extraction pipeline.
 
 Coordinates the flow of data through all pipeline stages:
-1. Splitting: Text → RawTriple
-2. Extraction: RawTriple → PipelineStatement
+1. Splitting: Text → SplitSentence (atomic sentences)
+2. Extraction: SplitSentence → PipelineStatement (subject-predicate-object triples)
 3. Qualification: Entity → CanonicalEntity
 4. Labeling: Statement → LabeledStatement
 5. Taxonomy: Statement → TaxonomyResult
@@ -31,8 +31,8 @@ class ExtractionPipeline:
     Main pipeline orchestrator.
 
     Coordinates the flow of data through all 5 stages:
-    1. Splitting: Text → RawTriple (using splitter plugins)
-    2. Extraction: RawTriple → PipelineStatement (using extractor plugins)
+    1. Splitting: Text → SplitSentence (using splitter plugins)
+    2. Extraction: SplitSentence → PipelineStatement (using extractor plugins)
     3. Qualification: Entity → CanonicalEntity (using qualifier + canonicalizer plugins)
     4. Labeling: Statement → LabeledStatement (using labeler plugins)
     5. Taxonomy: Statement → TaxonomyResult (using taxonomy plugins)
@@ -115,7 +115,7 @@ class ExtractionPipeline:
         return ctx
 
     def _run_splitting(self, ctx: PipelineContext) -> PipelineContext:
-        """Stage 1: Split text into raw triples."""
+        """Stage 1: Split text into atomic sentences."""
         stage_name = get_stage_name(1)
         logger.debug(f"Running {stage_name} stage")
         start_time = time.time()
@@ -132,9 +132,9 @@ class ExtractionPipeline:
 
             logger.debug(f"Using splitter: {splitter.name}")
             try:
-                raw_triples = splitter.split(ctx.source_text, ctx)
-                ctx.raw_triples = raw_triples
-                logger.info(f"Splitting produced {len(raw_triples)} raw triples")
+                split_sentences = splitter.split(ctx.source_text, ctx)
+                ctx.split_sentences = split_sentences
+                logger.info(f"Splitting produced {len(split_sentences)} sentences")
                 break
             except Exception as e:
                 logger.exception(f"Splitter {splitter.name} failed")
@@ -146,13 +146,13 @@ class ExtractionPipeline:
         return ctx
 
     def _run_extraction(self, ctx: PipelineContext) -> PipelineContext:
-        """Stage 2: Extract statements with typed entities from raw triples."""
+        """Stage 2: Extract subject-predicate-object triples from split sentences."""
         stage_name = get_stage_name(2)
         logger.debug(f"Running {stage_name} stage")
         start_time = time.time()
 
-        if not ctx.raw_triples:
-            logger.debug("No raw triples to extract from")
+        if not ctx.split_sentences:
+            logger.debug("No split sentences to extract from")
             return ctx
 
         extractors = PluginRegistry.get_extractors()
@@ -177,7 +177,7 @@ class ExtractionPipeline:
 
             logger.debug(f"Using extractor: {extractor.name}")
             try:
-                statements = extractor.extract(ctx.raw_triples, ctx)
+                statements = extractor.extract(ctx.split_sentences, ctx)
                 ctx.statements = statements
                 logger.info(f"Extraction produced {len(statements)} statements")
                 break

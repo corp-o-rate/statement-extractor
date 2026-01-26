@@ -77,12 +77,19 @@ COMPANY_SUFFIXES: set[str] = {
     'Group', 'Holdings', 'Holding', 'Partners', 'Trust', 'Fund', 'Bank', 'N.A.', 'The',
 }
 
-# Source priority for canonicalization (lower = higher priority)
+# Source priority for organization canonicalization (lower = higher priority)
 SOURCE_PRIORITY: dict[str, int] = {
     "gleif": 1,       # Gold standard LEI - globally unique legal entity identifier
     "sec_edgar": 2,   # Vetted US filers with CIK + ticker
     "companies_house": 3,  # Official UK registry
     "wikipedia": 4,   # Crowdsourced, less authoritative
+}
+
+# Source priority for people canonicalization (lower = higher priority)
+PERSON_SOURCE_PRIORITY: dict[str, int] = {
+    "wikidata": 1,       # Curated, has rich biographical data and Q codes
+    "sec_edgar": 2,      # Vetted US filers (Form 4 officers/directors)
+    "companies_house": 3,  # UK company officers
 }
 
 # Suffix expansions for canonical name matching
@@ -2024,6 +2031,26 @@ class PersonDatabase:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Add canon_id column if it doesn't exist (migration for canonicalization)
+        try:
+            conn.execute("ALTER TABLE people ADD COLUMN canon_id INTEGER DEFAULT NULL")
+            logger.info("Added canon_id column to people table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Add canon_size column if it doesn't exist (migration for canonicalization)
+        try:
+            conn.execute("ALTER TABLE people ADD COLUMN canon_size INTEGER DEFAULT 1")
+            logger.info("Added canon_size column to people table")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+        # Create index on canon_id for joins
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_people_canon_id ON people(canon_id)")
+        except sqlite3.OperationalError:
+            pass  # Column doesn't exist yet
+
         # Create sqlite-vec virtual table for embeddings
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS person_embeddings USING vec0(
@@ -2820,3 +2847,188 @@ class PersonDatabase:
         conn = self._connect()
         cursor = conn.execute("SELECT COUNT(*) FROM qid_labels")
         return cursor.fetchone()[0]
+
+    def canonicalize(self, batch_size: int = 10000) -> dict[str, int]:
+        """
+        Canonicalize person records by linking equivalent entries across sources.
+
+        Uses a multi-phase approach:
+        1. Match by normalized name + same organization (org canonical group)
+        2. Match by normalized name + overlapping date ranges
+
+        Source priority (lower = more authoritative):
+        - wikidata: 1 (curated, has Q codes)
+        - sec_edgar: 2 (US insider filings)
+        - companies_house: 3 (UK officers)
+
+        Args:
+            batch_size: Number of records to process before committing
+
+        Returns:
+            Stats dict with counts for each matching type
+        """
+        conn = self._connect()
+        stats = {
+            "total_records": 0,
+            "matched_by_org": 0,
+            "matched_by_date": 0,
+            "canonical_groups": 0,
+            "records_in_groups": 0,
+        }
+
+        logger.info("Phase 1: Building person index...")
+
+        # Load all people with their normalized names and org info
+        cursor = conn.execute("""
+            SELECT id, name, name_normalized, source, source_id,
+                   known_for_org, known_for_org_id, from_date, to_date
+            FROM people
+        """)
+
+        people: list[dict] = []
+        for row in cursor:
+            people.append({
+                "id": row["id"],
+                "name": row["name"],
+                "name_normalized": row["name_normalized"],
+                "source": row["source"],
+                "source_id": row["source_id"],
+                "known_for_org": row["known_for_org"],
+                "known_for_org_id": row["known_for_org_id"],
+                "from_date": row["from_date"],
+                "to_date": row["to_date"],
+            })
+
+        stats["total_records"] = len(people)
+        logger.info(f"Loaded {len(people)} person records")
+
+        if len(people) == 0:
+            return stats
+
+        # Initialize Union-Find
+        person_ids = [p["id"] for p in people]
+        uf = UnionFind(person_ids)
+
+        # Build indexes for efficient matching
+        # Index by normalized name
+        name_to_people: dict[str, list[dict]] = {}
+        for p in people:
+            name_norm = p["name_normalized"]
+            name_to_people.setdefault(name_norm, []).append(p)
+
+        logger.info("Phase 2: Matching by normalized name + organization...")
+
+        # Match people with same normalized name and same organization
+        for name_norm, same_name in name_to_people.items():
+            if len(same_name) < 2:
+                continue
+
+            # Group by organization (using known_for_org_id if available, else known_for_org)
+            org_groups: dict[str, list[dict]] = {}
+            for p in same_name:
+                org_key = str(p["known_for_org_id"]) if p["known_for_org_id"] else p["known_for_org"]
+                if org_key:  # Only group if they have an org
+                    org_groups.setdefault(org_key, []).append(p)
+
+            # Union people with same name + same org
+            for org_key, org_people in org_groups.items():
+                if len(org_people) >= 2:
+                    first_id = org_people[0]["id"]
+                    for p in org_people[1:]:
+                        uf.union(first_id, p["id"])
+                        stats["matched_by_org"] += 1
+
+        logger.info(f"Phase 2 complete: {stats['matched_by_org']} matches by org")
+
+        logger.info("Phase 3: Matching by normalized name + overlapping dates...")
+
+        # Match people with same normalized name and overlapping date ranges
+        for name_norm, same_name in name_to_people.items():
+            if len(same_name) < 2:
+                continue
+
+            # Skip if already all unified
+            roots = set(uf.find(p["id"]) for p in same_name)
+            if len(roots) == 1:
+                continue
+
+            # Check for overlapping date ranges
+            for i, p1 in enumerate(same_name):
+                for p2 in same_name[i+1:]:
+                    # Skip if already in same group
+                    if uf.find(p1["id"]) == uf.find(p2["id"]):
+                        continue
+
+                    # Check date overlap (if both have dates)
+                    if p1["from_date"] and p2["from_date"]:
+                        # Simple overlap check: if either from_date is before other's to_date
+                        p1_from = p1["from_date"]
+                        p1_to = p1["to_date"] or "9999-12-31"
+                        p2_from = p2["from_date"]
+                        p2_to = p2["to_date"] or "9999-12-31"
+
+                        # Overlap if: p1_from <= p2_to AND p2_from <= p1_to
+                        if p1_from <= p2_to and p2_from <= p1_to:
+                            uf.union(p1["id"], p2["id"])
+                            stats["matched_by_date"] += 1
+
+        logger.info(f"Phase 3 complete: {stats['matched_by_date']} matches by date")
+
+        logger.info("Phase 4: Applying canonical updates...")
+
+        # Get all groups and select canonical record for each
+        groups = uf.groups()
+
+        # Build id -> source mapping
+        id_to_source = {p["id"]: p["source"] for p in people}
+
+        batch_updates: list[tuple[int, int, int]] = []  # (person_id, canon_id, canon_size)
+
+        for _root, group_ids in groups.items():
+            group_size = len(group_ids)
+
+            if group_size == 1:
+                # Single record is its own canonical
+                person_id = group_ids[0]
+                batch_updates.append((person_id, person_id, 1))
+            else:
+                # Multiple records - pick highest priority source as canonical
+                # Sort by source priority, then by id (for stability)
+                sorted_ids = sorted(
+                    group_ids,
+                    key=lambda pid: (PERSON_SOURCE_PRIORITY.get(id_to_source[pid], 99), pid)
+                )
+                canon_id = sorted_ids[0]
+                stats["canonical_groups"] += 1
+                stats["records_in_groups"] += group_size
+
+                for person_id in group_ids:
+                    batch_updates.append((person_id, canon_id, group_size if person_id == canon_id else 1))
+
+            # Commit in batches
+            if len(batch_updates) >= batch_size:
+                self._apply_person_canon_updates(batch_updates)
+                conn.commit()
+                logger.info(f"Applied {len(batch_updates)} canon updates...")
+                batch_updates = []
+
+        # Final batch
+        if batch_updates:
+            self._apply_person_canon_updates(batch_updates)
+            conn.commit()
+
+        logger.info(f"Canonicalization complete: {stats['canonical_groups']} groups, "
+                   f"{stats['records_in_groups']} records in multi-record groups")
+
+        return stats
+
+    def _apply_person_canon_updates(self, updates: list[tuple[int, int, int]]) -> None:
+        """Apply batch of canon updates: (person_id, canon_id, canon_size)."""
+        conn = self._conn
+        assert conn is not None
+
+        for person_id, canon_id, canon_size in updates:
+            conn.execute(
+                "UPDATE people SET canon_id = ?, canon_size = ? WHERE id = ?",
+                (canon_id, canon_size, person_id)
+            )

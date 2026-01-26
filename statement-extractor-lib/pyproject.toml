@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corp-extractor"
-version = "0.9.1"
+version = "0.9.3"
 description = "Extract structured entity and relationship information from text"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,13 +20,17 @@ keywords = [
     "statement-extraction",
     "information-extraction",
     "knowledge-graph",
-    "t5",
+    "t5gemma2",
     "gemma",
     "transformers",
     "diverse-beam-search",
     "subject-predicate-object",
     "triples",
     "embeddings",
+    "entity-linking",
+    "entities",
+    "semantic-parsing",
+    "entity-resolution"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -1,9 +1,9 @@
 """
-GLiNER2Extractor - Stage 2 plugin that refines triples using GLiNER2.
+GLiNER2Extractor - Stage 2 plugin that extracts triples from sentences.
 
 Uses GLiNER2 for:
-1. Entity extraction: Refine subject/object boundaries
-2. Relation extraction: When predicate list is provided
+1. Entity extraction: Identify subject/object entities with types
+2. Relation extraction: Extract predicates using predicate list
 3. Entity scoring: Score how entity-like subjects/objects are
 4. Classification: Run labeler classification schemas in single pass
 """
@@ -16,7 +16,7 @@ from typing import Optional
 from ..base import BaseExtractorPlugin, ClassificationSchema, PluginCapability
 from ...pipeline.context import PipelineContext
 from ...pipeline.registry import PluginRegistry
-from ...models import RawTriple, PipelineStatement, ExtractedEntity, EntityType
+from ...models import SplitSentence, PipelineStatement, ExtractedEntity, EntityType
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +110,11 @@ GLINER_TYPE_MAP = {
 @PluginRegistry.extractor
 class GLiNER2Extractor(BaseExtractorPlugin):
     """
-    Extractor plugin that uses GLiNER2 for entity and relation refinement.
+    Extractor plugin that uses GLiNER2 for entity and relation extraction.
 
-    Processes raw triples from Stage 1 and produces PipelineStatement
-    objects with typed entities. Also runs classification schemas from
-    labeler plugins in a single pass.
+    Processes split sentences from Stage 1 and produces PipelineStatement
+    objects with subject-predicate-object triples and typed entities.
+    Also runs classification schemas from labeler plugins in a single pass.
     """
 
     def __init__(
@@ -209,36 +209,36 @@ class GLiNER2Extractor(BaseExtractorPlugin):
 
     def extract(
         self,
-        raw_triples: list[RawTriple],
+        split_sentences: list[SplitSentence],
         context: PipelineContext,
     ) -> list[PipelineStatement]:
         """
-        Extract statements from raw triples using GLiNER2.
+        Extract subject-predicate-object triples from split sentences using GLiNER2.
 
         Returns ALL matching relations from GLiNER2 (not just the best one).
         Also runs any classification schemas and stores results in context.
 
         Args:
-            raw_triples: Raw triples from Stage 1
+            split_sentences: Atomic sentences from Stage 1
             context: Pipeline context
 
         Returns:
-            List of PipelineStatement objects (may contain multiple per raw triple)
+            List of PipelineStatement objects (may contain multiple per sentence)
         """
         predicate_categories = self._get_predicate_categories()
-        logger.info(f"GLiNER2Extractor processing {len(raw_triples)} triples")
+        logger.info(f"GLiNER2Extractor processing {len(split_sentences)} sentences")
         logger.info(f"Using {len(predicate_categories)} predicate categories")
 
         statements = []
         model = self._get_model()
         classified_texts: set[str] = set()
 
-        for raw in raw_triples:
+        for sentence in split_sentences:
             try:
                 if model:
                     # Use relation extraction iterating through categories
                     # Returns ALL matches, not just the best one
-                    extracted_stmts = self._extract_with_relations(raw, model, predicate_categories)
+                    extracted_stmts = self._extract_with_relations(sentence, model, predicate_categories)
                 else:
                     # No model available - skip
                     logger.warning("No GLiNER2 model available - skipping extraction")
@@ -253,10 +253,10 @@ class GLiNER2Extractor(BaseExtractorPlugin):
                         classified_texts.add(stmt.source_text)
 
             except Exception as e:
-                logger.warning(f"Error extracting triple: {e}")
-                # No fallback - skip this triple
+                logger.warning(f"Error extracting from sentence: {e}")
+                # No fallback - skip this sentence
 
-        logger.info(f"GLiNER2Extractor produced {len(statements)} statements from {len(raw_triples)} raw triples")
+        logger.info(f"GLiNER2Extractor produced {len(statements)} statements from {len(split_sentences)} sentences")
         return statements
 
     def _run_classifications(
@@ -316,7 +316,7 @@ class GLiNER2Extractor(BaseExtractorPlugin):
 
     def _extract_with_relations(
         self,
-        raw: RawTriple,
+        sentence: SplitSentence,
         model,
         predicate_categories: dict[str, dict[str, PredicateConfig]],
     ) -> list[PipelineStatement]:
@@ -328,14 +328,14 @@ class GLiNER2Extractor(BaseExtractorPlugin):
         Returns ALL matching relations, not just the best one.
 
         Args:
-            raw: Raw triple from Stage 1
+            sentence: Split sentence from Stage 1
             model: GLiNER2 model instance
             predicate_categories: Dict of category -> predicates to use
 
         Returns:
             List of PipelineStatements for all relations found
         """
-        logger.debug(f"Attempting relation extraction for: '{raw.source_sentence[:80]}...'")
+        logger.debug(f"Attempting relation extraction for: '{sentence.text[:80]}...'")
 
         # Iterate through each category separately to stay under GLiNER2's ~25 label limit
         # Use schema API with entities + relations together for better extraction
@@ -355,7 +355,7 @@ class GLiNER2Extractor(BaseExtractorPlugin):
                     .entities(self._get_entity_types())
                     .relations(relations_dict)
                 )
-                result = model.extract(raw.source_sentence, schema, include_confidence=True)
+                result = model.extract(sentence.text, schema, include_confidence=True)
 
                 # Get relations from this category
                 relation_data = result.get("relations", result.get("relation_extraction", {}))
@@ -379,7 +379,7 @@ class GLiNER2Extractor(BaseExtractorPlugin):
         logger.debug(f"  GLiNER2 found {total_found} total relations across all categories")
 
         if not all_relations:
-            logger.debug(f"No GLiNER2 relation match in: '{raw.source_sentence[:60]}...'")
+            logger.debug(f"No GLiNER2 relation match in: '{sentence.text[:60]}...'")
             return []
 
         # Filter by confidence threshold and sort descending
@@ -402,8 +402,8 @@ class GLiNER2Extractor(BaseExtractorPlugin):
             )
 
             # Get entity types
-            subj_type = self._infer_entity_type(head, model, raw.source_sentence)
-            obj_type = self._infer_entity_type(tail, model, raw.source_sentence)
+            subj_type = self._infer_entity_type(head, model, sentence.text)
+            obj_type = self._infer_entity_type(tail, model, sentence.text)
             logger.debug(f"  Entity types: {subj_type.value}, {obj_type.value}")
 
             stmt = PipelineStatement(
@@ -419,7 +419,7 @@ class GLiNER2Extractor(BaseExtractorPlugin):
                     type=obj_type,
                     confidence=confidence,
                 ),
-                source_text=raw.source_sentence,
+                source_text=sentence.text,
                 confidence_score=confidence,
                 extraction_method="gliner_relation",
             )
@@ -429,7 +429,7 @@ class GLiNER2Extractor(BaseExtractorPlugin):
 
     def _extract_with_entities(
         self,
-        raw: RawTriple,
+        sentence: SplitSentence,
         model,
     ) -> Optional[PipelineStatement]:
         """
@@ -438,7 +438,7 @@ class GLiNER2Extractor(BaseExtractorPlugin):
         This method is called when predicates are disabled. Without GLiNER2 relation
         extraction, we cannot form valid statements.
         """
-        logger.debug(f"Entity extraction mode (no predicates) - skipping: '{raw.source_sentence[:60]}...'")
+        logger.debug(f"Entity extraction mode (no predicates) - skipping: '{sentence.text[:60]}...'")
         return None
 
     def _parse_relation(self, rel) -> tuple[str, str, float]:

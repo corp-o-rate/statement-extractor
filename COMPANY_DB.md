@@ -47,6 +47,8 @@ The database uses `sqlite-vec` for vector similarity search, storing **two types
 | Source | Records | Identifier | Date Fields | Coverage |
 |--------|---------|------------|-------------|----------|
 | [Wikidata](https://www.wikidata.org/) | Variable | QID | `from_date`: Position start (P580), `to_date`: Position end (P582) | Notable people with English Wikipedia articles |
+| [SEC Form 4](https://www.sec.gov/) *(v0.9.3)* | ~280K/year | Owner CIK | `from_date`: Period of report | US public company officers, directors, 10%+ owners |
+| [Companies House](https://www.gov.uk/government/organisations/companies-house) *(v0.9.3)* | ~15M+ | Person number | `from_date`: Appointment date, `to_date`: Resignation date | UK company officers (directors, secretaries) |
 
 **Person Types:**
 
@@ -159,7 +161,55 @@ Available person types: `executive`, `politician`, `government`, `military`, `le
 
 **Note**: Organizations discovered during people import (employers, affiliated orgs) are automatically inserted into the organizations table if they don't already exist. This creates foreign key links via `known_for_org_id`.
 
-**6. Wikidata Dump Import (Recommended for Large Imports)** *(v0.9.1)*
+**6. SEC Form 4 Officers (US Insiders)** *(v0.9.3)*
+
+```bash
+# Import SEC Form 4 officers/directors from 2020 onwards
+corp-extractor db import-sec-officers --limit 10000
+
+# Start from a specific year
+corp-extractor db import-sec-officers --start-year 2023
+
+# Resume interrupted import
+corp-extractor db import-sec-officers --resume
+
+# Skip existing records
+corp-extractor db import-sec-officers --skip-existing -v
+```
+
+Imports from SEC EDGAR quarterly index files. Each Form 4 filing contains:
+- **Issuer**: Company CIK, name, ticker
+- **Reporting Owner**: Person name, CIK, relationship (officer/director/10%+ owner)
+- **Officer Title**: If officer, their specific title (CEO, CFO, etc.)
+
+Rate limited to 5 requests/second per SEC guidelines. Progress saved for resume capability.
+
+**7. Companies House Officers (UK Directors)** *(v0.9.3)*
+
+```bash
+# Import from bulk officers file (requires special request)
+corp-extractor db import-ch-officers --file officers.zip --limit 10000
+
+# Resume interrupted import
+corp-extractor db import-ch-officers --file officers.zip --resume
+
+# Include resigned officers (default: current only)
+corp-extractor db import-ch-officers --file officers.zip --include-resigned
+```
+
+**Obtaining the data:**
+The officers bulk file (Prod195) is not publicly available. Request access by emailing:
+**BulkProducts@companieshouse.gov.uk**
+
+Explain your use case - they typically provide a download link within a few days.
+
+**Data format:**
+- Fixed-width format with `<`-delimited variable fields
+- 14 fields per officer: Title, Forenames, Surname, Honours, Address (5 fields), Occupation, Nationality, Usual Country
+- Position 24 indicates corporate vs individual officers (only individuals imported)
+- Approximately 8GB uncompressed across 9 regional files
+
+**8. Wikidata Dump Import (Recommended for Large Imports)** *(v0.9.1)*
 
 For comprehensive imports that avoid SPARQL timeouts, use the Wikidata JSON dump:
 
@@ -449,6 +499,8 @@ corp-extractor pipeline "Apple announced record earnings."
 | `db import-companies-house` | Import UK Companies House data |
 | `db import-wikidata` | Import Wikidata organizations (SPARQL) |
 | `db import-people` | Import Wikidata notable people (SPARQL) *(v0.9.0)* |
+| `db import-sec-officers` | Import SEC Form 4 officers/directors *(v0.9.3)* |
+| `db import-ch-officers` | Import Companies House officers (Prod195) *(v0.9.3)* |
 | `db import-wikidata-dump` | Import from Wikidata JSON dump (recommended) *(v0.9.1)* |
 | `db canonicalize` | Link equivalent records across sources *(v0.9.2)* |
 | `db gleif-info` | Show latest GLEIF file info |
@@ -518,11 +570,11 @@ corp-extractor db compress entities.db
 │  ├── org_id (INTEGER)                                                      │
 │  └── embedding (FLOAT[768])                                                │
 ├───────────────────────────────────────────────────────────────────────────┤
-│  people table (SQLite) - v0.9.2                                            │
+│  people table (SQLite) - v0.9.3                                            │
 │  ├── id (INTEGER PRIMARY KEY)                                              │
 │  ├── name (TEXT)                                                           │
 │  ├── name_normalized (TEXT)                                                │
-│  ├── source (TEXT: wikidata)                                               │
+│  ├── source (TEXT: wikidata|sec_edgar|companies_house)                     │
 │  ├── source_id (TEXT)                                                      │
 │  ├── country (TEXT)                                                        │
 │  ├── person_type (TEXT: executive|politician|government|military|...)      │
@@ -629,7 +681,7 @@ Each person record contains *(v0.9.2)*:
 ```python
 class PersonRecord(BaseModel):
     name: str               # Display name (used for embedding and display)
-    source: str             # Data source (wikidata)
+    source: str             # Data source (wikidata, sec_edgar, companies_house)
     source_id: str          # Wikidata QID (e.g., "Q312")
     country: str            # Country code or name (e.g., "US", "Germany")
     person_type: PersonType # Classification (executive, politician, etc.)
@@ -685,6 +737,8 @@ class PersonType(Enum):
 | Companies House | `company_number`, `company_status`, `company_type`, `date_of_creation`, `date_of_cessation`, `sic_code` |
 | Wikidata (orgs) | `wikidata_id`, `label`, `lei`, `ticker`, `exchange`, `country`, `inception`, `dissolution` |
 | Wikidata (people) | `wikidata_id`, `label`, `role`, `org`, `country`, `from_date`, `to_date` |
+| SEC Form 4 (people) | `owner_cik`, `issuer_cik`, `issuer_name`, `issuer_ticker`, `is_director`, `is_officer`, `officer_title` |
+| Companies House (people) | `person_id`, `company_number`, `company_name`, `occupation`, `nationality`, `postcode`, `is_current` |
 
 ### Import Pipeline
 

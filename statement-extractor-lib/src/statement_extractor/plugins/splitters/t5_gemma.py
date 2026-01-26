@@ -1,8 +1,8 @@
 """
-T5GemmaSplitter - Stage 1 plugin that wraps the existing StatementExtractor.
+T5GemmaSplitter - Stage 1 plugin that splits text into atomic sentences.
 
-Uses T5-Gemma2 model with Diverse Beam Search to generate high-quality
-subject-predicate-object triples from text.
+Uses T5-Gemma2 model with Diverse Beam Search to split unstructured text
+into atomic statements that can be converted to triples in Stage 2.
 """
 
 import logging
@@ -12,7 +12,7 @@ from typing import Optional
 from ..base import BaseSplitterPlugin, PluginCapability
 from ...pipeline.context import PipelineContext
 from ...pipeline.registry import PluginRegistry
-from ...models import RawTriple
+from ...models import SplitSentence
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 @PluginRegistry.splitter
 class T5GemmaSplitter(BaseSplitterPlugin):
     """
-    Splitter plugin that uses T5-Gemma2 for triple extraction.
+    Splitter plugin that uses T5-Gemma2 to split text into atomic sentences.
 
-    Wraps the existing StatementExtractor from extractor.py to produce
-    RawTriple objects for the pipeline.
+    Uses the T5-Gemma2 model to identify and extract atomic statements
+    from unstructured text. Each sentence can be converted to a
+    subject-predicate-object triple in Stage 2.
     """
 
     def __init__(
@@ -65,7 +66,7 @@ class T5GemmaSplitter(BaseSplitterPlugin):
 
     @property
     def description(self) -> str:
-        return "T5-Gemma2 model for extracting triples using Diverse Beam Search"
+        return "T5-Gemma2 model for splitting text into atomic sentences"
 
     @property
     def model_vram_gb(self) -> float:
@@ -94,16 +95,16 @@ class T5GemmaSplitter(BaseSplitterPlugin):
         self,
         text: str,
         context: PipelineContext,
-    ) -> list[RawTriple]:
+    ) -> list[SplitSentence]:
         """
-        Split text into raw triples using T5-Gemma2.
+        Split text into atomic sentences using T5-Gemma2.
 
         Args:
             text: Input text to split
             context: Pipeline context
 
         Returns:
-            List of RawTriple objects
+            List of SplitSentence objects
         """
         logger.debug(f"T5GemmaSplitter processing {len(text)} chars")
 
@@ -129,19 +130,19 @@ class T5GemmaSplitter(BaseSplitterPlugin):
         extractor = self._get_extractor()
         xml_output = extractor.extract_as_xml(text, options)
 
-        # Parse XML to RawTriple objects
-        raw_triples = self._parse_xml_to_raw_triples(xml_output)
+        # Parse XML to SplitSentence objects
+        sentences = self._parse_xml_to_sentences(xml_output)
 
-        logger.info(f"T5GemmaSplitter produced {len(raw_triples)} raw triples")
-        return raw_triples
+        logger.info(f"T5GemmaSplitter produced {len(sentences)} sentences")
+        return sentences
 
     def split_batch(
         self,
         texts: list[str],
         context: PipelineContext,
-    ) -> list[list[RawTriple]]:
+    ) -> list[list[SplitSentence]]:
         """
-        Split multiple texts into atomic triples using batch processing.
+        Split multiple texts into atomic sentences using batch processing.
 
         Processes all texts through the T5-Gemma2 model in batches
         sized for optimal GPU utilization.
@@ -151,7 +152,7 @@ class T5GemmaSplitter(BaseSplitterPlugin):
             context: Pipeline context
 
         Returns:
-            List of RawTriple lists, one per input text
+            List of SplitSentence lists, one per input text
         """
         if not texts:
             return []
@@ -177,7 +178,7 @@ class T5GemmaSplitter(BaseSplitterPlugin):
         )
 
         extractor = self._get_extractor()
-        all_results: list[list[RawTriple]] = []
+        all_results: list[list[SplitSentence]] = []
 
         # Process in batches
         for i in range(0, len(texts), batch_size):
@@ -187,8 +188,8 @@ class T5GemmaSplitter(BaseSplitterPlugin):
             batch_results = self._process_batch(batch_texts, extractor, options)
             all_results.extend(batch_results)
 
-        total_triples = sum(len(r) for r in all_results)
-        logger.info(f"T5GemmaSplitter batch produced {total_triples} total triples from {len(texts)} texts")
+        total_sentences = sum(len(r) for r in all_results)
+        logger.info(f"T5GemmaSplitter batch produced {total_sentences} total sentences from {len(texts)} texts")
         return all_results
 
     def _process_batch(
@@ -196,7 +197,7 @@ class T5GemmaSplitter(BaseSplitterPlugin):
         texts: list[str],
         extractor,
         options,
-    ) -> list[list[RawTriple]]:
+    ) -> list[list[SplitSentence]]:
         """
         Process a batch of texts through the model.
 
@@ -249,7 +250,7 @@ class T5GemmaSplitter(BaseSplitterPlugin):
             )
 
         # Decode and parse each output
-        results: list[list[RawTriple]] = []
+        results: list[list[SplitSentence]] = []
         end_tag = "</statements>"
 
         for output in outputs:
@@ -260,33 +261,28 @@ class T5GemmaSplitter(BaseSplitterPlugin):
                 end_pos = decoded.find(end_tag) + len(end_tag)
                 decoded = decoded[:end_pos]
 
-            triples = self._parse_xml_to_raw_triples(decoded)
-            results.append(triples)
+            sentences = self._parse_xml_to_sentences(decoded)
+            results.append(sentences)
 
         return results
 
     # Regex pattern to extract <text> content from <stmt> blocks
     _STMT_TEXT_PATTERN = re.compile(r'<stmt>.*?<text>(.*?)</text>.*?</stmt>', re.DOTALL)
 
-    def _parse_xml_to_raw_triples(self, xml_output: str) -> list[RawTriple]:
-        """Extract source sentences from <stmt><text>...</text></stmt> blocks."""
-        raw_triples = []
+    def _parse_xml_to_sentences(self, xml_output: str) -> list[SplitSentence]:
+        """Extract atomic sentences from <stmt><text>...</text></stmt> blocks."""
+        sentences = []
 
         # Find all <text> content within <stmt> blocks
         text_matches = self._STMT_TEXT_PATTERN.findall(xml_output)
         logger.debug(f"Found {len(text_matches)} stmt text blocks via regex")
 
-        for source_text in text_matches:
-            source_text = source_text.strip()
-            if source_text:
-                raw_triples.append(RawTriple(
-                    subject_text="",
-                    predicate_text="",
-                    object_text="",
-                    source_sentence=source_text,
-                ))
+        for sentence_text in text_matches:
+            sentence_text = sentence_text.strip()
+            if sentence_text:
+                sentences.append(SplitSentence(text=sentence_text))
 
-        return raw_triples
+        return sentences
 
 
 # Allow importing without decorator for testing

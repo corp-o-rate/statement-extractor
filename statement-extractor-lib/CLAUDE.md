@@ -33,6 +33,10 @@ uv run corp-extractor db search "Microsoft"  # Search for organization
 uv run corp-extractor db search-people "Tim Cook"  # Search for person (v0.9.0)
 uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF (~3M records)
 uv run corp-extractor db import-sec --download                  # Import SEC bulk (~100K+ filers)
+uv run corp-extractor db import-sec-officers --limit 10000      # Import SEC Form 4 officers/directors (v0.9.3)
+uv run corp-extractor db import-sec-officers --start-year 2023 --resume  # Resume from progress
+uv run corp-extractor db import-ch-officers --file officers.zip --limit 10000  # Import CH officers (v0.9.3)
+uv run corp-extractor db import-ch-officers --file officers.zip --resume  # Resume from progress
 uv run corp-extractor db import-companies-house --download --limit 10000  # Import UK companies
 uv run corp-extractor db import-wikidata --limit 5000  # Import Wikidata orgs
 uv run corp-extractor db import-people --type executive --limit 5000  # Import notable people (v0.9.0)
@@ -41,7 +45,8 @@ uv run corp-extractor db import-people --type executive --skip-existing  # Skip 
 uv run corp-extractor db import-people --type executive --enrich-dates   # Fetch role start/end dates (slower)
 uv run corp-extractor db import-wikidata-dump --download --limit 50000   # Import from Wikidata dump (v0.9.1)
 uv run corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --people --no-orgs  # From local dump
-uv run corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Resume interrupted import
+uv run corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Resume from file position
+uv run corp-extractor db import-wikidata-dump --dump dump.json.bz2 --skip-updates  # Skip existing Q codes
 uv run corp-extractor db import-wikidata-dump --download --require-enwiki  # Only orgs with English Wikipedia
 uv run corp-extractor db canonicalize        # Link equivalent records across sources
 uv run corp-extractor db upload              # Upload with lite/compressed variants
@@ -114,7 +119,9 @@ The `database/` module provides organization and person embedding storage and se
 - `database/importers/` - Data source importers (all support `from_date`/`to_date`):
   - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records) - `from_date` from InitialRegistrationDate
   - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers) - `from_date` from oldest filingDate
+  - `sec_form4.py` - SEC Form 4 insider filings for officers/directors (v0.9.3) - extracts from quarterly indexes
   - `companies_house.py` - UK Companies House bulk data (~5M records) - `from_date`/`to_date` from incorporation/dissolution
+  - `companies_house_officers.py` - UK Companies House officers bulk data (Prod195, v0.9.3) - requires request to CH
   - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - `from_date`/`to_date` from P571/P576
   - `wikidata_people.py` - Wikidata SPARQL queries for notable people - `from_date`/`to_date` from position qualifiers
   - `wikidata_dump.py` - Wikidata JSON dump importer (~100GB) for people and orgs without SPARQL timeouts (v0.9.1)
@@ -151,8 +158,14 @@ Each person record is classified with a `person_type` field:
 - `--skip-existing` flag to skip existing records instead of updating
 - `--enrich-dates` flag to fetch individual role start/end dates (slower, queries per person)
 - `birth_date` and `death_date` fields track life dates; `is_historic` property for deceased people
-- `--resume` flag to skip already-imported Q codes when restarting import
 - `--require-enwiki` flag to only import orgs with English Wikipedia articles
+
+**Wikidata Dump Import Features (v0.9.2):**
+- Single-pass import: people and orgs are extracted in one scan of the ~100GB dump file
+- `--resume` flag to resume from last position in file (tracks entity index in progress file)
+- `--skip-updates` flag to skip Q codes already in database (no updates to existing records)
+- Progress file stored at `~/.cache/corp-extractor/wikidata-dump-progress.json`
+- Progress saved after each batch for reliable resume on interruption
 
 **Organization Canonicalization (v0.9.2):**
 The `db canonicalize` command links equivalent records across sources:
@@ -160,6 +173,12 @@ The `db canonicalize` command links equivalent records across sources:
 - Records matched by normalized name + region (using pycountry for region normalization)
 - Source priority: gleif > sec_edgar > companies_house > wikipedia
 - Enables prominence-based search re-ranking that boosts companies with records from multiple sources
+
+**People Canonicalization (v0.9.3):**
+The `db canonicalize` command also links equivalent people records:
+- Records matched by normalized name + same organization (using org canonical group)
+- Records matched by normalized name + overlapping date ranges
+- Source priority: wikidata > sec_edgar > companies_house
 
 **Database variants:**
 - `entities.db` - Full database with complete record metadata

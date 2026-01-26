@@ -105,7 +105,7 @@ class CompanyRecord(BaseModel):
         }
 
 
-PersonSourceType = Literal["wikidata"]
+PersonSourceType = Literal["wikidata", "sec_edgar", "companies_house"]
 
 
 class PersonRecord(BaseModel):

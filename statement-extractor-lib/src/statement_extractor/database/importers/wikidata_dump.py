@@ -13,6 +13,11 @@ Dump format:
 - Format: JSON array where each line is a separate entity (after first `[` line)
 - Each line: `{"type":"item","id":"Q123","labels":{...},"claims":{...},"sitelinks":{...}},`
 - Streaming: Read line-by-line, strip trailing comma, parse JSON
+
+Resume support:
+- Progress is tracked by entity index (count of entities processed)
+- Progress can be saved to a JSON file and loaded on resume
+- On resume, entities are skipped efficiently until reaching the saved position
 """
 
 import bz2
@@ -22,10 +27,15 @@ import logging
 import shutil
 import subprocess
 import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from ..models import CompanyRecord, EntityType, PersonRecord, PersonType
+
+# Type alias for records that can be either people or orgs
+ImportRecord = PersonRecord | CompanyRecord
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +458,96 @@ ORG_TYPE_TO_ENTITY_TYPE: dict[str, EntityType] = {
 }
 
 
+# =============================================================================
+# PROGRESS TRACKING
+# =============================================================================
+
+DEFAULT_PROGRESS_PATH = Path.home() / ".cache" / "corp-extractor" / "wikidata-dump-progress.json"
+
+
+@dataclass
+class DumpProgress:
+    """
+    Tracks progress through the Wikidata dump file for resume support.
+
+    Progress is tracked by entity index (number of entities processed).
+    On resume, entities are skipped until reaching the saved position.
+    """
+    # Entity index - number of entities yielded from the dump
+    entity_index: int = 0
+
+    # Separate counters for people and orgs import
+    people_yielded: int = 0
+    orgs_yielded: int = 0
+
+    # Last entity ID processed (for verification)
+    last_entity_id: str = ""
+
+    # Timestamp of last update
+    last_updated: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    # Dump file path (to detect if dump changed)
+    dump_path: str = ""
+
+    # Dump file size (to detect if dump changed)
+    dump_size: int = 0
+
+    def save(self, path: Optional[Path] = None) -> None:
+        """Save progress to JSON file."""
+        path = path or DEFAULT_PROGRESS_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.last_updated = datetime.now().isoformat()
+        with open(path, "w") as f:
+            json.dump({
+                "entity_index": self.entity_index,
+                "people_yielded": self.people_yielded,
+                "orgs_yielded": self.orgs_yielded,
+                "last_entity_id": self.last_entity_id,
+                "last_updated": self.last_updated,
+                "dump_path": self.dump_path,
+                "dump_size": self.dump_size,
+            }, f, indent=2)
+        logger.debug(f"Saved progress: entity_index={self.entity_index}, last_id={self.last_entity_id}")
+
+    @classmethod
+    def load(cls, path: Optional[Path] = None) -> Optional["DumpProgress"]:
+        """Load progress from JSON file, returns None if not found."""
+        path = path or DEFAULT_PROGRESS_PATH
+        if not path.exists():
+            return None
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return cls(
+                entity_index=data.get("entity_index", 0),
+                people_yielded=data.get("people_yielded", 0),
+                orgs_yielded=data.get("orgs_yielded", 0),
+                last_entity_id=data.get("last_entity_id", ""),
+                last_updated=data.get("last_updated", ""),
+                dump_path=data.get("dump_path", ""),
+                dump_size=data.get("dump_size", 0),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.warning(f"Failed to load progress from {path}: {e}")
+            return None
+
+    @classmethod
+    def clear(cls, path: Optional[Path] = None) -> None:
+        """Delete the progress file."""
+        path = path or DEFAULT_PROGRESS_PATH
+        if path.exists():
+            path.unlink()
+            logger.info(f"Cleared progress file: {path}")
+
+    def matches_dump(self, dump_path: Path) -> bool:
+        """Check if this progress matches the given dump file."""
+        if str(dump_path) != self.dump_path:
+            return False
+        if dump_path.exists() and dump_path.stat().st_size != self.dump_size:
+            return False
+        return True
+
+
 class WikidataDumpImporter:
     """
     Stream Wikidata JSON dump to extract people and organization records.
@@ -634,7 +734,12 @@ class WikidataDumpImporter:
             target_dir = Path.home() / ".cache" / "corp-extractor"
         return target_dir / "wikidata-latest-all.json.bz2"
 
-    def iter_entities(self, dump_path: Optional[Path] = None) -> Iterator[dict]:
+    def iter_entities(
+        self,
+        dump_path: Optional[Path] = None,
+        start_index: int = 0,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+    ) -> Iterator[dict]:
         """
         Stream entities from dump file, one at a time.
 
@@ -643,6 +748,10 @@ class WikidataDumpImporter:
 
         Args:
             dump_path: Path to dump file (uses self._dump_path if not provided)
+            start_index: Entity index to start yielding from (default 0). Entities
+                        before this index are skipped but still cached for label lookups.
+            progress_callback: Optional callback(entity_index, entity_id) called for each
+                              yielded entity. Useful for tracking progress.
 
         Yields:
             Parsed entity dictionaries
@@ -663,13 +772,30 @@ class WikidataDumpImporter:
             opener = open
 
         logger.info(f"Opening dump file: {path}")
+        logger.info(f"File size: {path.stat().st_size / (1024**3):.1f} GB")
+        if start_index > 0:
+            logger.info(f"Resuming from entity index {start_index:,} (skipping earlier entities)")
+        logger.info("Starting to read dump (bz2 decompression is slow, please wait)...")
 
         with opener(path, "rt", encoding="utf-8") as f:
+            logger.info("Dump file opened successfully, reading lines...")
             line_count = 0
             entity_count = 0
+            skipped_count = 0
+            # Log more frequently at start, then reduce frequency
+            next_log_threshold = 10_000
 
             for line in f:
                 line_count += 1
+
+                # Log first few lines to show we're making progress
+                if line_count <= 5:
+                    logger.info(f"Read line {line_count} ({len(line)} chars)")
+                elif line_count == 100:
+                    logger.info(f"Read {line_count} lines...")
+                elif line_count == 1000:
+                    logger.info(f"Read {line_count} lines...")
+
                 line = line.strip()
 
                 # Skip array brackets
@@ -685,17 +811,51 @@ class WikidataDumpImporter:
 
                 try:
                     entity = json.loads(line)
-                    entity_count += 1
+                    entity_id = entity.get("id", "")
 
-                    # Cache label for QID lookups (countries, roles, etc.)
+                    # Always cache label for QID lookups (even when skipping)
                     self._cache_entity_label(entity)
 
-                    if entity_count % 1_000_000 == 0:
+                    # Check if we should skip this entity (resuming)
+                    if entity_count < start_index:
+                        entity_count += 1
+                        skipped_count += 1
+                        # Log skipping progress with adaptive frequency
+                        if skipped_count >= next_log_threshold:
+                            pct = 100 * skipped_count / start_index if start_index > 0 else 0
+                            logger.info(
+                                f"Skipping... {skipped_count:,}/{start_index:,} entities "
+                                f"({pct:.1f}%), label cache: {len(self._label_cache):,}"
+                            )
+                            # Increase threshold: 10K -> 100K -> 1M
+                            if next_log_threshold < 100_000:
+                                next_log_threshold = 100_000
+                            elif next_log_threshold < 1_000_000:
+                                next_log_threshold = 1_000_000
+                            else:
+                                next_log_threshold += 1_000_000
+                        continue
+
+                    entity_count += 1
+
+                    # Log progress with adaptive frequency
+                    if entity_count >= next_log_threshold:
                         logger.info(
                             f"Processed {entity_count:,} entities, "
                             f"label cache: {len(self._label_cache):,}, "
                             f"unresolved QIDs: {len(self._unresolved_qids):,}"
                         )
+                        # Increase threshold: 10K -> 100K -> 1M -> 2M -> 3M...
+                        if next_log_threshold < 100_000:
+                            next_log_threshold = 100_000
+                        elif next_log_threshold < 1_000_000:
+                            next_log_threshold = 1_000_000
+                        else:
+                            next_log_threshold += 1_000_000
+
+                    # Call progress callback if provided
+                    if progress_callback:
+                        progress_callback(entity_count, entity_id)
 
                     yield entity
 
@@ -709,6 +869,8 @@ class WikidataDumpImporter:
         limit: Optional[int] = None,
         require_enwiki: bool = False,
         skip_ids: Optional[set[str]] = None,
+        start_index: int = 0,
+        progress_callback: Optional[Callable[[int, str, int], None]] = None,
     ) -> Iterator[PersonRecord]:
         """
         Stream through dump, yielding ALL people (humans with P31=Q5).
@@ -727,6 +889,10 @@ class WikidataDumpImporter:
             require_enwiki: If True, only include people with English Wikipedia articles
             skip_ids: Optional set of source_ids (Q codes) to skip. Checked early before
                      full processing to avoid unnecessary QID resolution.
+            start_index: Entity index to start from (for resume support). Entities
+                        before this index are skipped but labels are still cached.
+            progress_callback: Optional callback(entity_index, entity_id, records_yielded)
+                              called for each yielded record. Useful for saving progress.
 
         Yields:
             PersonRecord for each qualifying person
@@ -734,14 +900,21 @@ class WikidataDumpImporter:
         path = dump_path or self._dump_path
         count = 0
         skipped = 0
+        current_entity_index = start_index
 
         logger.info("Starting people import from Wikidata dump...")
+        if start_index > 0:
+            logger.info(f"Resuming from entity index {start_index:,}")
         if not require_enwiki:
             logger.info("Importing ALL humans (no enwiki filter)")
         if skip_ids:
             logger.info(f"Skipping {len(skip_ids):,} existing Q codes")
 
-        for entity in self.iter_entities(path):
+        def track_entity(entity_index: int, entity_id: str) -> None:
+            nonlocal current_entity_index
+            current_entity_index = entity_index
+
+        for entity in self.iter_entities(path, start_index=start_index, progress_callback=track_entity):
             if limit and count >= limit:
                 break
 
@@ -756,6 +929,11 @@ class WikidataDumpImporter:
                 count += 1
                 if count % 10_000 == 0:
                     logger.info(f"Yielded {count:,} people records (skipped {skipped:,})...")
+
+                # Call progress callback with current position
+                if progress_callback:
+                    progress_callback(current_entity_index, entity_id, count)
+
                 yield record
 
         logger.info(f"People import complete: {count:,} records (skipped {skipped:,})")
@@ -766,6 +944,8 @@ class WikidataDumpImporter:
         limit: Optional[int] = None,
         require_enwiki: bool = False,
         skip_ids: Optional[set[str]] = None,
+        start_index: int = 0,
+        progress_callback: Optional[Callable[[int, str, int], None]] = None,
     ) -> Iterator[CompanyRecord]:
         """
         Stream through dump, yielding organizations.
@@ -781,6 +961,10 @@ class WikidataDumpImporter:
             require_enwiki: If True, only include orgs with English Wikipedia articles
             skip_ids: Optional set of source_ids (Q codes) to skip. Checked early before
                      full processing to avoid unnecessary QID resolution.
+            start_index: Entity index to start from (for resume support). Entities
+                        before this index are skipped but labels are still cached.
+            progress_callback: Optional callback(entity_index, entity_id, records_yielded)
+                              called for each yielded record. Useful for saving progress.
 
         Yields:
             CompanyRecord for each qualifying organization
@@ -791,14 +975,21 @@ class WikidataDumpImporter:
         skipped_no_type = 0
         skipped_no_enwiki = 0
         skipped_no_label = 0
+        current_entity_index = start_index
 
         logger.info("Starting organization import from Wikidata dump...")
+        if start_index > 0:
+            logger.info(f"Resuming from entity index {start_index:,}")
         if not require_enwiki:
             logger.info("Importing ALL organizations (no enwiki filter)")
         if skip_ids:
             logger.info(f"Skipping {len(skip_ids):,} existing Q codes")
 
-        for entity in self.iter_entities(path):
+        def track_entity(entity_index: int, entity_id: str) -> None:
+            nonlocal current_entity_index
+            current_entity_index = entity_index
+
+        for entity in self.iter_entities(path, start_index=start_index, progress_callback=track_entity):
             if limit and count >= limit:
                 break
 
@@ -813,6 +1004,11 @@ class WikidataDumpImporter:
                 count += 1
                 if count % 10_000 == 0:
                     logger.info(f"Yielded {count:,} organization records (skipped {skipped_existing:,} existing)...")
+
+                # Call progress callback with current position
+                if progress_callback:
+                    progress_callback(current_entity_index, entity_id, count)
+
                 yield record
             elif entity.get("type") == "item":
                 # Track skip reasons for debugging
@@ -835,6 +1031,118 @@ class WikidataDumpImporter:
         logger.info(
             f"Skipped: no_matching_type={skipped_no_type:,}, "
             f"no_enwiki={skipped_no_enwiki:,}, no_label={skipped_no_label:,}"
+        )
+
+    def import_all(
+        self,
+        dump_path: Optional[Path] = None,
+        people_limit: Optional[int] = None,
+        orgs_limit: Optional[int] = None,
+        import_people: bool = True,
+        import_orgs: bool = True,
+        require_enwiki: bool = False,
+        skip_people_ids: Optional[set[str]] = None,
+        skip_org_ids: Optional[set[str]] = None,
+        start_index: int = 0,
+        progress_callback: Optional[Callable[[int, str, int, int], None]] = None,
+    ) -> Iterator[tuple[str, ImportRecord]]:
+        """
+        Import both people and organizations in a single pass through the dump.
+
+        This is more efficient than calling import_people() and import_organizations()
+        separately, as it only reads the ~100GB dump file once.
+
+        Args:
+            dump_path: Path to dump file (uses self._dump_path if not provided)
+            people_limit: Optional maximum number of people records
+            orgs_limit: Optional maximum number of org records
+            import_people: Whether to import people (default: True)
+            import_orgs: Whether to import organizations (default: True)
+            require_enwiki: If True, only include entities with English Wikipedia articles
+            skip_people_ids: Optional set of people source_ids (Q codes) to skip
+            skip_org_ids: Optional set of org source_ids (Q codes) to skip
+            start_index: Entity index to start from (for resume support)
+            progress_callback: Optional callback(entity_index, entity_id, people_count, orgs_count)
+                              called periodically. Useful for saving progress.
+
+        Yields:
+            Tuples of (record_type, record) where record_type is "person" or "org"
+        """
+        path = dump_path or self._dump_path
+        people_count = 0
+        orgs_count = 0
+        people_skipped = 0
+        orgs_skipped = 0
+        current_entity_index = start_index
+
+        logger.info("Starting combined import from Wikidata dump...")
+        if start_index > 0:
+            logger.info(f"Resuming from entity index {start_index:,}")
+        if import_people:
+            logger.info(f"Importing people (limit: {people_limit or 'none'})")
+            if skip_people_ids:
+                logger.info(f"  Skipping {len(skip_people_ids):,} existing people Q codes")
+        if import_orgs:
+            logger.info(f"Importing organizations (limit: {orgs_limit or 'none'})")
+            if skip_org_ids:
+                logger.info(f"  Skipping {len(skip_org_ids):,} existing org Q codes")
+
+        # Check if we've hit both limits
+        def limits_reached() -> bool:
+            people_done = not import_people or (people_limit and people_count >= people_limit)
+            orgs_done = not import_orgs or (orgs_limit and orgs_count >= orgs_limit)
+            return bool(people_done and orgs_done)
+
+        def track_entity(entity_index: int, entity_id: str) -> None:
+            nonlocal current_entity_index
+            current_entity_index = entity_index
+
+        for entity in self.iter_entities(path, start_index=start_index, progress_callback=track_entity):
+            if limits_reached():
+                break
+
+            entity_id = entity.get("id", "")
+
+            # Try to process as person first (if importing people and not at limit)
+            if import_people and (not people_limit or people_count < people_limit):
+                # Check skip_ids early
+                if skip_people_ids and entity_id in skip_people_ids:
+                    people_skipped += 1
+                else:
+                    person_record = self._process_person_entity(entity, require_enwiki=require_enwiki)
+                    if person_record:
+                        people_count += 1
+                        if people_count % 10_000 == 0:
+                            logger.info(
+                                f"Progress: {people_count:,} people, {orgs_count:,} orgs "
+                                f"(entity {current_entity_index:,})"
+                            )
+                        if progress_callback:
+                            progress_callback(current_entity_index, entity_id, people_count, orgs_count)
+                        yield ("person", person_record)
+                        continue  # Entity was a person, don't check for org
+
+            # Try to process as organization (if importing orgs and not at limit)
+            if import_orgs and (not orgs_limit or orgs_count < orgs_limit):
+                # Check skip_ids early
+                if skip_org_ids and entity_id in skip_org_ids:
+                    orgs_skipped += 1
+                else:
+                    org_record = self._process_org_entity(entity, require_enwiki=require_enwiki)
+                    if org_record:
+                        orgs_count += 1
+                        if orgs_count % 10_000 == 0:
+                            logger.info(
+                                f"Progress: {people_count:,} people, {orgs_count:,} orgs "
+                                f"(entity {current_entity_index:,})"
+                            )
+                        if progress_callback:
+                            progress_callback(current_entity_index, entity_id, people_count, orgs_count)
+                        yield ("org", org_record)
+
+        logger.info(
+            f"Combined import complete: {people_count:,} people, {orgs_count:,} orgs "
+            f"(skipped {people_skipped:,} people, {orgs_skipped:,} orgs)"
         )
 
     def _process_person_entity(

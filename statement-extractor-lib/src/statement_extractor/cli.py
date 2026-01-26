@@ -439,7 +439,7 @@ def _print_pipeline_json(ctx):
     """Print pipeline results as JSON."""
     output = {
         "statement_count": ctx.statement_count,
-        "raw_triples": [t.model_dump() for t in ctx.raw_triples],
+        "split_sentences": [s.model_dump() for s in ctx.split_sentences],
         "statements": [s.model_dump() for s in ctx.statements],
         "labeled_statements": [stmt.as_dict() for stmt in ctx.labeled_statements],
         "timings": ctx.stage_timings,
@@ -472,9 +472,10 @@ def _print_pipeline_triples(ctx):
     elif ctx.statements:
         for stmt in ctx.statements:
             click.echo(f"{stmt.subject.text}\t{stmt.predicate}\t{stmt.object.text}")
-    elif ctx.raw_triples:
-        for triple in ctx.raw_triples:
-            click.echo(f"{triple.subject_text}\t{triple.predicate_text}\t{triple.object_text}")
+    elif ctx.split_sentences:
+        # Stage 1 only output - just show the split sentences (no triples yet)
+        for sentence in ctx.split_sentences:
+            click.echo(sentence.text)
 
 
 def _print_pipeline_table(ctx, verbose: bool):
@@ -528,20 +529,16 @@ def _print_pipeline_table(ctx, verbose: bool):
 
             click.echo("-" * 80)
 
-    elif ctx.raw_triples:
-        click.echo(f"\nExtracted {len(ctx.raw_triples)} raw triple(s):\n")
+    elif ctx.split_sentences:
+        click.echo(f"\nSplit into {len(ctx.split_sentences)} atomic sentence(s):\n")
         click.echo("-" * 80)
 
-        for i, triple in enumerate(ctx.raw_triples, 1):
-            click.echo(f"{i}. {triple.subject_text}")
-            click.echo(f"   --[{triple.predicate_text}]-->")
-            click.echo(f"   {triple.object_text}")
+        for i, sentence in enumerate(ctx.split_sentences, 1):
+            text_preview = sentence.text[:100] + "..." if len(sentence.text) > 100 else sentence.text
+            click.echo(f"{i}. {text_preview}")
 
             if verbose:
-                click.echo(f"   Confidence: {triple.confidence:.2f}")
-                if triple.source_sentence:
-                    source = triple.source_sentence[:60] + "..." if len(triple.source_sentence) > 60 else triple.source_sentence
-                    click.echo(f"   Source: \"{source}\"")
+                click.echo(f"   Confidence: {sentence.confidence:.2f}")
 
             click.echo("-" * 80)
 
@@ -666,6 +663,8 @@ def db_cmd():
     Commands:
         import-gleif           Import GLEIF LEI data (~3M records)
         import-sec             Import SEC Edgar bulk data (~100K+ filers)
+        import-sec-officers    Import SEC Form 4 officers/directors
+        import-ch-officers     Import UK Companies House officers (Prod195)
         import-companies-house Import UK Companies House (~5M records)
         import-wikidata        Import Wikidata organizations (SPARQL, may timeout)
         import-people          Import Wikidata notable people (SPARQL, may timeout)
@@ -681,6 +680,7 @@ def db_cmd():
     \b
     Examples:
         corp-extractor db import-sec --download
+        corp-extractor db import-sec-officers --start-year 2023 --limit 10000
         corp-extractor db import-gleif --download --limit 100000
         corp-extractor db import-wikidata-dump --download --limit 50000
         corp-extractor db canonicalize
@@ -867,6 +867,213 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
         count += len(records)
 
     click.echo(f"\nImported {count} SEC Edgar records successfully.", err=True)
+    database.close()
+
+
+@db_cmd.command("import-sec-officers")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--start-year", type=int, default=2020, help="Start year (default: 2020)")
+@click.option("--end-year", type=int, help="End year (default: current year)")
+@click.option("--limit", type=int, help="Limit number of records")
+@click.option("--batch-size", type=int, default=1000, help="Batch size for commits (default: 1000)")
+@click.option("--resume", is_flag=True, help="Resume from saved progress")
+@click.option("--skip-existing", is_flag=True, help="Skip records that already exist")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_sec_officers(db_path: Optional[str], start_year: int, end_year: Optional[int], limit: Optional[int], batch_size: int, resume: bool, skip_existing: bool, verbose: bool):
+    """
+    Import SEC Form 4 insider data into the people database.
+
+    Downloads Form 4 filings from SEC EDGAR and extracts officers, directors,
+    and significant investors (10%+ owners) from each company.
+
+    Form 4 filings are submitted when insiders buy or sell company stock.
+    They contain the person's name, role (officer/director), and company.
+
+    Rate limited to 5 requests/second to comply with SEC guidelines.
+
+    \b
+    Examples:
+        corp-extractor db import-sec-officers --limit 1000
+        corp-extractor db import-sec-officers --start-year 2023
+        corp-extractor db import-sec-officers --resume
+        corp-extractor db import-sec-officers --skip-existing -v
+    """
+    _configure_logging(verbose)
+
+    from .database.store import get_person_database, get_database, DEFAULT_DB_PATH
+    from .database.embeddings import CompanyEmbedder
+    from .database.importers.sec_form4 import SecForm4Importer
+
+    # Default database path
+    if db_path is None:
+        db_path_obj = DEFAULT_DB_PATH
+    else:
+        db_path_obj = Path(db_path)
+
+    click.echo(f"Importing SEC Form 4 officers/directors to {db_path_obj}...", err=True)
+    click.echo(f"Year range: {start_year} - {end_year or 'current'}", err=True)
+    if resume:
+        click.echo("Resuming from saved progress...", err=True)
+
+    # Initialize components
+    database = get_person_database(db_path=db_path_obj)
+    org_database = get_database(db_path=db_path_obj)
+    embedder = CompanyEmbedder()
+    importer = SecForm4Importer()
+
+    # Import records in batches
+    records = []
+    count = 0
+    skipped_existing = 0
+
+    def progress_callback(year: int, quarter: int, filing_idx: int, accession: str, total: int) -> None:
+        if verbose and filing_idx % 100 == 0:
+            click.echo(f"  {year} Q{quarter}: {filing_idx} filings, {total} records", err=True)
+
+    for record in importer.import_range(
+        start_year=start_year,
+        end_year=end_year,
+        limit=limit,
+        resume=resume,
+        progress_callback=progress_callback,
+    ):
+        # Skip existing records if flag is set
+        if skip_existing:
+            existing = database.get_by_source_id(record.source, record.source_id)
+            if existing is not None:
+                skipped_existing += 1
+                continue
+
+        # Look up org ID by CIK if available
+        issuer_cik = record.record.get("issuer_cik", "")
+        if issuer_cik:
+            org_id = org_database.get_id_by_source_id("sec_edgar", issuer_cik.zfill(10))
+            if org_id is not None:
+                record.known_for_org_id = org_id
+
+        records.append(record)
+
+        if len(records) >= batch_size:
+            embedding_texts = [r.get_embedding_text() for r in records]
+            embeddings = embedder.embed_batch(embedding_texts)
+            database.insert_batch(records, embeddings)
+            count += len(records)
+            click.echo(f"Imported {count} records...", err=True)
+            records = []
+
+    # Final batch
+    if records:
+        embedding_texts = [r.get_embedding_text() for r in records]
+        embeddings = embedder.embed_batch(embedding_texts)
+        database.insert_batch(records, embeddings)
+        count += len(records)
+
+    if skip_existing and skipped_existing > 0:
+        click.echo(f"\nImported {count} SEC officers/directors (skipped {skipped_existing} existing).", err=True)
+    else:
+        click.echo(f"\nImported {count} SEC officers/directors successfully.", err=True)
+
+    org_database.close()
+    database.close()
+
+
+@db_cmd.command("import-ch-officers")
+@click.option("--file", "file_path", type=click.Path(exists=True), required=True, help="Path to CH officers zip file (Prod195)")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--limit", type=int, help="Limit number of records")
+@click.option("--batch-size", type=int, default=1000, help="Batch size for commits (default: 1000)")
+@click.option("--resume", is_flag=True, help="Resume from saved progress")
+@click.option("--include-resigned", is_flag=True, help="Include resigned officers (default: current only)")
+@click.option("--skip-existing", is_flag=True, help="Skip records that already exist")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_ch_officers(file_path: str, db_path: Optional[str], limit: Optional[int], batch_size: int, resume: bool, include_resigned: bool, skip_existing: bool, verbose: bool):
+    """
+    Import Companies House officers data into the people database.
+
+    Requires the Prod195 bulk officers zip file from Companies House.
+    Request access via BulkProducts@companieshouse.gov.uk.
+
+    \b
+    Examples:
+        corp-extractor db import-ch-officers --file officers.zip --limit 10000
+        corp-extractor db import-ch-officers --file officers.zip --resume
+        corp-extractor db import-ch-officers --file officers.zip --include-resigned
+    """
+    _configure_logging(verbose)
+
+    from .database.store import get_person_database, get_database, DEFAULT_DB_PATH
+    from .database.embeddings import CompanyEmbedder
+    from .database.importers.companies_house_officers import CompaniesHouseOfficersImporter
+
+    # Default database path
+    if db_path is None:
+        db_path_obj = DEFAULT_DB_PATH
+    else:
+        db_path_obj = Path(db_path)
+
+    click.echo(f"Importing Companies House officers to {db_path_obj}...", err=True)
+    if resume:
+        click.echo("Resuming from saved progress...", err=True)
+
+    # Initialize components
+    database = get_person_database(db_path=db_path_obj)
+    org_database = get_database(db_path=db_path_obj)
+    embedder = CompanyEmbedder()
+    importer = CompaniesHouseOfficersImporter()
+
+    # Import records in batches
+    records = []
+    count = 0
+    skipped_existing = 0
+
+    def progress_callback(file_idx: int, line_num: int, total: int) -> None:
+        if verbose:
+            click.echo(f"  File {file_idx}: line {line_num}, {total} records", err=True)
+
+    for record in importer.import_from_zip(
+        file_path,
+        limit=limit,
+        resume=resume,
+        current_only=not include_resigned,
+        progress_callback=progress_callback,
+    ):
+        # Skip existing records if flag is set
+        if skip_existing:
+            existing = database.get_by_source_id(record.source, record.source_id)
+            if existing is not None:
+                skipped_existing += 1
+                continue
+
+        # Look up org ID by company number if available
+        company_number = record.record.get("company_number", "")
+        if company_number:
+            org_id = org_database.get_id_by_source_id("companies_house", company_number)
+            if org_id is not None:
+                record.known_for_org_id = org_id
+
+        records.append(record)
+
+        if len(records) >= batch_size:
+            embedding_texts = [r.get_embedding_text() for r in records]
+            embeddings = embedder.embed_batch(embedding_texts)
+            database.insert_batch(records, embeddings)
+            count += len(records)
+            click.echo(f"Imported {count} records...", err=True)
+            records = []
+
+    # Final batch
+    if records:
+        embedding_texts = [r.get_embedding_text() for r in records]
+        embeddings = embedder.embed_batch(embedding_texts)
+        database.insert_batch(records, embeddings)
+        count += len(records)
+
+    if skip_existing and skipped_existing > 0:
+        click.echo(f"\nImported {count} CH officers (skipped {skipped_existing} existing).", err=True)
+    else:
+        click.echo(f"\nImported {count} CH officers successfully.", err=True)
+
+    org_database.close()
     database.close()
 
 
@@ -1127,7 +1334,8 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
 @click.option("--people/--no-people", default=True, help="Import people (default: yes)")
 @click.option("--orgs/--no-orgs", default=True, help="Import organizations (default: yes)")
 @click.option("--require-enwiki", is_flag=True, help="Only import orgs with English Wikipedia articles")
-@click.option("--resume", is_flag=True, help="Resume import by skipping existing Q codes")
+@click.option("--resume", is_flag=True, help="Resume from last position in dump file (tracks entity index)")
+@click.option("--skip-updates", is_flag=True, help="Skip Q codes already in database (no updates)")
 @click.option("--limit", type=int, help="Max records per type (people and/or orgs)")
 @click.option("--batch-size", type=int, default=10000, help="Batch size for commits (default: 10000)")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
@@ -1141,6 +1349,7 @@ def db_import_wikidata_dump(
     orgs: bool,
     require_enwiki: bool,
     resume: bool,
+    skip_updates: bool,
     limit: Optional[int],
     batch_size: int,
     verbose: bool,
@@ -1158,21 +1367,30 @@ def db_import_wikidata_dump(
     Features:
     - No timeouts (processes locally)
     - Complete coverage (all notable people/orgs)
-    - Resumable with --resume (loads existing Q codes and skips them)
+    - Resumable with --resume (tracks position in dump file)
+    - Skip existing with --skip-updates (loads existing Q codes)
     - People like Andy Burnham are captured via occupation (P106)
+
+    \b
+    Resume options:
+    - --resume: Resume from where the dump processing left off (tracks entity index).
+                Progress is saved after each batch. Use this if import was interrupted.
+    - --skip-updates: Skip Q codes already in database (no updates to existing records).
+                      Use this to add new records without re-processing existing ones.
 
     \b
     Examples:
         corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --limit 10000
         corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 50000
         corp-extractor db import-wikidata-dump --dump dump.json.bz2 --orgs --no-people
-        corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Continue from last run
+        corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Resume interrupted import
+        corp-extractor db import-wikidata-dump --dump dump.json.bz2 --skip-updates  # Skip existing Q codes
     """
     _configure_logging(verbose)
 
     from .database.store import get_person_database, get_database, DEFAULT_DB_PATH
     from .database.embeddings import CompanyEmbedder
-    from .database.importers.wikidata_dump import WikidataDumpImporter
+    from .database.importers.wikidata_dump import WikidataDumpImporter, DumpProgress
 
     if not dump_path and not download:
         raise click.UsageError("Either --dump path or --download is required")
@@ -1256,8 +1474,12 @@ def db_import_wikidata_dump(
     elif dump_path:
         click.echo(f"Using dump: {dump_path}", err=True)
 
-    # Initialize embedder
+    # Initialize embedder (loads model, may take time on first run)
+    click.echo("Loading embedding model...", err=True)
+    sys.stderr.flush()
     embedder = CompanyEmbedder()
+    click.echo("Embedding model loaded.", err=True)
+    sys.stderr.flush()
 
     # Load existing QID labels from database and seed the importer's cache
     database = get_person_database(db_path=db_path_obj)
@@ -1267,11 +1489,11 @@ def db_import_wikidata_dump(
         importer.set_label_cache(existing_labels)
     known_qids_at_start = set(existing_labels.keys())
 
-    # Load existing source_ids for resume mode
+    # Load existing source_ids for skip_updates mode
     existing_people_ids: set[str] = set()
     existing_org_ids: set[str] = set()
-    if resume:
-        click.echo("Loading existing records for resume...", err=True)
+    if skip_updates:
+        click.echo("Loading existing records for --skip-updates...", err=True)
         if people:
             existing_people_ids = database.get_all_source_ids(source="wikidata")
             click.echo(f"  Found {len(existing_people_ids):,} existing people Q codes", err=True)
@@ -1279,6 +1501,33 @@ def db_import_wikidata_dump(
             org_database = get_database(db_path=db_path_obj)
             existing_org_ids = org_database.get_all_source_ids(source="wikipedia")
             click.echo(f"  Found {len(existing_org_ids):,} existing org Q codes", err=True)
+
+    # Load progress for resume mode (position-based resume)
+    progress: Optional[DumpProgress] = None
+    start_index = 0
+    if resume:
+        progress = DumpProgress.load()
+        if progress:
+            # Verify the progress is for the same dump file
+            actual_dump_path = importer._dump_path or Path(dump_path) if dump_path else importer.get_dump_path()
+            if progress.matches_dump(actual_dump_path):
+                start_index = progress.entity_index
+                click.echo(f"Resuming from entity index {start_index:,}", err=True)
+                click.echo(f"  Last entity: {progress.last_entity_id}", err=True)
+                click.echo(f"  Last updated: {progress.last_updated}", err=True)
+            else:
+                click.echo("Warning: Progress file is for a different dump, starting from beginning", err=True)
+                progress = None
+        else:
+            click.echo("No progress file found, starting from beginning", err=True)
+
+    # Initialize progress tracking
+    if progress is None:
+        actual_dump_path = importer._dump_path or Path(dump_path) if dump_path else importer.get_dump_path()
+        progress = DumpProgress(
+            dump_path=str(actual_dump_path),
+            dump_size=actual_dump_path.stat().st_size if actual_dump_path.exists() else 0,
+        )
 
     # Helper to persist new labels after each batch
     def persist_new_labels() -> int:
@@ -1289,144 +1538,164 @@ def db_import_wikidata_dump(
             return len(new_labels)
         return 0
 
-    # Import people
+    # Combined import - single pass through the dump for both people and orgs
+    click.echo("\n=== Combined Import (single dump pass) ===", err=True)
+    sys.stderr.flush()  # Ensure output is visible immediately
     if people:
-        click.echo("\n=== Importing People ===", err=True)
-        if limit:
-            click.echo(f"  Target: up to {limit:,} records", err=True)
-        if resume and existing_people_ids:
-            click.echo(f"  Resume mode: skipping {len(existing_people_ids):,} existing Q codes", err=True)
-        database = get_person_database(db_path=db_path_obj)
-
-        # Pass skip_ids to importer so it skips early (before QID resolution)
-        skip_ids = existing_people_ids if resume else None
-
-        records = []
-        count = 0
-
-        # Use progress bar if limit is set, otherwise show counter
-        if limit:
-            with click.progressbar(
-                length=limit,
-                label="Processing people",
-                show_percent=True,
-                show_pos=True,
-            ) as pbar:
-                for record in importer.import_people(limit=limit, skip_ids=skip_ids):
-                    records.append(record)
-                    pbar.update(1)
-
-                    if len(records) >= batch_size:
-                        embedding_texts = [r.get_embedding_text() for r in records]
-                        embeddings = embedder.embed_batch(embedding_texts)
-                        database.insert_batch(records, embeddings)
-                        persist_new_labels()
-                        count += len(records)
-                        records = []
-
-                # Final batch
-                if records:
-                    embedding_texts = [r.get_embedding_text() for r in records]
-                    embeddings = embedder.embed_batch(embedding_texts)
-                    database.insert_batch(records, embeddings)
-                    persist_new_labels()
-                    count += len(records)
-        else:
-            # No limit - show counter updates
-            for record in importer.import_people(limit=limit, skip_ids=skip_ids):
-                records.append(record)
-
-                if len(records) >= batch_size:
-                    embedding_texts = [r.get_embedding_text() for r in records]
-                    embeddings = embedder.embed_batch(embedding_texts)
-                    database.insert_batch(records, embeddings)
-                    persist_new_labels()
-                    count += len(records)
-                    click.echo(f"\r  Imported {count:,} people...", nl=False, err=True)
-                    records = []
-
-            # Final batch
-            if records:
-                embedding_texts = [r.get_embedding_text() for r in records]
-                embeddings = embedder.embed_batch(embedding_texts)
-                database.insert_batch(records, embeddings)
-                persist_new_labels()
-                count += len(records)
-            click.echo("", err=True)  # Newline after counter
-
-        click.echo(f"People import complete: {count:,} records", err=True)
-        # Don't close database yet - needed for persist_new_labels in orgs import
-
-    # Import organizations
+        click.echo(f"  People: {'up to ' + str(limit) + ' records' if limit else 'unlimited'}", err=True)
+        if skip_updates and existing_people_ids:
+            click.echo(f"    Skip updates: {len(existing_people_ids):,} existing Q codes", err=True)
     if orgs:
-        click.echo("\n=== Importing Organizations ===", err=True)
-        if limit:
-            click.echo(f"  Target: up to {limit:,} records", err=True)
+        click.echo(f"  Orgs: {'up to ' + str(limit) + ' records' if limit else 'unlimited'}", err=True)
         if require_enwiki:
-            click.echo("  Filter: only orgs with English Wikipedia articles", err=True)
-        else:
-            click.echo("  Filter: all orgs (no enwiki requirement)", err=True)
-        if resume and existing_org_ids:
-            click.echo(f"  Resume mode: skipping {len(existing_org_ids):,} existing Q codes", err=True)
-        org_database = get_database(db_path=db_path_obj)
+            click.echo("    Filter: only orgs with English Wikipedia articles", err=True)
+        if skip_updates and existing_org_ids:
+            click.echo(f"    Skip updates: {len(existing_org_ids):,} existing Q codes", err=True)
+    if start_index > 0:
+        click.echo(f"  Resuming from entity index {start_index:,}", err=True)
 
-        # Pass skip_ids to importer so it skips early (before QID resolution)
-        skip_ids = existing_org_ids if resume else None
+    # Initialize databases
+    person_database = get_person_database(db_path=db_path_obj)
+    org_database = get_database(db_path=db_path_obj) if orgs else None
 
-        records = []
-        count = 0
+    # Batches for each type
+    people_records: list = []
+    org_records: list = []
+    people_count = 0
+    orgs_count = 0
+    last_entity_index = start_index
+    last_entity_id = ""
 
-        # Use progress bar if limit is set, otherwise show counter
-        if limit:
+    def combined_progress_callback(entity_index: int, entity_id: str, ppl_count: int, org_count: int) -> None:
+        nonlocal last_entity_index, last_entity_id
+        last_entity_index = entity_index
+        last_entity_id = entity_id
+
+    def save_progress() -> None:
+        if progress:
+            progress.entity_index = last_entity_index
+            progress.last_entity_id = last_entity_id
+            progress.people_yielded = people_count
+            progress.orgs_yielded = orgs_count
+            progress.save()
+
+    def flush_people_batch() -> None:
+        nonlocal people_records, people_count
+        if people_records:
+            embedding_texts = [r.get_embedding_text() for r in people_records]
+            embeddings = embedder.embed_batch(embedding_texts)
+            person_database.insert_batch(people_records, embeddings)
+            people_count += len(people_records)
+            people_records = []
+
+    def flush_org_batch() -> None:
+        nonlocal org_records, orgs_count
+        if org_records and org_database:
+            names = [r.name for r in org_records]
+            embeddings = embedder.embed_batch(names)
+            org_database.insert_batch(org_records, embeddings)
+            orgs_count += len(org_records)
+            org_records = []
+
+    # Calculate total for progress bar (if limits set for both)
+    total_limit = None
+    if limit and people and orgs:
+        total_limit = limit * 2  # Rough estimate
+    elif limit:
+        total_limit = limit
+
+    click.echo("Starting dump iteration...", err=True)
+    sys.stderr.flush()
+
+    records_seen = 0
+    try:
+        if total_limit:
+            # Use progress bar when we have limits
             with click.progressbar(
-                length=limit,
-                label="Processing orgs",
+                length=total_limit,
+                label="Processing dump",
                 show_percent=True,
                 show_pos=True,
             ) as pbar:
-                for record in importer.import_organizations(limit=limit, require_enwiki=require_enwiki, skip_ids=skip_ids):
-                    records.append(record)
+                for record_type, record in importer.import_all(
+                    people_limit=limit if people else 0,
+                    orgs_limit=limit if orgs else 0,
+                    import_people=people,
+                    import_orgs=orgs,
+                    require_enwiki=require_enwiki,
+                    skip_people_ids=existing_people_ids if skip_updates else None,
+                    skip_org_ids=existing_org_ids if skip_updates else None,
+                    start_index=start_index,
+                    progress_callback=combined_progress_callback,
+                ):
+                    records_seen += 1
                     pbar.update(1)
 
-                    if len(records) >= batch_size:
-                        names = [r.name for r in records]
-                        embeddings = embedder.embed_batch(names)
-                        org_database.insert_batch(records, embeddings)
-                        persist_new_labels()
-                        count += len(records)
-                        records = []
-
-                # Final batch
-                if records:
-                    names = [r.name for r in records]
-                    embeddings = embedder.embed_batch(names)
-                    org_database.insert_batch(records, embeddings)
-                    persist_new_labels()
-                    count += len(records)
+                    if record_type == "person":
+                        people_records.append(record)
+                        if len(people_records) >= batch_size:
+                            flush_people_batch()
+                            persist_new_labels()
+                            save_progress()
+                    else:  # org
+                        org_records.append(record)
+                        if len(org_records) >= batch_size:
+                            flush_org_batch()
+                            persist_new_labels()
+                            save_progress()
         else:
             # No limit - show counter updates
-            for record in importer.import_organizations(limit=limit, require_enwiki=require_enwiki, skip_ids=skip_ids):
-                records.append(record)
+            for record_type, record in importer.import_all(
+                people_limit=None,
+                orgs_limit=None,
+                import_people=people,
+                import_orgs=orgs,
+                require_enwiki=require_enwiki,
+                skip_people_ids=existing_people_ids if skip_updates else None,
+                skip_org_ids=existing_org_ids if skip_updates else None,
+                start_index=start_index,
+                progress_callback=combined_progress_callback,
+            ):
+                records_seen += 1
+                # Show first record immediately as proof of life
+                if records_seen == 1:
+                    click.echo(f"  First record found: {record.name}", err=True)
+                    sys.stderr.flush()
 
-                if len(records) >= batch_size:
-                    names = [r.name for r in records]
-                    embeddings = embedder.embed_batch(names)
-                    org_database.insert_batch(records, embeddings)
-                    persist_new_labels()
-                    count += len(records)
-                    click.echo(f"\r  Imported {count:,} orgs...", nl=False, err=True)
-                    records = []
+                if record_type == "person":
+                    people_records.append(record)
+                    if len(people_records) >= batch_size:
+                        flush_people_batch()
+                        persist_new_labels()
+                        save_progress()
+                        click.echo(f"\r  Progress: {people_count:,} people, {orgs_count:,} orgs...", nl=False, err=True)
+                        sys.stderr.flush()
+                else:  # org
+                    org_records.append(record)
+                    if len(org_records) >= batch_size:
+                        flush_org_batch()
+                        persist_new_labels()
+                        save_progress()
+                        click.echo(f"\r  Progress: {people_count:,} people, {orgs_count:,} orgs...", nl=False, err=True)
+                        sys.stderr.flush()
 
-            # Final batch
-            if records:
-                names = [r.name for r in records]
-                embeddings = embedder.embed_batch(names)
-                org_database.insert_batch(records, embeddings)
-                persist_new_labels()
-                count += len(records)
             click.echo("", err=True)  # Newline after counter
 
-        click.echo(f"Organization import complete: {count:,} records", err=True)
+        # Final batches
+        flush_people_batch()
+        flush_org_batch()
+        persist_new_labels()
+        save_progress()
+
+    finally:
+        # Ensure we save progress even on interrupt
+        save_progress()
+
+    click.echo(f"Import complete: {people_count:,} people, {orgs_count:,} orgs", err=True)
+
+    # Keep references for final label resolution
+    database = person_database
+    if org_database:
         org_database.close()
 
     # Final label resolution pass for any remaining unresolved QIDs
@@ -1705,14 +1974,16 @@ def db_canonicalize(db_path: Optional[str], batch_size: int, verbose: bool):
     _configure_logging(verbose)
 
     from .database import OrganizationDatabase
+    from .database.store import get_person_database
 
     try:
+        # Canonicalize organizations
         database = OrganizationDatabase(db_path=db_path)
-        click.echo("Running canonicalization...", err=True)
+        click.echo("Running organization canonicalization...", err=True)
 
         result = database.canonicalize(batch_size=batch_size)
 
-        click.echo("\nCanonicalization Results")
+        click.echo("\nOrganization Canonicalization Results")
         click.echo("=" * 40)
         click.echo(f"Total records processed: {result['total_records']:,}")
         click.echo(f"Equivalence groups found: {result['groups_found']:,}")
@@ -1720,6 +1991,23 @@ def db_canonicalize(db_path: Optional[str], batch_size: int, verbose: bool):
         click.echo(f"Records updated: {result['records_updated']:,}")
 
         database.close()
+
+        # Canonicalize people
+        db_path_obj = Path(db_path) if db_path else None
+        person_db = get_person_database(db_path=db_path_obj)
+        click.echo("\nRunning people canonicalization...", err=True)
+
+        people_result = person_db.canonicalize(batch_size=batch_size)
+
+        click.echo("\nPeople Canonicalization Results")
+        click.echo("=" * 40)
+        click.echo(f"Total records processed: {people_result['total_records']:,}")
+        click.echo(f"Matched by organization: {people_result['matched_by_org']:,}")
+        click.echo(f"Matched by date overlap: {people_result['matched_by_date']:,}")
+        click.echo(f"Canonical groups: {people_result['canonical_groups']:,}")
+        click.echo(f"Records in multi-record groups: {people_result['records_in_groups']:,}")
+
+        person_db.close()
 
     except Exception as e:
         raise click.ClickException(f"Canonicalization failed: {e}")

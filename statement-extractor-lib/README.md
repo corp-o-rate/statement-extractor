@@ -331,6 +331,19 @@ config = PipelineConfig.from_stage_string("1-3")  # Stages 1, 2, 3
 
 Taxonomy classifiers return **multiple labels** per statement above the confidence threshold.
 
+## Entity Database
+
+The library includes an **entity embedding database** for fast entity qualification using vector similarity search. It stores records from authoritative sources (GLEIF, SEC, Companies House, Wikidata) with 768-dimensional embeddings for semantic matching.
+
+**Quick start:**
+```bash
+corp-extractor db download              # Download pre-built database
+corp-extractor db search "Microsoft"    # Search organizations
+corp-extractor db search-people "Tim Cook"  # Search people
+```
+
+For comprehensive documentation including schema, CLI reference, Python API, and build instructions, see **[ENTITY_DATABASE.md](./ENTITY_DATABASE.md)**.
+
 ## New in v0.6.0: Entity Embedding Database
 
 v0.6.0 introduces an **entity embedding database** for fast entity qualification using vector similarity search.

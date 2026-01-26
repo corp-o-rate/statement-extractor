@@ -2,7 +2,7 @@
 PipelineContext - Data container that flows through all pipeline stages.
 
 The context accumulates outputs from each stage:
-- Stage 1 (Splitting): raw_triples
+- Stage 1 (Splitting): split_sentences
 - Stage 2 (Extraction): statements
 - Stage 3 (Qualification): qualified_entities
 - Stage 4 (Canonicalization): canonical_entities
@@ -14,7 +14,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from ..models import (
-    RawTriple,
+    SplitSentence,
     PipelineStatement,
     QualifiedEntity,
     CanonicalEntity,
@@ -37,10 +37,10 @@ class PipelineContext(BaseModel):
         description="Metadata about the source (e.g., document ID, URL, timestamp)"
     )
 
-    # Stage 1 output: Raw triples from splitting
-    raw_triples: list[RawTriple] = Field(
+    # Stage 1 output: Split sentences
+    split_sentences: list[SplitSentence] = Field(
         default_factory=list,
-        description="Raw triples from Stage 1 (Splitting)"
+        description="Atomic sentences from Stage 1 (Splitting)"
     )
 
     # Stage 2 output: Statements with extracted entities

@@ -2,8 +2,8 @@
 Base plugin classes for the extraction pipeline.
 
 Defines the abstract interfaces for each pipeline stage:
-- BaseSplitterPlugin: Stage 1 - Text → RawTriple
-- BaseExtractorPlugin: Stage 2 - RawTriple → PipelineStatement
+- BaseSplitterPlugin: Stage 1 - Text → SplitSentence (atomic sentences)
+- BaseExtractorPlugin: Stage 2 - SplitSentence → PipelineStatement (triples)
 - BaseQualifierPlugin: Stage 3 - Entity → CanonicalEntity
 - BaseLabelerPlugin: Stage 4 - Statement → StatementLabel
 - BaseTaxonomyPlugin: Stage 5 - Statement → TaxonomyResult
@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from ..pipeline.context import PipelineContext
     from ..models import (
-        RawTriple,
+        SplitSentence,
         PipelineStatement,
         ExtractedEntity,
         CanonicalEntity,
@@ -173,10 +173,10 @@ class BasePlugin(ABC):
 
 class BaseSplitterPlugin(BasePlugin):
     """
-    Stage 1 plugin: Split text into atomic triples.
+    Stage 1 plugin: Split text into atomic sentences.
 
-    Takes raw text and produces RawTriple objects containing
-    subject/predicate/object text and source sentence.
+    Takes raw text and produces SplitSentence objects containing
+    atomic statements that can be converted to triples in Stage 2.
     """
 
     @abstractmethod
@@ -184,16 +184,16 @@ class BaseSplitterPlugin(BasePlugin):
         self,
         text: str,
         context: "PipelineContext",
-    ) -> list["RawTriple"]:
+    ) -> list["SplitSentence"]:
         """
-        Split text into atomic triples.
+        Split text into atomic sentences.
 
         Args:
             text: Input text to split
             context: Pipeline context for accessing metadata and config
 
         Returns:
-            List of RawTriple objects
+            List of SplitSentence objects
         """
         ...
 
@@ -201,9 +201,9 @@ class BaseSplitterPlugin(BasePlugin):
         self,
         texts: list[str],
         context: "PipelineContext",
-    ) -> list[list["RawTriple"]]:
+    ) -> list[list["SplitSentence"]]:
         """
-        Split multiple texts into atomic triples in a single batch.
+        Split multiple texts into atomic sentences in a single batch.
 
         Default implementation calls split() for each text sequentially.
         Plugins with BATCH_PROCESSING capability should override this
@@ -214,16 +214,16 @@ class BaseSplitterPlugin(BasePlugin):
             context: Pipeline context for accessing metadata and config
 
         Returns:
-            List of RawTriple lists, one per input text
+            List of SplitSentence lists, one per input text
         """
         return [self.split(text, context) for text in texts]
 
 
 class BaseExtractorPlugin(BasePlugin):
     """
-    Stage 2 plugin: Refine triples into statements with typed entities.
+    Stage 2 plugin: Extract subject-predicate-object triples from sentences.
 
-    Takes RawTriple objects and produces PipelineStatement objects
+    Takes SplitSentence objects and produces PipelineStatement objects
     with ExtractedEntity subjects/objects that have types, spans,
     and confidence scores.
     """
@@ -231,14 +231,14 @@ class BaseExtractorPlugin(BasePlugin):
     @abstractmethod
     def extract(
         self,
-        raw_triples: list["RawTriple"],
+        split_sentences: list["SplitSentence"],
         context: "PipelineContext",
     ) -> list["PipelineStatement"]:
         """
-        Extract statements from raw triples.
+        Extract triples from split sentences.
 
         Args:
-            raw_triples: Raw triples from Stage 1
+            split_sentences: Atomic sentences from Stage 1
             context: Pipeline context
 
         Returns:

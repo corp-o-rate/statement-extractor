@@ -2,6 +2,8 @@
 StatementDeduplicator - Hash-based deduplication for statements.
 
 Removes duplicate statements across chunks using normalized hashing.
+Works with Stage 2+ output (PipelineStatement, LabeledStatement) which
+have subject-predicate-object structure.
 """
 
 import hashlib
@@ -9,12 +11,12 @@ import logging
 from typing import TypeVar, Union
 
 from ..models.labels import LabeledStatement
-from ..models.statement import PipelineStatement, RawTriple
+from ..models.statement import PipelineStatement
 
 logger = logging.getLogger(__name__)
 
 # Type variable for generic deduplication
-T = TypeVar("T", RawTriple, PipelineStatement, LabeledStatement)
+T = TypeVar("T", PipelineStatement, LabeledStatement)
 
 
 class StatementDeduplicator:
@@ -23,6 +25,8 @@ class StatementDeduplicator:
 
     Uses a hash of normalized (subject, predicate, object) to identify
     duplicates. Keeps the first occurrence of each unique statement.
+
+    Works with PipelineStatement (Stage 2) and LabeledStatement (Stage 4).
     """
 
     def __init__(self):
@@ -46,20 +50,14 @@ class StatementDeduplicator:
 
     def _get_triple_parts(
         self,
-        stmt: Union[RawTriple, PipelineStatement, LabeledStatement],
+        stmt: Union[PipelineStatement, LabeledStatement],
     ) -> tuple[str, str, str]:
         """
         Extract (subject, predicate, object) from a statement.
 
         Handles different statement types consistently.
         """
-        if isinstance(stmt, RawTriple):
-            return (
-                stmt.subject_text,
-                stmt.predicate_text,
-                stmt.object_text,
-            )
-        elif isinstance(stmt, LabeledStatement):
+        if isinstance(stmt, LabeledStatement):
             return (
                 stmt.statement.subject.text,
                 stmt.statement.predicate,
@@ -75,7 +73,7 @@ class StatementDeduplicator:
 
     def _hash_triple(
         self,
-        stmt: Union[RawTriple, PipelineStatement, LabeledStatement],
+        stmt: Union[PipelineStatement, LabeledStatement],
     ) -> str:
         """
         Generate a hash for a statement triple.
@@ -96,7 +94,7 @@ class StatementDeduplicator:
 
     def is_duplicate(
         self,
-        stmt: Union[RawTriple, PipelineStatement, LabeledStatement],
+        stmt: Union[PipelineStatement, LabeledStatement],
     ) -> bool:
         """
         Check if a statement is a duplicate.

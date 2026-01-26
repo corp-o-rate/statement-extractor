@@ -266,18 +266,19 @@ class TestStatementDeduplicator:
     def test_deduplicator_reset(self):
         """Test resetting deduplicator state."""
         from statement_extractor.document import StatementDeduplicator
-        from statement_extractor.models.statement import RawTriple
+        from statement_extractor.models.statement import PipelineStatement
+        from statement_extractor.models.entity import ExtractedEntity, EntityType
 
         dedup = StatementDeduplicator()
 
-        triple = RawTriple(
-            subject_text="Apple",
-            predicate_text="announced",
-            object_text="iPhone",
-            source_sentence="Apple announced iPhone.",
+        stmt = PipelineStatement(
+            subject=ExtractedEntity(text="Apple", type=EntityType.ORG),
+            predicate="announced",
+            object=ExtractedEntity(text="iPhone", type=EntityType.PRODUCT),
+            source_text="Apple announced iPhone.",
         )
 
-        dedup.is_duplicate(triple)
+        dedup.is_duplicate(stmt)
         assert dedup.seen_count == 1
 
         dedup.reset()
@@ -286,84 +287,87 @@ class TestStatementDeduplicator:
     def test_deduplicator_exact_duplicate(self):
         """Test detecting exact duplicates."""
         from statement_extractor.document import StatementDeduplicator
-        from statement_extractor.models.statement import RawTriple
+        from statement_extractor.models.statement import PipelineStatement
+        from statement_extractor.models.entity import ExtractedEntity, EntityType
 
         dedup = StatementDeduplicator()
 
-        triple1 = RawTriple(
-            subject_text="Apple",
-            predicate_text="announced",
-            object_text="iPhone",
-            source_sentence="Apple announced iPhone.",
+        stmt1 = PipelineStatement(
+            subject=ExtractedEntity(text="Apple", type=EntityType.ORG),
+            predicate="announced",
+            object=ExtractedEntity(text="iPhone", type=EntityType.PRODUCT),
+            source_text="Apple announced iPhone.",
         )
 
-        triple2 = RawTriple(
-            subject_text="Apple",
-            predicate_text="announced",
-            object_text="iPhone",
-            source_sentence="Different source.",
+        stmt2 = PipelineStatement(
+            subject=ExtractedEntity(text="Apple", type=EntityType.ORG),
+            predicate="announced",
+            object=ExtractedEntity(text="iPhone", type=EntityType.PRODUCT),
+            source_text="Different source.",
         )
 
-        assert not dedup.is_duplicate(triple1)
-        assert dedup.is_duplicate(triple2)
+        assert not dedup.is_duplicate(stmt1)
+        assert dedup.is_duplicate(stmt2)
 
     def test_deduplicator_case_insensitive(self):
         """Test case-insensitive duplicate detection."""
         from statement_extractor.document import StatementDeduplicator
-        from statement_extractor.models.statement import RawTriple
+        from statement_extractor.models.statement import PipelineStatement
+        from statement_extractor.models.entity import ExtractedEntity, EntityType
 
         dedup = StatementDeduplicator()
 
-        triple1 = RawTriple(
-            subject_text="Apple",
-            predicate_text="announced",
-            object_text="iPhone",
-            source_sentence="Apple announced iPhone.",
+        stmt1 = PipelineStatement(
+            subject=ExtractedEntity(text="Apple", type=EntityType.ORG),
+            predicate="announced",
+            object=ExtractedEntity(text="iPhone", type=EntityType.PRODUCT),
+            source_text="Apple announced iPhone.",
         )
 
-        triple2 = RawTriple(
-            subject_text="APPLE",
-            predicate_text="ANNOUNCED",
-            object_text="IPHONE",
-            source_sentence="Different source.",
+        stmt2 = PipelineStatement(
+            subject=ExtractedEntity(text="APPLE", type=EntityType.ORG),
+            predicate="ANNOUNCED",
+            object=ExtractedEntity(text="IPHONE", type=EntityType.PRODUCT),
+            source_text="Different source.",
         )
 
-        assert not dedup.is_duplicate(triple1)
-        assert dedup.is_duplicate(triple2)
+        assert not dedup.is_duplicate(stmt1)
+        assert dedup.is_duplicate(stmt2)
 
     def test_deduplicator_filter_list(self):
         """Test filtering duplicates from a list."""
         from statement_extractor.document import StatementDeduplicator
-        from statement_extractor.models.statement import RawTriple
+        from statement_extractor.models.statement import PipelineStatement
+        from statement_extractor.models.entity import ExtractedEntity, EntityType
 
         dedup = StatementDeduplicator()
 
-        triples = [
-            RawTriple(
-                subject_text="Apple",
-                predicate_text="announced",
-                object_text="iPhone",
-                source_sentence="Source 1.",
+        statements = [
+            PipelineStatement(
+                subject=ExtractedEntity(text="Apple", type=EntityType.ORG),
+                predicate="announced",
+                object=ExtractedEntity(text="iPhone", type=EntityType.PRODUCT),
+                source_text="Source 1.",
             ),
-            RawTriple(
-                subject_text="Apple",
-                predicate_text="announced",
-                object_text="iPhone",
-                source_sentence="Source 2.",
+            PipelineStatement(
+                subject=ExtractedEntity(text="Apple", type=EntityType.ORG),
+                predicate="announced",
+                object=ExtractedEntity(text="iPhone", type=EntityType.PRODUCT),
+                source_text="Source 2.",
             ),
-            RawTriple(
-                subject_text="Google",
-                predicate_text="released",
-                object_text="Pixel",
-                source_sentence="Source 3.",
+            PipelineStatement(
+                subject=ExtractedEntity(text="Google", type=EntityType.ORG),
+                predicate="released",
+                object=ExtractedEntity(text="Pixel", type=EntityType.PRODUCT),
+                source_text="Source 3.",
             ),
         ]
 
-        filtered = dedup.filter_duplicates(triples)
+        filtered = dedup.filter_duplicates(statements)
 
         assert len(filtered) == 2
-        assert filtered[0].subject_text == "Apple"
-        assert filtered[1].subject_text == "Google"
+        assert filtered[0].subject.text == "Apple"
+        assert filtered[1].subject.text == "Google"
 
     def test_deduplicator_with_pipeline_statements(self):
         """Test deduplication with PipelineStatement."""
@@ -489,14 +493,12 @@ class TestStatementDocumentFields:
     """Tests for document fields on statement models."""
 
     def test_raw_triple_document_fields(self):
-        """Test document fields on RawTriple."""
+        """Test document fields on RawTriple (now SplitSentence)."""
         from statement_extractor.models.statement import RawTriple
 
+        # RawTriple is now an alias for SplitSentence which has a single text field
         triple = RawTriple(
-            subject_text="Apple",
-            predicate_text="announced",
-            object_text="iPhone",
-            source_sentence="Apple announced iPhone.",
+            text="Apple announced iPhone.",
             document_id="doc-123",
             page_number=5,
             chunk_index=2,

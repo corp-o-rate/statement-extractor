@@ -2,13 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Book, Code2, Settings, Boxes, Rocket, Server, ChevronRight, Terminal } from 'lucide-react';
+import { ArrowLeft, Book, Code2, Settings, Boxes, Rocket, Server, ChevronRight, Terminal, Database } from 'lucide-react';
 import { TableOfContents, TocItem } from '@/components/docs/table-of-contents';
 
 // Import documentation sections
 import GettingStarted from './sections/getting-started.mdx';
 import Cli from './sections/cli.mdx';
 import CoreConcepts from './sections/core-concepts.mdx';
+import EntityDatabase from './sections/entity-database.mdx';
 import ApiReference from './sections/api-reference.mdx';
 import Configuration from './sections/configuration.mdx';
 import EntityTypes from './sections/entity-types.mdx';
@@ -53,6 +54,21 @@ const tocItems: TocItem[] = [
       { id: 'pipeline-architecture', label: 'Pipeline Architecture', level: 3 },
       { id: 'document-processing', label: 'Document Processing', level: 3 },
       { id: 'company-database', label: 'Company Database', level: 3 },
+    ],
+  },
+  {
+    id: 'entity-database',
+    label: 'Entity Database',
+    level: 2,
+    children: [
+      { id: 'entity-db-quickstart', label: 'Quick Start', level: 3 },
+      { id: 'getting-database', label: 'Getting the Database', level: 3 },
+      { id: 'database-schema', label: 'Database Schema', level: 3 },
+      { id: 'entity-db-types', label: 'Entity Types', level: 3 },
+      { id: 'data-sources', label: 'Data Sources', level: 3 },
+      { id: 'entity-db-python', label: 'Python API', level: 3 },
+      { id: 'building-database', label: 'Building Your Own', level: 3 },
+      { id: 'canonicalization', label: 'Canonicalization', level: 3 },
     ],
   },
   {
@@ -172,7 +188,7 @@ export default function DocsPage() {
               </p>
 
               {/* Quick links */}
-              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-8">
+              <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4 mt-8">
                 <a
                   href="#getting-started"
                   className="flex items-center gap-3 p-4 border-2 border-gray-200 hover:border-red-500 transition-colors group"
@@ -199,8 +215,18 @@ export default function DocsPage() {
                 >
                   <Server className="w-5 h-5 text-gray-400 group-hover:text-red-500" />
                   <div>
-                    <div className="font-semibold">6-Stage Pipeline</div>
+                    <div className="font-semibold">5-Stage Pipeline</div>
                     <div className="text-sm text-gray-500">Entity resolution & taxonomy</div>
+                  </div>
+                </a>
+                <a
+                  href="#entity-database"
+                  className="flex items-center gap-3 p-4 border-2 border-gray-200 hover:border-red-500 transition-colors group"
+                >
+                  <Database className="w-5 h-5 text-gray-400 group-hover:text-red-500" />
+                  <div>
+                    <div className="font-semibold">Entity Database</div>
+                    <div className="text-sm text-gray-500">Organizations & people</div>
                   </div>
                 </a>
                 <a
@@ -220,6 +246,7 @@ export default function DocsPage() {
             <GettingStarted />
             <Cli />
             <CoreConcepts />
+            <EntityDatabase />
             <ApiReference />
             <Configuration />
             <EntityTypes />

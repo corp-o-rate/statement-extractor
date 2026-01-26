@@ -7,33 +7,26 @@ class TestPipelineModels:
     """Tests for pipeline data models."""
 
     def test_raw_triple_creation(self):
-        """Test creating a RawTriple."""
+        """Test creating a RawTriple (now SplitSentence)."""
         from statement_extractor.models import RawTriple
 
+        # RawTriple is now an alias for SplitSentence
         raw = RawTriple(
-            subject_text="Apple Inc.",
-            predicate_text="announced",
-            object_text="new iPhone",
-            source_sentence="Apple Inc. announced a new iPhone today.",
+            text="Apple Inc. announced a new iPhone today.",
         )
 
-        assert raw.subject_text == "Apple Inc."
-        assert raw.predicate_text == "announced"
-        assert raw.object_text == "new iPhone"
+        assert raw.text == "Apple Inc. announced a new iPhone today."
         assert raw.confidence == 1.0
 
-    def test_raw_triple_as_tuple(self):
-        """Test RawTriple as_tuple method."""
+    def test_split_sentence_str(self):
+        """Test SplitSentence string representation."""
         from statement_extractor.models import RawTriple
 
         raw = RawTriple(
-            subject_text="Apple",
-            predicate_text="makes",
-            object_text="iPhones",
-            source_sentence="Apple makes iPhones.",
+            text="Apple makes iPhones.",
         )
 
-        assert raw.as_tuple() == ("Apple", "makes", "iPhones")
+        assert str(raw) == "Apple makes iPhones."
 
     def test_extracted_entity_creation(self):
         """Test creating an ExtractedEntity."""
@@ -299,7 +292,7 @@ class TestPipelineContext:
 
         assert ctx.source_text == "Apple announced a new iPhone."
         assert ctx.source_metadata["doc_id"] == "123"
-        assert len(ctx.raw_triples) == 0
+        assert len(ctx.split_sentences) == 0
         assert len(ctx.statements) == 0
 
     def test_context_error_handling(self):
@@ -463,7 +456,7 @@ class TestPipelineIntegration:
         )
 
         # Verify initial state
-        assert len(ctx.raw_triples) == 0
+        assert len(ctx.split_sentences) == 0
         assert len(ctx.statements) == 0
         assert len(ctx.qualified_entities) == 0
         assert len(ctx.canonical_entities) == 0
