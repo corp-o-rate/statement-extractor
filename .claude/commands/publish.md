@@ -25,15 +25,22 @@ Publish the corp-extractor library to PyPI:
    - Check dist/ directory for wheel and tarball
    - Verify package contents look correct
 
+5. **Check Documentation:**
 
-5. **Publish:**
+   Make sure these files are accurate and up to date.
+   - `statement-extractor-lib/README.md` - Library README
+   - `statement-extractor-lib/CLAUDE.md` - Claude Code Guidance
+   
+   Update the main documentation with the new library version number
+   update the `runpod/Dockerfile` with the new version number
+
+6**Publish:**
    ```bash
    cd statement-extractor-lib && uv publish
    ```
 
-6. **Post-publish:**
+7**Post-publish:**
    - Tag the release in git: `git tag v{version}`
    - Push tags: `git push --tags`
-   - Update documentation if needed
 
 **Note:** Requires PyPI credentials configured in environment.

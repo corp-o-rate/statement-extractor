@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Github, ExternalLink } from 'lucide-react';
+import { Github, ExternalLink, Package, Container } from 'lucide-react';
 
 export function Header() {
   return (
@@ -43,13 +43,33 @@ export function Header() {
               AI Prompts
             </a>
             <a
-              href="https://huggingface.co/Corp-o-Rate-Community/statement-extractor"
+              href="https://pypi.org/project/corp-extractor/"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sm text-gray-600 hover:text-black transition-colors flex items-center gap-1"
+              className="p-2 hover:bg-gray-100 rounded transition-colors"
+              title="View on PyPI"
             >
-              Model
-              <ExternalLink className="w-3 h-3" />
+              <Package className="w-5 h-5" />
+            </a>
+            <a
+              href="https://hub.docker.com/r/corporate/statement-extractor"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 hover:bg-gray-100 rounded transition-colors"
+              title="View on Docker Hub"
+            >
+              <Container className="w-5 h-5" />
+            </a>
+            <a
+              href="https://huggingface.co/Corp-o-Rate-Community"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-2 hover:bg-gray-100 rounded transition-colors"
+              title="View on Hugging Face"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 32 32" fill="currentColor">
+                <path d="M16 0C7.163 0 0 7.163 0 16s7.163 16 16 16 16-7.163 16-16S24.837 0 16 0zm-4.5 22.5c-1.933 0-3.5-1.567-3.5-3.5s1.567-3.5 3.5-3.5 3.5 1.567 3.5 3.5-1.567 3.5-3.5 3.5zm9 0c-1.933 0-3.5-1.567-3.5-3.5s1.567-3.5 3.5-3.5 3.5 1.567 3.5 3.5-1.567 3.5-3.5 3.5zM10 13c-.828 0-1.5-.672-1.5-1.5v-2c0-.828.672-1.5 1.5-1.5s1.5.672 1.5 1.5v2c0 .828-.672 1.5-1.5 1.5zm12 0c-.828 0-1.5-.672-1.5-1.5v-2c0-.828.672-1.5 1.5-1.5s1.5.672 1.5 1.5v2c0 .828-.672 1.5-1.5 1.5z"/>
+              </svg>
             </a>
             <a
               href="https://github.com/corp-o-rate/statement-extractor"
