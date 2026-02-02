@@ -9,7 +9,6 @@ Then searches the person database to find canonical matches for notable people
 (those in Wikipedia/Wikidata), using extracted role/org to help disambiguate.
 """
 
-import json
 import logging
 import re
 from typing import Optional
@@ -44,11 +43,12 @@ Candidates from database (with Wikipedia info):
 
 Task: Select the BEST match, or respond "NONE" if no candidate is a good match.
 
-Rules:
-- The match should refer to the same person
-- Consider whether the role and organization from the text match the Wikipedia info
-- Different people with similar names should NOT match
-- If the extracted name is too generic or ambiguous, respond "NONE"
+IMPORTANT RULES:
+1. The candidate name must closely match the extracted name "{query_name}"
+2. Similar-sounding names are NOT matches (e.g., "Andy Vassies" does NOT match "Andy Jassy")
+3. If no candidate has a name that matches "{query_name}", respond "NONE"
+4. Consider role and organization context only AFTER confirming name match
+5. When in doubt, prefer "NONE" over a wrong match
 
 Respond with ONLY the number of the best match (1, 2, 3, etc.) or "NONE".
 """
@@ -260,7 +260,7 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
             if result and (result.role or result.org):
                 qualifiers = result
 
-        # Fallback to pattern matching
+        # Fallback to pattern matching (only if LLM extraction returned nothing)
         if qualifiers is None:
             qualifiers = self._extract_with_patterns(entity.text, full_text)
 
@@ -313,42 +313,79 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         if embedder is None:
             return None
 
-        # Embed the person name
-        logger.debug(f"    Embedding person name: '{person_name}'")
-        query_embedding = embedder.embed(person_name)
+        # Log extracted context
+        logger.debug(f"    Person search context:")
+        logger.debug(f"      Name: '{person_name}'")
+        logger.debug(f"      Extracted role: {extracted_role or '(none)'}")
+        logger.debug(f"      Extracted org: {extracted_org or '(none)'}")
 
-        # Search database with text pre-filtering
+        # Build query text with context for better embedding match
+        # This matches how PersonRecord.get_embedding_text() builds embedding text
+        query_parts = [person_name]
+        if extracted_role:
+            query_parts.append(extracted_role)
+        if extracted_org:
+            query_parts.append(extracted_org)
+        query_text = " | ".join(query_parts)
+
+        logger.debug(f"    Embedding query: '{query_text}'")
+        query_embedding = embedder.embed(query_text)
+
+        # Search database with text pre-filtering on name only
         logger.debug(f"    Searching person database...")
         results = database.search(
             query_embedding,
-            top_k=self._top_k,
+            top_k=self._top_k * 3,  # Fetch more to allow for org filtering
             query_text=person_name,
         )
 
+        logger.debug(f"    Database returned {len(results)} raw results")
+
+        # If org was extracted, boost candidates that match the org
+        if extracted_org:
+            # Re-score with org preference
+            org_matched = []
+            org_unmatched = []
+            for record, sim in results:
+                if record.known_for_org and self._org_matches(extracted_org, record.known_for_org):
+                    logger.debug(f"      Org match: {record.name} at {record.known_for_org}")
+                    org_matched.append((record, sim))
+                else:
+                    org_unmatched.append((record, sim))
+            # Prioritize org matches
+            if org_matched:
+                logger.info(f"    Found {len(org_matched)} candidates matching org '{extracted_org}'")
+                results = org_matched + org_unmatched
+            else:
+                logger.debug(f"    No candidates match org '{extracted_org}'")
+
         # Filter by minimum similarity
         results = [(r, s) for r, s in results if s >= self._min_similarity]
+        logger.debug(f"    After min_similarity filter ({self._min_similarity}): {len(results)} results")
 
         if not results:
             logger.debug(f"    No person matches found above threshold {self._min_similarity}")
             return None
 
-        # Boost scores based on role/org matching
+        # Boost scores based on name/role/org matching
         scored_results = []
         for record, similarity in results:
             boosted_score = self._compute_match_score(
-                record, similarity, extracted_role, extracted_org
+                record, similarity, extracted_role, extracted_org, query_name=person_name
             )
             scored_results.append((record, similarity, boosted_score))
 
         # Sort by boosted score
         scored_results.sort(key=lambda x: x[2], reverse=True)
 
-        # Log top candidates
+        # Log top candidates with detailed context
         logger.info(f"    Found {len(scored_results)} candidates for '{person_name}':")
         for i, (record, sim, boosted) in enumerate(scored_results[:5], 1):
             role_str = f" ({record.known_for_role})" if record.known_for_role else ""
             org_str = f" at {record.known_for_org}" if record.known_for_org else ""
-            logger.info(f"      {i}. {record.name}{role_str}{org_str} (sim={sim:.3f}, boosted={boosted:.3f})")
+            boost_delta = boosted - sim
+            boost_info = f" [+{boost_delta:.3f} boost]" if boost_delta > 0 else ""
+            logger.info(f"      {i}. {record.name}{role_str}{org_str} (sim={sim:.3f}, boosted={boosted:.3f}{boost_info})")
 
         # Select best match using LLM if available
         logger.info(f"    Selecting best match (LLM={self._llm is not None})...")
@@ -385,6 +422,7 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         embedding_similarity: float,
         extracted_role: Optional[str],
         extracted_org: Optional[str],
+        query_name: Optional[str] = None,
     ) -> float:
         """
         Compute boosted match score using role/org context.
@@ -392,6 +430,14 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         Boosts similarity score if extracted role/org matches database record.
         """
         score = embedding_similarity
+
+        # Major boost for exact name match (normalized)
+        if query_name:
+            query_norm = self._normalize_person_name(query_name)
+            record_norm = self._normalize_person_name(record.name)
+            if query_norm == record_norm:
+                score += 0.25  # +25% boost for exact name match
+                logger.debug(f"      Exact name match boost: '{query_name}' == '{record.name}'")
 
         # Boost if role matches (fuzzy)
         if extracted_role and record.known_for_role:
@@ -457,6 +503,18 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
             return True
 
         return False
+
+    def _normalize_person_name(self, name: str) -> str:
+        """Normalize person name for comparison."""
+        # Lowercase and strip
+        normalized = name.lower().strip()
+        # Remove common titles
+        for title in ["dr.", "dr ", "mr.", "mr ", "mrs.", "mrs ", "ms.", "ms ", "prof.", "prof "]:
+            if normalized.startswith(title):
+                normalized = normalized[len(title):]
+        # Remove extra whitespace
+        normalized = " ".join(normalized.split())
+        return normalized
 
     def _normalize_org_name(self, name: str) -> str:
         """Simple org name normalization."""
@@ -592,52 +650,51 @@ class PersonQualifierPlugin(BaseQualifierPlugin):
         person_name: str,
         context_text: str,
     ) -> Optional[EntityQualifiers]:
-        """Extract role and org using Gemma3."""
+        """Extract role and org using Gemma3 with simple line-based output."""
         if self._llm is None:
             return None
 
         try:
-            prompt = f"""Extract qualifiers for a person from the given context.
-Instructions:
-- "role" = job title or position (e.g., "CEO", "President", "Director")
-- "org" = company or organization name (e.g., "Amazon", "Apple Inc", "Microsoft")
-- These are DIFFERENT things: role is a job title, org is a company name
-- Return null for fields not mentioned in the context
+            prompt = f"""Extract info about "{person_name}" from the text below.
+Reply with exactly 3 lines:
+NAME: the person's full name
+ROLE: their job title (CEO, President, etc.) or NONE
+ORG: the company/organization name or NONE
 
-Return ONLY valid JSON:
+Text: {context_text[:500]}
 
-E.g.
-<context>We interviewed Big Ducks Quacking Inc team. James is new in the role of the CEO</context>
-<person>James</person>
+NAME:"""
 
-Should return:
-
-{{"role": "CEO", "org": "Big Ducks Quacking Inc"}}
-
----
-
-<context>{context_text}</context>
-<person>{person_name}</person>
-"""
-
-            logger.debug(f"LLM request: {prompt}")
+            logger.debug(f"LLM extraction prompt for '{person_name}'")
             response = self._llm.generate(prompt, max_tokens=100, stop=["\n\n", "</s>"])
             logger.debug(f"LLM response: {response}")
 
-            # Extract JSON from response
-            json_match = re.search(r'\{[^}]+\}', response)
-            if json_match:
-                data = json.loads(json_match.group())
-                role = data.get("role")
-                org = data.get("org")
+            # Parse line-based response
+            lines = response.strip().split("\n")
+            name = None
+            role = None
+            org = None
 
-                # Validate: role and org should be different (reject if same)
-                if role and org and role.lower() == org.lower():
-                    logger.debug(f"Rejected duplicate role/org: {role}")
-                    org = None  # Clear org if it's same as role
+            for line in lines:
+                line = line.strip()
+                if line.startswith("NAME:"):
+                    name = line[5:].strip()
+                elif line.startswith("ROLE:"):
+                    val = line[5:].strip()
+                    if val.upper() != "NONE":
+                        role = val
+                elif line.startswith("ORG:"):
+                    val = line[4:].strip()
+                    if val.upper() != "NONE":
+                        org = val
+                # Handle case where first line is just the name (after our "NAME:" in prompt)
+                elif not name and line and not line.startswith(("ROLE", "ORG")):
+                    name = line
 
-                if role or org:
-                    return EntityQualifiers(role=role, org=org)
+            logger.debug(f"LLM extracted: name={name!r}, role={role!r}, org={org!r}")
+
+            if role or org:
+                return EntityQualifiers(role=role, org=org)
 
         except Exception as e:
             logger.exception(f"LLM extraction failed: {e}")

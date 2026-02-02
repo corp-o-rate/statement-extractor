@@ -12,18 +12,41 @@ import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import numpy as np
 import pycountry
 import sqlite_vec
 
-from .models import CompanyRecord, DatabaseStats, EntityType, PersonRecord, PersonType
+from .models import (
+    CompanyRecord,
+    DatabaseStats,
+    EntityType,
+    LocationRecord,
+    PersonRecord,
+    PersonType,
+    RoleRecord,
+    SimplifiedLocationType,
+)
+from .seed_data import (
+    LOCATION_TYPE_NAME_TO_ID,
+    LOCATION_TYPE_QID_TO_ID,
+    LOCATION_TYPE_TO_SIMPLIFIED,
+    ORG_TYPE_ID_TO_NAME,
+    ORG_TYPE_NAME_TO_ID,
+    PEOPLE_TYPE_ID_TO_NAME,
+    PEOPLE_TYPE_NAME_TO_ID,
+    SIMPLIFIED_LOCATION_TYPE_ID_TO_NAME,
+    SOURCE_ID_TO_NAME,
+    SOURCE_NAME_TO_ID,
+    seed_all_enums,
+    seed_pycountry_locations,
+)
 
 logger = logging.getLogger(__name__)
 
 # Default database location
-DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "entities.db"
+DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "entities-v2.db"
 
 # Module-level shared connections by path (both databases share the same connection)
 _shared_connections: dict[str, sqlite3.Connection] = {}
@@ -500,6 +523,7 @@ class OrganizationDatabase:
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self._embedding_dim = embedding_dim
         self._conn: Optional[sqlite3.Connection] = None
+        self._is_v2: Optional[bool] = None  # Detected on first connect
 
     def _ensure_dir(self) -> None:
         """Ensure database directory exists."""
@@ -512,10 +536,26 @@ class OrganizationDatabase:
 
         self._conn = _get_shared_connection(self._db_path, self._embedding_dim)
 
-        # Create tables (idempotent)
-        self._create_tables()
+        # Detect schema version BEFORE creating tables
+        # v2 has entity_type_id (FK) instead of entity_type (TEXT)
+        if self._is_v2 is None:
+            cursor = self._conn.execute("PRAGMA table_info(organizations)")
+            columns = {row["name"] for row in cursor}
+            self._is_v2 = "entity_type_id" in columns
+            if self._is_v2:
+                logger.debug("Detected v2 schema for organizations")
+
+        # Create tables (idempotent) - only for v1 schema or fresh databases
+        # v2 databases already have their schema from migration
+        if not self._is_v2:
+            self._create_tables()
 
         return self._conn
+
+    @property
+    def _org_table(self) -> str:
+        """Return table/view name for organization queries needing text fields."""
+        return "organizations_view" if self._is_v2 else "organizations"
 
     def _create_tables(self) -> None:
         """Create database tables including sqlite-vec virtual table."""
@@ -591,12 +631,21 @@ class OrganizationDatabase:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_name_region_source ON organizations(name, region, source)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_canon_id ON organizations(canon_id)")
 
-        # Create sqlite-vec virtual table for embeddings
+        # Create sqlite-vec virtual table for embeddings (float32)
         # vec0 is the recommended virtual table type
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS organization_embeddings USING vec0(
                 org_id INTEGER PRIMARY KEY,
                 embedding float[{self._embedding_dim}]
+            )
+        """)
+
+        # Create sqlite-vec virtual table for scalar embeddings (int8)
+        # Provides 75% storage reduction with ~92% recall at top-100
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS organization_embeddings_scalar USING vec0(
+                org_id INTEGER PRIMARY KEY,
+                embedding int8[{self._embedding_dim}]
             )
         """)
 
@@ -606,13 +655,19 @@ class OrganizationDatabase:
         """Clear connection reference (shared connection remains open)."""
         self._conn = None
 
-    def insert(self, record: CompanyRecord, embedding: np.ndarray) -> int:
+    def insert(
+        self,
+        record: CompanyRecord,
+        embedding: np.ndarray,
+        scalar_embedding: Optional[np.ndarray] = None,
+    ) -> int:
         """
         Insert an organization record with its embedding.
 
         Args:
             record: Organization record to insert
-            embedding: Embedding vector for the organization name
+            embedding: Embedding vector for the organization name (float32)
+            scalar_embedding: Optional int8 scalar embedding for compact storage
 
         Returns:
             Row ID of inserted record
@@ -642,7 +697,7 @@ class OrganizationDatabase:
         row_id = cursor.lastrowid
         assert row_id is not None
 
-        # Insert embedding into vec table
+        # Insert embedding into vec table (float32)
         # sqlite-vec virtual tables don't support INSERT OR REPLACE, so delete first
         embedding_blob = embedding.astype(np.float32).tobytes()
         conn.execute("DELETE FROM organization_embeddings WHERE org_id = ?", (row_id,))
@@ -650,6 +705,15 @@ class OrganizationDatabase:
             INSERT INTO organization_embeddings (org_id, embedding)
             VALUES (?, ?)
         """, (row_id, embedding_blob))
+
+        # Insert scalar embedding if provided (int8)
+        if scalar_embedding is not None:
+            scalar_blob = scalar_embedding.astype(np.int8).tobytes()
+            conn.execute("DELETE FROM organization_embeddings_scalar WHERE org_id = ?", (row_id,))
+            conn.execute("""
+                INSERT INTO organization_embeddings_scalar (org_id, embedding)
+                VALUES (?, vec_int8(?))
+            """, (row_id, scalar_blob))
 
         conn.commit()
         return row_id
@@ -659,14 +723,16 @@ class OrganizationDatabase:
         records: list[CompanyRecord],
         embeddings: np.ndarray,
         batch_size: int = 1000,
+        scalar_embeddings: Optional[np.ndarray] = None,
     ) -> int:
         """
         Insert multiple organization records with embeddings.
 
         Args:
             records: List of organization records
-            embeddings: Matrix of embeddings (N x dim)
+            embeddings: Matrix of embeddings (N x dim) - float32
             batch_size: Commit batch size
+            scalar_embeddings: Optional matrix of int8 scalar embeddings (N x dim)
 
         Returns:
             Number of records inserted
@@ -674,25 +740,54 @@ class OrganizationDatabase:
         conn = self._connect()
         count = 0
 
-        for record, embedding in zip(records, embeddings):
+        for i, (record, embedding) in enumerate(zip(records, embeddings)):
             record_json = json.dumps(record.record)
             name_normalized = _normalize_name(record.name)
 
-            cursor = conn.execute("""
-                INSERT OR REPLACE INTO organizations
-                (name, name_normalized, source, source_id, region, entity_type, from_date, to_date, record)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                record.name,
-                name_normalized,
-                record.source,
-                record.source_id,
-                record.region,
-                record.entity_type.value,
-                record.from_date or "",
-                record.to_date or "",
-                record_json,
-            ))
+            if self._is_v2:
+                # v2 schema: use FK IDs instead of TEXT columns
+                source_type_id = SOURCE_NAME_TO_ID.get(record.source, 4)
+                entity_type_id = ORG_TYPE_NAME_TO_ID.get(record.entity_type.value, 17)  # 17 = unknown
+
+                # Resolve region to location_id if provided
+                region_id = None
+                if record.region:
+                    # Use locations database to resolve region
+                    locations_db = get_locations_database(db_path=self._db_path)
+                    region_id = locations_db.resolve_region_text(record.region)
+
+                cursor = conn.execute("""
+                    INSERT OR REPLACE INTO organizations
+                    (name, name_normalized, source_id, source_identifier, region_id, entity_type_id, from_date, to_date, record)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record.name,
+                    name_normalized,
+                    source_type_id,
+                    record.source_id,
+                    region_id,
+                    entity_type_id,
+                    record.from_date or "",
+                    record.to_date or "",
+                    record_json,
+                ))
+            else:
+                # v1 schema: use TEXT columns
+                cursor = conn.execute("""
+                    INSERT OR REPLACE INTO organizations
+                    (name, name_normalized, source, source_id, region, entity_type, from_date, to_date, record)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record.name,
+                    name_normalized,
+                    record.source,
+                    record.source_id,
+                    record.region,
+                    record.entity_type.value,
+                    record.from_date or "",
+                    record.to_date or "",
+                    record_json,
+                ))
 
             row_id = cursor.lastrowid
             assert row_id is not None
@@ -704,6 +799,15 @@ class OrganizationDatabase:
                 INSERT INTO organization_embeddings (org_id, embedding)
                 VALUES (?, ?)
             """, (row_id, embedding_blob))
+
+            # Insert scalar embedding if provided (int8)
+            if scalar_embeddings is not None:
+                scalar_blob = scalar_embeddings[i].astype(np.int8).tobytes()
+                conn.execute("DELETE FROM organization_embeddings_scalar WHERE org_id = ?", (row_id,))
+                conn.execute("""
+                    INSERT INTO organization_embeddings_scalar (org_id, embedding)
+                    VALUES (?, vec_int8(?))
+                """, (row_id, scalar_blob))
 
             count += 1
 
@@ -750,7 +854,13 @@ class OrganizationDatabase:
         if query_norm == 0:
             return []
         query_normalized = query_embedding / query_norm
-        query_blob = query_normalized.astype(np.float32).tobytes()
+
+        # Use int8 quantized query if scalar table is available (75% storage savings)
+        if self._has_scalar_table():
+            query_int8 = self._quantize_query(query_normalized)
+            query_blob = query_int8.tobytes()
+        else:
+            query_blob = query_normalized.astype(np.float32).tobytes()
 
         # Stage 1: Text-based pre-filtering (if query_text provided)
         candidate_ids: Optional[set[int]] = None
@@ -980,6 +1090,19 @@ class OrganizationDatabase:
         cursor = conn.execute(query, params)
         return set(row["id"] for row in cursor)
 
+    def _quantize_query(self, embedding: np.ndarray) -> np.ndarray:
+        """Quantize query embedding to int8 for scalar search."""
+        return np.clip(np.round(embedding * 127), -127, 127).astype(np.int8)
+
+    def _has_scalar_table(self) -> bool:
+        """Check if scalar embedding table exists."""
+        conn = self._conn
+        assert conn is not None
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='organization_embeddings_scalar'"
+        )
+        return cursor.fetchone() is not None
+
     def _vector_search_filtered(
         self,
         query_blob: bytes,
@@ -987,7 +1110,7 @@ class OrganizationDatabase:
         top_k: int,
         source_filter: Optional[str],
     ) -> list[tuple[CompanyRecord, float]]:
-        """Vector search within a filtered set of candidates."""
+        """Vector search within a filtered set of candidates using scalar (int8) embeddings."""
         conn = self._conn
         assert conn is not None
 
@@ -997,18 +1120,29 @@ class OrganizationDatabase:
         # Build IN clause for candidate IDs
         placeholders = ",".join("?" * len(candidate_ids))
 
-        # Query sqlite-vec with KNN search, filtered by candidate IDs
-        # Using distance function - lower is more similar for L2
-        # We'll use cosine distance
-        query = f"""
-            SELECT
-                e.org_id,
-                vec_distance_cosine(e.embedding, ?) as distance
-            FROM organization_embeddings e
-            WHERE e.org_id IN ({placeholders})
-            ORDER BY distance
-            LIMIT ?
-        """
+        # Use scalar embedding table if available (75% storage reduction)
+        if self._has_scalar_table():
+            # Query uses int8 embeddings with vec_int8() wrapper
+            query = f"""
+                SELECT
+                    e.org_id,
+                    vec_distance_cosine(e.embedding, vec_int8(?)) as distance
+                FROM organization_embeddings_scalar e
+                WHERE e.org_id IN ({placeholders})
+                ORDER BY distance
+                LIMIT ?
+            """
+        else:
+            # Fall back to float32 embeddings
+            query = f"""
+                SELECT
+                    e.org_id,
+                    vec_distance_cosine(e.embedding, ?) as distance
+                FROM organization_embeddings e
+                WHERE e.org_id IN ({placeholders})
+                ORDER BY distance
+                LIMIT ?
+            """
 
         cursor = conn.execute(query, [query_blob] + list(candidate_ids) + [top_k])
 
@@ -1035,33 +1169,58 @@ class OrganizationDatabase:
         top_k: int,
         source_filter: Optional[str],
     ) -> list[tuple[CompanyRecord, float]]:
-        """Full vector search without text pre-filtering."""
+        """Full vector search without text pre-filtering using scalar (int8) embeddings."""
         conn = self._conn
         assert conn is not None
+
+        # Use scalar embedding table if available (75% storage reduction)
+        use_scalar = self._has_scalar_table()
 
         # KNN search with sqlite-vec
         if source_filter:
             # Need to join with organizations table for source filter
-            query = """
-                SELECT
-                    e.org_id,
-                    vec_distance_cosine(e.embedding, ?) as distance
-                FROM organization_embeddings e
-                JOIN organizations c ON e.org_id = c.id
-                WHERE c.source = ?
-                ORDER BY distance
-                LIMIT ?
-            """
+            if use_scalar:
+                query = """
+                    SELECT
+                        e.org_id,
+                        vec_distance_cosine(e.embedding, vec_int8(?)) as distance
+                    FROM organization_embeddings_scalar e
+                    JOIN organizations c ON e.org_id = c.id
+                    WHERE c.source = ?
+                    ORDER BY distance
+                    LIMIT ?
+                """
+            else:
+                query = """
+                    SELECT
+                        e.org_id,
+                        vec_distance_cosine(e.embedding, ?) as distance
+                    FROM organization_embeddings e
+                    JOIN organizations c ON e.org_id = c.id
+                    WHERE c.source = ?
+                    ORDER BY distance
+                    LIMIT ?
+                """
             cursor = conn.execute(query, (query_blob, source_filter, top_k))
         else:
-            query = """
-                SELECT
-                    org_id,
-                    vec_distance_cosine(embedding, ?) as distance
-                FROM organization_embeddings
-                ORDER BY distance
-                LIMIT ?
-            """
+            if use_scalar:
+                query = """
+                    SELECT
+                        org_id,
+                        vec_distance_cosine(embedding, vec_int8(?)) as distance
+                    FROM organization_embeddings_scalar
+                    ORDER BY distance
+                    LIMIT ?
+                """
+            else:
+                query = """
+                    SELECT
+                        org_id,
+                        vec_distance_cosine(embedding, ?) as distance
+                    FROM organization_embeddings
+                    ORDER BY distance
+                    LIMIT ?
+                """
             cursor = conn.execute(query, (query_blob, top_k))
 
         results = []
@@ -1081,10 +1240,19 @@ class OrganizationDatabase:
         conn = self._conn
         assert conn is not None
 
-        cursor = conn.execute("""
-            SELECT id, name, source, source_id, region, entity_type, record, canon_id
-            FROM organizations WHERE id = ?
-        """, (org_id,))
+        if self._is_v2:
+            # v2 schema: use view for text fields, but need record from base table
+            cursor = conn.execute("""
+                SELECT v.id, v.name, v.source, v.source_identifier, v.region, v.entity_type, v.canon_id, o.record
+                FROM organizations_view v
+                JOIN organizations o ON v.id = o.id
+                WHERE v.id = ?
+            """, (org_id,))
+        else:
+            cursor = conn.execute("""
+                SELECT id, name, source, source_id, region, entity_type, record, canon_id
+                FROM organizations WHERE id = ?
+            """, (org_id,))
 
         row = cursor.fetchone()
         if row:
@@ -1092,10 +1260,11 @@ class OrganizationDatabase:
             # Add db_id and canon_id to record dict for canon-aware search
             record_data["db_id"] = row["id"]
             record_data["canon_id"] = row["canon_id"]
+            source_id_field = "source_identifier" if self._is_v2 else "source_id"
             return CompanyRecord(
                 name=row["name"],
                 source=row["source"],
-                source_id=row["source_id"],
+                source_id=row[source_id_field],
                 region=row["region"] or "",
                 entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
                 record=record_data,
@@ -1106,18 +1275,29 @@ class OrganizationDatabase:
         """Get an organization record by source and source_id."""
         conn = self._connect()
 
-        cursor = conn.execute("""
-            SELECT name, source, source_id, region, entity_type, record
-            FROM organizations
-            WHERE source = ? AND source_id = ?
-        """, (source, source_id))
+        if self._is_v2:
+            # v2 schema: join view with base table for record
+            source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+            cursor = conn.execute("""
+                SELECT v.name, v.source, v.source_identifier, v.region, v.entity_type, o.record
+                FROM organizations_view v
+                JOIN organizations o ON v.id = o.id
+                WHERE o.source_id = ? AND o.source_identifier = ?
+            """, (source_type_id, source_id))
+        else:
+            cursor = conn.execute("""
+                SELECT name, source, source_id, region, entity_type, record
+                FROM organizations
+                WHERE source = ? AND source_id = ?
+            """, (source, source_id))
 
         row = cursor.fetchone()
         if row:
+            source_id_field = "source_identifier" if self._is_v2 else "source_id"
             return CompanyRecord(
                 name=row["name"],
                 source=row["source"],
-                source_id=row["source_id"],
+                source_id=row[source_id_field],
                 region=row["region"] or "",
                 entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
                 record=json.loads(row["record"]),
@@ -1128,10 +1308,17 @@ class OrganizationDatabase:
         """Get the internal database ID for an organization by source and source_id."""
         conn = self._connect()
 
-        cursor = conn.execute("""
-            SELECT id FROM organizations
-            WHERE source = ? AND source_id = ?
-        """, (source, source_id))
+        if self._is_v2:
+            source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+            cursor = conn.execute("""
+                SELECT id FROM organizations
+                WHERE source_id = ? AND source_identifier = ?
+            """, (source_type_id, source_id))
+        else:
+            cursor = conn.execute("""
+                SELECT id FROM organizations
+                WHERE source = ? AND source_id = ?
+            """, (source, source_id))
 
         row = cursor.fetchone()
         if row:
@@ -1146,8 +1333,18 @@ class OrganizationDatabase:
         cursor = conn.execute("SELECT COUNT(*) FROM organizations")
         total = cursor.fetchone()[0]
 
-        # Count by source
-        cursor = conn.execute("SELECT source, COUNT(*) as cnt FROM organizations GROUP BY source")
+        # Count by source - handle both v1 and v2 schema
+        if self._is_v2:
+            # v2 schema - join with source_types
+            cursor = conn.execute("""
+                SELECT st.name as source, COUNT(*) as cnt
+                FROM organizations o
+                JOIN source_types st ON o.source_id = st.id
+                GROUP BY o.source_id
+            """)
+        else:
+            # v1 schema
+            cursor = conn.execute("SELECT source, COUNT(*) as cnt FROM organizations GROUP BY source")
         by_source = {row["source"]: row["cnt"] for row in cursor}
 
         # Database file size
@@ -1167,20 +1364,31 @@ class OrganizationDatabase:
         Useful for resume operations to skip already-imported records.
 
         Args:
-            source: Optional source filter (e.g., "wikipedia" for Wikidata orgs)
+            source: Optional source filter (e.g., "wikidata" for Wikidata orgs)
 
         Returns:
             Set of source_id strings (e.g., Q codes for Wikidata)
         """
         conn = self._connect()
 
-        if source:
-            cursor = conn.execute(
-                "SELECT DISTINCT source_id FROM organizations WHERE source = ?",
-                (source,)
-            )
+        if self._is_v2:
+            id_col = "source_identifier"
+            if source:
+                source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+                cursor = conn.execute(
+                    f"SELECT DISTINCT {id_col} FROM organizations WHERE source_id = ?",
+                    (source_type_id,)
+                )
+            else:
+                cursor = conn.execute(f"SELECT DISTINCT {id_col} FROM organizations")
         else:
-            cursor = conn.execute("SELECT DISTINCT source_id FROM organizations")
+            if source:
+                cursor = conn.execute(
+                    "SELECT DISTINCT source_id FROM organizations WHERE source = ?",
+                    (source,)
+                )
+            else:
+                cursor = conn.execute("SELECT DISTINCT source_id FROM organizations")
 
         return {row[0] for row in cursor}
 
@@ -1188,27 +1396,51 @@ class OrganizationDatabase:
         """Iterate over all records, optionally filtered by source."""
         conn = self._connect()
 
-        if source:
-            cursor = conn.execute("""
-                SELECT name, source, source_id, region, entity_type, record
-                FROM organizations
-                WHERE source = ?
-            """, (source,))
+        if self._is_v2:
+            if source:
+                source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+                cursor = conn.execute("""
+                    SELECT v.name, v.source, v.source_identifier, v.region, v.entity_type, o.record
+                    FROM organizations_view v
+                    JOIN organizations o ON v.id = o.id
+                    WHERE o.source_id = ?
+                """, (source_type_id,))
+            else:
+                cursor = conn.execute("""
+                    SELECT v.name, v.source, v.source_identifier, v.region, v.entity_type, o.record
+                    FROM organizations_view v
+                    JOIN organizations o ON v.id = o.id
+                """)
+            for row in cursor:
+                yield CompanyRecord(
+                    name=row["name"],
+                    source=row["source"],
+                    source_id=row["source_identifier"],
+                    region=row["region"] or "",
+                    entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
+                    record=json.loads(row["record"]),
+                )
         else:
-            cursor = conn.execute("""
-                SELECT name, source, source_id, region, entity_type, record
-                FROM organizations
-            """)
-
-        for row in cursor:
-            yield CompanyRecord(
-                name=row["name"],
-                source=row["source"],
-                source_id=row["source_id"],
-                region=row["region"] or "",
-                entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
-                record=json.loads(row["record"]),
-            )
+            if source:
+                cursor = conn.execute("""
+                    SELECT name, source, source_id, region, entity_type, record
+                    FROM organizations
+                    WHERE source = ?
+                """, (source,))
+            else:
+                cursor = conn.execute("""
+                    SELECT name, source, source_id, region, entity_type, record
+                    FROM organizations
+                """)
+            for row in cursor:
+                yield CompanyRecord(
+                    name=row["name"],
+                    source=row["source"],
+                    source_id=row["source_id"],
+                    region=row["region"] or "",
+                    entity_type=EntityType(row["entity_type"]) if row["entity_type"] else EntityType.UNKNOWN,
+                    record=json.loads(row["record"]),
+                )
 
     def canonicalize(self, batch_size: int = 10000) -> dict[str, int]:
         """
@@ -1252,10 +1484,18 @@ class OrganizationDatabase:
         sources: dict[int, str] = {}  # org_id -> source
         all_org_ids: list[int] = []
 
-        cursor = conn.execute("""
-            SELECT id, source, source_id, name, region, record
-            FROM organizations
-        """)
+        if self._is_v2:
+            cursor = conn.execute("""
+                SELECT o.id, s.name as source, o.source_identifier as source_id, o.name, l.name as region, o.record
+                FROM organizations o
+                JOIN source_types s ON o.source_id = s.id
+                LEFT JOIN locations l ON o.region_id = l.id
+            """)
+        else:
+            cursor = conn.execute("""
+                SELECT id, source, source_id, name, region, record
+                FROM organizations
+            """)
 
         count = 0
         for row in cursor:
@@ -1586,17 +1826,32 @@ class OrganizationDatabase:
         """Delete all records from a specific source."""
         conn = self._connect()
 
-        # First get IDs to delete from vec table
-        cursor = conn.execute("SELECT id FROM organizations WHERE source = ?", (source,))
-        ids_to_delete = [row["id"] for row in cursor]
+        if self._is_v2:
+            source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+            # First get IDs to delete from vec table
+            cursor = conn.execute("SELECT id FROM organizations WHERE source_id = ?", (source_type_id,))
+            ids_to_delete = [row["id"] for row in cursor]
 
-        # Delete from vec table
-        if ids_to_delete:
-            placeholders = ",".join("?" * len(ids_to_delete))
-            conn.execute(f"DELETE FROM organization_embeddings WHERE org_id IN ({placeholders})", ids_to_delete)
+            # Delete from vec table
+            if ids_to_delete:
+                placeholders = ",".join("?" * len(ids_to_delete))
+                conn.execute(f"DELETE FROM organization_embeddings WHERE org_id IN ({placeholders})", ids_to_delete)
 
-        # Delete from main table
-        cursor = conn.execute("DELETE FROM organizations WHERE source = ?", (source,))
+            # Delete from main table
+            cursor = conn.execute("DELETE FROM organizations WHERE source_id = ?", (source_type_id,))
+        else:
+            # First get IDs to delete from vec table
+            cursor = conn.execute("SELECT id FROM organizations WHERE source = ?", (source,))
+            ids_to_delete = [row["id"] for row in cursor]
+
+            # Delete from vec table
+            if ids_to_delete:
+                placeholders = ",".join("?" * len(ids_to_delete))
+                conn.execute(f"DELETE FROM organization_embeddings WHERE org_id IN ({placeholders})", ids_to_delete)
+
+            # Delete from main table
+            cursor = conn.execute("DELETE FROM organizations WHERE source = ?", (source,))
+
         deleted = cursor.rowcount
 
         conn.commit()
@@ -1825,20 +2080,211 @@ class OrganizationDatabase:
         conn.commit()
         return count
 
+    def ensure_scalar_table_exists(self) -> None:
+        """Create scalar embedding table if it doesn't exist."""
+        conn = self._connect()
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS organization_embeddings_scalar USING vec0(
+                org_id INTEGER PRIMARY KEY,
+                embedding int8[{self._embedding_dim}]
+            )
+        """)
+        conn.commit()
+        logger.info("Ensured organization_embeddings_scalar table exists")
+
+    def get_missing_scalar_embedding_ids(self, batch_size: int = 1000) -> Iterator[list[int]]:
+        """
+        Yield batches of org IDs that have float32 but missing scalar embeddings.
+
+        Args:
+            batch_size: Number of IDs per batch
+
+        Yields:
+            Lists of org_ids needing scalar embeddings
+        """
+        conn = self._connect()
+
+        # Ensure scalar table exists before querying
+        self.ensure_scalar_table_exists()
+
+        last_id = 0
+        while True:
+            cursor = conn.execute("""
+                SELECT e.org_id FROM organization_embeddings e
+                LEFT JOIN organization_embeddings_scalar s ON e.org_id = s.org_id
+                WHERE s.org_id IS NULL AND e.org_id > ?
+                ORDER BY e.org_id
+                LIMIT ?
+            """, (last_id, batch_size))
+
+            rows = cursor.fetchall()
+            if not rows:
+                break
+
+            ids = [row["org_id"] for row in rows]
+            yield ids
+            last_id = ids[-1]
+
+    def get_embeddings_by_ids(self, org_ids: list[int]) -> dict[int, np.ndarray]:
+        """
+        Fetch float32 embeddings for given org IDs.
+
+        Args:
+            org_ids: List of organization IDs
+
+        Returns:
+            Dict mapping org_id to float32 embedding array
+        """
+        conn = self._connect()
+
+        if not org_ids:
+            return {}
+
+        placeholders = ",".join("?" * len(org_ids))
+        cursor = conn.execute(f"""
+            SELECT org_id, embedding FROM organization_embeddings
+            WHERE org_id IN ({placeholders})
+        """, org_ids)
+
+        result = {}
+        for row in cursor:
+            embedding_blob = row["embedding"]
+            embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+            result[row["org_id"]] = embedding
+        return result
+
+    def insert_scalar_embeddings_batch(self, org_ids: list[int], embeddings: np.ndarray) -> int:
+        """
+        Insert scalar (int8) embeddings for existing orgs.
+
+        Args:
+            org_ids: List of organization IDs
+            embeddings: Matrix of int8 embeddings (N x dim)
+
+        Returns:
+            Number of embeddings inserted
+        """
+        conn = self._connect()
+        count = 0
+
+        for org_id, embedding in zip(org_ids, embeddings):
+            scalar_blob = embedding.astype(np.int8).tobytes()
+            conn.execute("DELETE FROM organization_embeddings_scalar WHERE org_id = ?", (org_id,))
+            conn.execute("""
+                INSERT INTO organization_embeddings_scalar (org_id, embedding)
+                VALUES (?, vec_int8(?))
+            """, (org_id, scalar_blob))
+            count += 1
+
+        conn.commit()
+        return count
+
+    def get_scalar_embedding_count(self) -> int:
+        """Get count of scalar embeddings."""
+        conn = self._connect()
+        if not self._has_scalar_table():
+            return 0
+        cursor = conn.execute("SELECT COUNT(*) FROM organization_embeddings_scalar")
+        return cursor.fetchone()[0]
+
+    def get_float32_embedding_count(self) -> int:
+        """Get count of float32 embeddings."""
+        conn = self._connect()
+        cursor = conn.execute("SELECT COUNT(*) FROM organization_embeddings")
+        return cursor.fetchone()[0]
+
+    def get_missing_all_embedding_ids(self, batch_size: int = 1000) -> Iterator[list[tuple[int, str]]]:
+        """
+        Yield batches of (org_id, name) tuples for records missing both float32 and scalar embeddings.
+
+        Args:
+            batch_size: Number of IDs per batch
+
+        Yields:
+            Lists of (org_id, name) tuples needing embeddings generated from scratch
+        """
+        conn = self._connect()
+
+        # Ensure scalar table exists
+        self.ensure_scalar_table_exists()
+
+        last_id = 0
+        while True:
+            cursor = conn.execute("""
+                SELECT o.id, o.name FROM organizations o
+                LEFT JOIN organization_embeddings e ON o.id = e.org_id
+                WHERE e.org_id IS NULL AND o.id > ?
+                ORDER BY o.id
+                LIMIT ?
+            """, (last_id, batch_size))
+
+            rows = cursor.fetchall()
+            if not rows:
+                break
+
+            results = [(row["id"], row["name"]) for row in rows]
+            yield results
+            last_id = results[-1][0]
+
+    def insert_both_embeddings_batch(
+        self,
+        org_ids: list[int],
+        fp32_embeddings: np.ndarray,
+        int8_embeddings: np.ndarray,
+    ) -> int:
+        """
+        Insert both float32 and int8 embeddings for existing orgs.
+
+        Args:
+            org_ids: List of organization IDs
+            fp32_embeddings: Matrix of float32 embeddings (N x dim)
+            int8_embeddings: Matrix of int8 embeddings (N x dim)
+
+        Returns:
+            Number of embeddings inserted
+        """
+        conn = self._connect()
+        count = 0
+
+        for org_id, fp32, int8 in zip(org_ids, fp32_embeddings, int8_embeddings):
+            # Insert float32
+            fp32_blob = fp32.astype(np.float32).tobytes()
+            conn.execute("DELETE FROM organization_embeddings WHERE org_id = ?", (org_id,))
+            conn.execute("""
+                INSERT INTO organization_embeddings (org_id, embedding)
+                VALUES (?, ?)
+            """, (org_id, fp32_blob))
+
+            # Insert int8
+            int8_blob = int8.astype(np.int8).tobytes()
+            conn.execute("DELETE FROM organization_embeddings_scalar WHERE org_id = ?", (org_id,))
+            conn.execute("""
+                INSERT INTO organization_embeddings_scalar (org_id, embedding)
+                VALUES (?, vec_int8(?))
+            """, (org_id, int8_blob))
+
+            count += 1
+
+        conn.commit()
+        return count
+
     def resolve_qid_labels(
         self,
         label_map: dict[str, str],
         batch_size: int = 1000,
-    ) -> int:
+    ) -> tuple[int, int]:
         """
         Update organization records that have QIDs instead of labels in region field.
+
+        If resolving would create a duplicate of an existing record with
+        resolved labels, the QID version is deleted instead.
 
         Args:
             label_map: Mapping of QID -> label for resolution
             batch_size: Commit batch size
 
         Returns:
-            Number of records updated
+            Tuple of (records updated, duplicates deleted)
         """
         conn = self._connect()
 
@@ -1850,23 +2296,51 @@ class OrganizationDatabase:
         """)
         rows = cursor.fetchall()
 
+        duplicates_deleted = 0
         for row in rows:
             org_id = row["id"]
             qid = row["region"]
             if qid in label_map:
-                conn.execute(
-                    "UPDATE organizations SET region = ? WHERE id = ?",
-                    (label_map[qid], org_id)
+                resolved_region = label_map[qid]
+                # Check if this update would create a duplicate
+                # Get the name and source of the current record
+                org_cursor = conn.execute(
+                    "SELECT name, source FROM organizations WHERE id = ?",
+                    (org_id,)
                 )
-                region_updates += 1
+                org_row = org_cursor.fetchone()
+                if org_row is None:
+                    continue
 
-                if region_updates % batch_size == 0:
+                org_name = org_row["name"]
+                org_source = org_row["source"]
+
+                # Check if a record with the resolved region already exists
+                existing_cursor = conn.execute(
+                    "SELECT id FROM organizations WHERE name = ? AND region = ? AND source = ? AND id != ?",
+                    (org_name, resolved_region, org_source, org_id)
+                )
+                existing = existing_cursor.fetchone()
+
+                if existing is not None:
+                    # Duplicate would be created - delete the QID-based record
+                    conn.execute("DELETE FROM organizations WHERE id = ?", (org_id,))
+                    duplicates_deleted += 1
+                else:
+                    # Safe to update
+                    conn.execute(
+                        "UPDATE organizations SET region = ? WHERE id = ?",
+                        (resolved_region, org_id)
+                    )
+                    region_updates += 1
+
+                if (region_updates + duplicates_deleted) % batch_size == 0:
                     conn.commit()
-                    logger.info(f"Updated {region_updates} organization region labels...")
+                    logger.info(f"Resolved QID labels: {region_updates} updates, {duplicates_deleted} deletes...")
 
         conn.commit()
-        logger.info(f"Resolved QID labels: {region_updates} organization regions")
-        return region_updates
+        logger.info(f"Resolved QID labels: {region_updates} organization regions, {duplicates_deleted} duplicates deleted")
+        return region_updates, duplicates_deleted
 
     def get_unresolved_qids(self) -> set[str]:
         """
@@ -1932,6 +2406,7 @@ class PersonDatabase:
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self._embedding_dim = embedding_dim
         self._conn: Optional[sqlite3.Connection] = None
+        self._is_v2: Optional[bool] = None  # Detected on first connect
 
     def _ensure_dir(self) -> None:
         """Ensure database directory exists."""
@@ -1944,10 +2419,26 @@ class PersonDatabase:
 
         self._conn = _get_shared_connection(self._db_path, self._embedding_dim)
 
-        # Create tables (idempotent)
-        self._create_tables()
+        # Detect schema version BEFORE creating tables
+        # v2 has person_type_id (FK) instead of person_type (TEXT)
+        if self._is_v2 is None:
+            cursor = self._conn.execute("PRAGMA table_info(people)")
+            columns = {row["name"] for row in cursor}
+            self._is_v2 = "person_type_id" in columns
+            if self._is_v2:
+                logger.debug("Detected v2 schema for people")
+
+        # Create tables (idempotent) - only for v1 schema or fresh databases
+        # v2 databases already have their schema from migration
+        if not self._is_v2:
+            self._create_tables()
 
         return self._conn
+
+    @property
+    def _people_table(self) -> str:
+        """Return table/view name for people queries needing text fields."""
+        return "people_view" if self._is_v2 else "people"
 
     def _create_tables(self) -> None:
         """Create database tables including sqlite-vec virtual table."""
@@ -2051,11 +2542,20 @@ class PersonDatabase:
         except sqlite3.OperationalError:
             pass  # Column doesn't exist yet
 
-        # Create sqlite-vec virtual table for embeddings
+        # Create sqlite-vec virtual table for embeddings (float32)
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS person_embeddings USING vec0(
                 person_id INTEGER PRIMARY KEY,
                 embedding float[{self._embedding_dim}]
+            )
+        """)
+
+        # Create sqlite-vec virtual table for scalar embeddings (int8)
+        # Provides 75% storage reduction with ~92% recall at top-100
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS person_embeddings_scalar USING vec0(
+                person_id INTEGER PRIMARY KEY,
+                embedding int8[{self._embedding_dim}]
             )
         """)
 
@@ -2148,13 +2648,19 @@ class PersonDatabase:
         """Clear connection reference (shared connection remains open)."""
         self._conn = None
 
-    def insert(self, record: PersonRecord, embedding: np.ndarray) -> int:
+    def insert(
+        self,
+        record: PersonRecord,
+        embedding: np.ndarray,
+        scalar_embedding: Optional[np.ndarray] = None,
+    ) -> int:
         """
         Insert a person record with its embedding.
 
         Args:
             record: Person record to insert
-            embedding: Embedding vector for the person name
+            embedding: Embedding vector for the person name (float32)
+            scalar_embedding: Optional int8 scalar embedding for compact storage
 
         Returns:
             Row ID of inserted record
@@ -2191,13 +2697,22 @@ class PersonDatabase:
         row_id = cursor.lastrowid
         assert row_id is not None
 
-        # Insert embedding into vec table (delete first since sqlite-vec doesn't support REPLACE)
+        # Insert embedding into vec table (float32)
         embedding_blob = embedding.astype(np.float32).tobytes()
         conn.execute("DELETE FROM person_embeddings WHERE person_id = ?", (row_id,))
         conn.execute("""
             INSERT INTO person_embeddings (person_id, embedding)
             VALUES (?, ?)
         """, (row_id, embedding_blob))
+
+        # Insert scalar embedding if provided (int8)
+        if scalar_embedding is not None:
+            scalar_blob = scalar_embedding.astype(np.int8).tobytes()
+            conn.execute("DELETE FROM person_embeddings_scalar WHERE person_id = ?", (row_id,))
+            conn.execute("""
+                INSERT INTO person_embeddings_scalar (person_id, embedding)
+                VALUES (?, vec_int8(?))
+            """, (row_id, scalar_blob))
 
         conn.commit()
         return row_id
@@ -2207,14 +2722,16 @@ class PersonDatabase:
         records: list[PersonRecord],
         embeddings: np.ndarray,
         batch_size: int = 1000,
+        scalar_embeddings: Optional[np.ndarray] = None,
     ) -> int:
         """
         Insert multiple person records with embeddings.
 
         Args:
             records: List of person records
-            embeddings: Matrix of embeddings (N x dim)
+            embeddings: Matrix of embeddings (N x dim) - float32
             batch_size: Commit batch size
+            scalar_embeddings: Optional matrix of int8 scalar embeddings (N x dim)
 
         Returns:
             Number of records inserted
@@ -2222,32 +2739,66 @@ class PersonDatabase:
         conn = self._connect()
         count = 0
 
-        for record, embedding in zip(records, embeddings):
+        for i, (record, embedding) in enumerate(zip(records, embeddings)):
             record_json = json.dumps(record.record)
             name_normalized = _normalize_person_name(record.name)
 
-            cursor = conn.execute("""
-                INSERT OR REPLACE INTO people
-                (name, name_normalized, source, source_id, country, person_type,
-                 known_for_role, known_for_org, known_for_org_id, from_date, to_date,
-                 birth_date, death_date, record)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                record.name,
-                name_normalized,
-                record.source,
-                record.source_id,
-                record.country,
-                record.person_type.value,
-                record.known_for_role,
-                record.known_for_org,
-                record.known_for_org_id,  # Can be None
-                record.from_date or "",
-                record.to_date or "",
-                record.birth_date or "",
-                record.death_date or "",
-                record_json,
-            ))
+            if self._is_v2:
+                # v2 schema: use FK IDs instead of TEXT columns
+                source_type_id = SOURCE_NAME_TO_ID.get(record.source, 4)
+                person_type_id = PEOPLE_TYPE_NAME_TO_ID.get(record.person_type.value, 15)  # 15 = unknown
+
+                # Resolve country to location_id if provided
+                country_id = None
+                if record.country:
+                    locations_db = get_locations_database(db_path=self._db_path)
+                    country_id = locations_db.resolve_region_text(record.country)
+
+                cursor = conn.execute("""
+                    INSERT OR REPLACE INTO people
+                    (name, name_normalized, source_id, source_identifier, country_id, person_type_id,
+                     known_for_org, known_for_org_id, from_date, to_date,
+                     birth_date, death_date, record)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record.name,
+                    name_normalized,
+                    source_type_id,
+                    record.source_id,
+                    country_id,
+                    person_type_id,
+                    record.known_for_org,
+                    record.known_for_org_id,  # Can be None
+                    record.from_date or "",
+                    record.to_date or "",
+                    record.birth_date or "",
+                    record.death_date or "",
+                    record_json,
+                ))
+            else:
+                # v1 schema: use TEXT columns
+                cursor = conn.execute("""
+                    INSERT OR REPLACE INTO people
+                    (name, name_normalized, source, source_id, country, person_type,
+                     known_for_role, known_for_org, known_for_org_id, from_date, to_date,
+                     birth_date, death_date, record)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record.name,
+                    name_normalized,
+                    record.source,
+                    record.source_id,
+                    record.country,
+                    record.person_type.value,
+                    record.known_for_role,
+                    record.known_for_org,
+                    record.known_for_org_id,  # Can be None
+                    record.from_date or "",
+                    record.to_date or "",
+                    record.birth_date or "",
+                    record.death_date or "",
+                    record_json,
+                ))
 
             row_id = cursor.lastrowid
             assert row_id is not None
@@ -2259,6 +2810,15 @@ class PersonDatabase:
                 INSERT INTO person_embeddings (person_id, embedding)
                 VALUES (?, ?)
             """, (row_id, embedding_blob))
+
+            # Insert scalar embedding if provided (int8)
+            if scalar_embeddings is not None:
+                scalar_blob = scalar_embeddings[i].astype(np.int8).tobytes()
+                conn.execute("DELETE FROM person_embeddings_scalar WHERE person_id = ?", (row_id,))
+                conn.execute("""
+                    INSERT INTO person_embeddings_scalar (person_id, embedding)
+                    VALUES (?, vec_int8(?))
+                """, (row_id, scalar_blob))
 
             count += 1
 
@@ -2284,10 +2844,17 @@ class PersonDatabase:
         """
         conn = self._connect()
 
-        cursor = conn.execute("""
-            UPDATE people SET from_date = ?, to_date = ?
-            WHERE source = ? AND source_id = ?
-        """, (from_date or "", to_date or "", source, source_id))
+        if self._is_v2:
+            source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+            cursor = conn.execute("""
+                UPDATE people SET from_date = ?, to_date = ?
+                WHERE source_id = ? AND source_identifier = ?
+            """, (from_date or "", to_date or "", source_type_id, source_id))
+        else:
+            cursor = conn.execute("""
+                UPDATE people SET from_date = ?, to_date = ?
+                WHERE source = ? AND source_id = ?
+            """, (from_date or "", to_date or "", source, source_id))
 
         conn.commit()
         return cursor.rowcount > 0
@@ -2322,10 +2889,17 @@ class PersonDatabase:
         conn = self._connect()
 
         # First get the person's internal ID
-        row = conn.execute(
-            "SELECT id FROM people WHERE source = ? AND source_id = ?",
-            (source, source_id)
-        ).fetchone()
+        if self._is_v2:
+            source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+            row = conn.execute(
+                "SELECT id FROM people WHERE source_id = ? AND source_identifier = ?",
+                (source_type_id, source_id)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM people WHERE source = ? AND source_id = ?",
+                (source, source_id)
+            ).fetchone()
 
         if not row:
             return False
@@ -2382,7 +2956,13 @@ class PersonDatabase:
         if query_norm == 0:
             return []
         query_normalized = query_embedding / query_norm
-        query_blob = query_normalized.astype(np.float32).tobytes()
+
+        # Use int8 quantized query if scalar table is available (75% storage savings)
+        if self._has_scalar_table():
+            query_int8 = self._quantize_query(query_normalized)
+            query_blob = query_int8.tobytes()
+        else:
+            query_blob = query_normalized.astype(np.float32).tobytes()
 
         # Stage 1: Text-based pre-filtering (if query_text provided)
         candidate_ids: Optional[set[int]] = None
@@ -2453,13 +3033,26 @@ class PersonDatabase:
         cursor = conn.execute(query, params)
         return set(row["id"] for row in cursor)
 
+    def _quantize_query(self, embedding: np.ndarray) -> np.ndarray:
+        """Quantize query embedding to int8 for scalar search."""
+        return np.clip(np.round(embedding * 127), -127, 127).astype(np.int8)
+
+    def _has_scalar_table(self) -> bool:
+        """Check if scalar embedding table exists."""
+        conn = self._conn
+        assert conn is not None
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='person_embeddings_scalar'"
+        )
+        return cursor.fetchone() is not None
+
     def _vector_search_filtered(
         self,
         query_blob: bytes,
         candidate_ids: set[int],
         top_k: int,
     ) -> list[tuple[PersonRecord, float]]:
-        """Vector search within a filtered set of candidates."""
+        """Vector search within a filtered set of candidates using scalar (int8) embeddings."""
         conn = self._conn
         assert conn is not None
 
@@ -2469,15 +3062,27 @@ class PersonDatabase:
         # Build IN clause for candidate IDs
         placeholders = ",".join("?" * len(candidate_ids))
 
-        query = f"""
-            SELECT
-                e.person_id,
-                vec_distance_cosine(e.embedding, ?) as distance
-            FROM person_embeddings e
-            WHERE e.person_id IN ({placeholders})
-            ORDER BY distance
-            LIMIT ?
-        """
+        # Use scalar embedding table if available (75% storage reduction)
+        if self._has_scalar_table():
+            query = f"""
+                SELECT
+                    e.person_id,
+                    vec_distance_cosine(e.embedding, vec_int8(?)) as distance
+                FROM person_embeddings_scalar e
+                WHERE e.person_id IN ({placeholders})
+                ORDER BY distance
+                LIMIT ?
+            """
+        else:
+            query = f"""
+                SELECT
+                    e.person_id,
+                    vec_distance_cosine(e.embedding, ?) as distance
+                FROM person_embeddings e
+                WHERE e.person_id IN ({placeholders})
+                ORDER BY distance
+                LIMIT ?
+            """
 
         cursor = conn.execute(query, [query_blob] + list(candidate_ids) + [top_k])
 
@@ -2500,18 +3105,29 @@ class PersonDatabase:
         query_blob: bytes,
         top_k: int,
     ) -> list[tuple[PersonRecord, float]]:
-        """Full vector search without text pre-filtering."""
+        """Full vector search without text pre-filtering using scalar (int8) embeddings."""
         conn = self._conn
         assert conn is not None
 
-        query = """
-            SELECT
-                person_id,
-                vec_distance_cosine(embedding, ?) as distance
-            FROM person_embeddings
-            ORDER BY distance
-            LIMIT ?
-        """
+        # Use scalar embedding table if available (75% storage reduction)
+        if self._has_scalar_table():
+            query = """
+                SELECT
+                    person_id,
+                    vec_distance_cosine(embedding, vec_int8(?)) as distance
+                FROM person_embeddings_scalar
+                ORDER BY distance
+                LIMIT ?
+            """
+        else:
+            query = """
+                SELECT
+                    person_id,
+                    vec_distance_cosine(embedding, ?) as distance
+                FROM person_embeddings
+                ORDER BY distance
+                LIMIT ?
+            """
         cursor = conn.execute(query, (query_blob, top_k))
 
         results = []
@@ -2531,17 +3147,29 @@ class PersonDatabase:
         conn = self._conn
         assert conn is not None
 
-        cursor = conn.execute("""
-            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
-            FROM people WHERE id = ?
-        """, (person_id,))
+        if self._is_v2:
+            # v2 schema: join view with base table for record
+            cursor = conn.execute("""
+                SELECT v.name, v.source, v.source_identifier, v.country, v.person_type,
+                       v.known_for_role, v.known_for_org, v.known_for_org_id,
+                       v.birth_date, v.death_date, p.record
+                FROM people_view v
+                JOIN people p ON v.id = p.id
+                WHERE v.id = ?
+            """, (person_id,))
+        else:
+            cursor = conn.execute("""
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
+                FROM people WHERE id = ?
+            """, (person_id,))
 
         row = cursor.fetchone()
         if row:
+            source_id_field = "source_identifier" if self._is_v2 else "source_id"
             return PersonRecord(
                 name=row["name"],
                 source=row["source"],
-                source_id=row["source_id"],
+                source_id=row[source_id_field],
                 country=row["country"] or "",
                 person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
                 known_for_role=row["known_for_role"] or "",
@@ -2557,18 +3185,30 @@ class PersonDatabase:
         """Get a person record by source and source_id."""
         conn = self._connect()
 
-        cursor = conn.execute("""
-            SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
-            FROM people
-            WHERE source = ? AND source_id = ?
-        """, (source, source_id))
+        if self._is_v2:
+            source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+            cursor = conn.execute("""
+                SELECT v.name, v.source, v.source_identifier, v.country, v.person_type,
+                       v.known_for_role, v.known_for_org, v.known_for_org_id,
+                       v.birth_date, v.death_date, p.record
+                FROM people_view v
+                JOIN people p ON v.id = p.id
+                WHERE p.source_id = ? AND p.source_identifier = ?
+            """, (source_type_id, source_id))
+        else:
+            cursor = conn.execute("""
+                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
+                FROM people
+                WHERE source = ? AND source_id = ?
+            """, (source, source_id))
 
         row = cursor.fetchone()
         if row:
+            source_id_field = "source_identifier" if self._is_v2 else "source_id"
             return PersonRecord(
                 name=row["name"],
                 source=row["source"],
-                source_id=row["source_id"],
+                source_id=row[source_id_field],
                 country=row["country"] or "",
                 person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
                 known_for_role=row["known_for_role"] or "",
@@ -2588,12 +3228,32 @@ class PersonDatabase:
         cursor = conn.execute("SELECT COUNT(*) FROM people")
         total = cursor.fetchone()[0]
 
-        # Count by person_type
-        cursor = conn.execute("SELECT person_type, COUNT(*) as cnt FROM people GROUP BY person_type")
+        # Count by person_type - handle both v1 and v2 schema
+        if self._is_v2:
+            # v2 schema - join with people_types
+            cursor = conn.execute("""
+                SELECT pt.name as person_type, COUNT(*) as cnt
+                FROM people p
+                JOIN people_types pt ON p.person_type_id = pt.id
+                GROUP BY p.person_type_id
+            """)
+        else:
+            # v1 schema
+            cursor = conn.execute("SELECT person_type, COUNT(*) as cnt FROM people GROUP BY person_type")
         by_type = {row["person_type"]: row["cnt"] for row in cursor}
 
-        # Count by source
-        cursor = conn.execute("SELECT source, COUNT(*) as cnt FROM people GROUP BY source")
+        # Count by source - handle both v1 and v2 schema
+        if self._is_v2:
+            # v2 schema - join with source_types
+            cursor = conn.execute("""
+                SELECT st.name as source, COUNT(*) as cnt
+                FROM people p
+                JOIN source_types st ON p.source_id = st.id
+                GROUP BY p.source_id
+            """)
+        else:
+            # v1 schema
+            cursor = conn.execute("SELECT source, COUNT(*) as cnt FROM people GROUP BY source")
         by_source = {row["source"]: row["cnt"] for row in cursor}
 
         return {
@@ -2601,6 +3261,194 @@ class PersonDatabase:
             "by_type": by_type,
             "by_source": by_source,
         }
+
+    def ensure_scalar_table_exists(self) -> None:
+        """Create scalar embedding table if it doesn't exist."""
+        conn = self._connect()
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS person_embeddings_scalar USING vec0(
+                person_id INTEGER PRIMARY KEY,
+                embedding int8[{self._embedding_dim}]
+            )
+        """)
+        conn.commit()
+        logger.info("Ensured person_embeddings_scalar table exists")
+
+    def get_missing_scalar_embedding_ids(self, batch_size: int = 1000) -> Iterator[list[int]]:
+        """
+        Yield batches of person IDs that have float32 but missing scalar embeddings.
+
+        Args:
+            batch_size: Number of IDs per batch
+
+        Yields:
+            Lists of person_ids needing scalar embeddings
+        """
+        conn = self._connect()
+
+        # Ensure scalar table exists before querying
+        self.ensure_scalar_table_exists()
+
+        last_id = 0
+        while True:
+            cursor = conn.execute("""
+                SELECT e.person_id FROM person_embeddings e
+                LEFT JOIN person_embeddings_scalar s ON e.person_id = s.person_id
+                WHERE s.person_id IS NULL AND e.person_id > ?
+                ORDER BY e.person_id
+                LIMIT ?
+            """, (last_id, batch_size))
+
+            rows = cursor.fetchall()
+            if not rows:
+                break
+
+            ids = [row["person_id"] for row in rows]
+            yield ids
+            last_id = ids[-1]
+
+    def get_embeddings_by_ids(self, person_ids: list[int]) -> dict[int, np.ndarray]:
+        """
+        Fetch float32 embeddings for given person IDs.
+
+        Args:
+            person_ids: List of person IDs
+
+        Returns:
+            Dict mapping person_id to float32 embedding array
+        """
+        conn = self._connect()
+
+        if not person_ids:
+            return {}
+
+        placeholders = ",".join("?" * len(person_ids))
+        cursor = conn.execute(f"""
+            SELECT person_id, embedding FROM person_embeddings
+            WHERE person_id IN ({placeholders})
+        """, person_ids)
+
+        result = {}
+        for row in cursor:
+            embedding_blob = row["embedding"]
+            embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+            result[row["person_id"]] = embedding
+        return result
+
+    def insert_scalar_embeddings_batch(self, person_ids: list[int], embeddings: np.ndarray) -> int:
+        """
+        Insert scalar (int8) embeddings for existing people.
+
+        Args:
+            person_ids: List of person IDs
+            embeddings: Matrix of int8 embeddings (N x dim)
+
+        Returns:
+            Number of embeddings inserted
+        """
+        conn = self._connect()
+        count = 0
+
+        for person_id, embedding in zip(person_ids, embeddings):
+            scalar_blob = embedding.astype(np.int8).tobytes()
+            conn.execute("DELETE FROM person_embeddings_scalar WHERE person_id = ?", (person_id,))
+            conn.execute("""
+                INSERT INTO person_embeddings_scalar (person_id, embedding)
+                VALUES (?, vec_int8(?))
+            """, (person_id, scalar_blob))
+            count += 1
+
+        conn.commit()
+        return count
+
+    def get_scalar_embedding_count(self) -> int:
+        """Get count of scalar embeddings."""
+        conn = self._connect()
+        if not self._has_scalar_table():
+            return 0
+        cursor = conn.execute("SELECT COUNT(*) FROM person_embeddings_scalar")
+        return cursor.fetchone()[0]
+
+    def get_float32_embedding_count(self) -> int:
+        """Get count of float32 embeddings."""
+        conn = self._connect()
+        cursor = conn.execute("SELECT COUNT(*) FROM person_embeddings")
+        return cursor.fetchone()[0]
+
+    def get_missing_all_embedding_ids(self, batch_size: int = 1000) -> Iterator[list[tuple[int, str]]]:
+        """
+        Yield batches of (person_id, name) tuples for records missing both float32 and scalar embeddings.
+
+        Args:
+            batch_size: Number of IDs per batch
+
+        Yields:
+            Lists of (person_id, name) tuples needing embeddings generated from scratch
+        """
+        conn = self._connect()
+
+        # Ensure scalar table exists
+        self.ensure_scalar_table_exists()
+
+        last_id = 0
+        while True:
+            cursor = conn.execute("""
+                SELECT p.id, p.name FROM people p
+                LEFT JOIN person_embeddings e ON p.id = e.person_id
+                WHERE e.person_id IS NULL AND p.id > ?
+                ORDER BY p.id
+                LIMIT ?
+            """, (last_id, batch_size))
+
+            rows = cursor.fetchall()
+            if not rows:
+                break
+
+            results = [(row["id"], row["name"]) for row in rows]
+            yield results
+            last_id = results[-1][0]
+
+    def insert_both_embeddings_batch(
+        self,
+        person_ids: list[int],
+        fp32_embeddings: np.ndarray,
+        int8_embeddings: np.ndarray,
+    ) -> int:
+        """
+        Insert both float32 and int8 embeddings for existing people.
+
+        Args:
+            person_ids: List of person IDs
+            fp32_embeddings: Matrix of float32 embeddings (N x dim)
+            int8_embeddings: Matrix of int8 embeddings (N x dim)
+
+        Returns:
+            Number of embeddings inserted
+        """
+        conn = self._connect()
+        count = 0
+
+        for person_id, fp32, int8 in zip(person_ids, fp32_embeddings, int8_embeddings):
+            # Insert float32
+            fp32_blob = fp32.astype(np.float32).tobytes()
+            conn.execute("DELETE FROM person_embeddings WHERE person_id = ?", (person_id,))
+            conn.execute("""
+                INSERT INTO person_embeddings (person_id, embedding)
+                VALUES (?, ?)
+            """, (person_id, fp32_blob))
+
+            # Insert int8
+            int8_blob = int8.astype(np.int8).tobytes()
+            conn.execute("DELETE FROM person_embeddings_scalar WHERE person_id = ?", (person_id,))
+            conn.execute("""
+                INSERT INTO person_embeddings_scalar (person_id, embedding)
+                VALUES (?, vec_int8(?))
+            """, (person_id, int8_blob))
+
+            count += 1
+
+        conn.commit()
+        return count
 
     def get_all_source_ids(self, source: Optional[str] = None) -> set[str]:
         """
@@ -2616,13 +3464,24 @@ class PersonDatabase:
         """
         conn = self._connect()
 
-        if source:
-            cursor = conn.execute(
-                "SELECT DISTINCT source_id FROM people WHERE source = ?",
-                (source,)
-            )
+        if self._is_v2:
+            id_col = "source_identifier"
+            if source:
+                source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+                cursor = conn.execute(
+                    f"SELECT DISTINCT {id_col} FROM people WHERE source_id = ?",
+                    (source_type_id,)
+                )
+            else:
+                cursor = conn.execute(f"SELECT DISTINCT {id_col} FROM people")
         else:
-            cursor = conn.execute("SELECT DISTINCT source_id FROM people")
+            if source:
+                cursor = conn.execute(
+                    "SELECT DISTINCT source_id FROM people WHERE source = ?",
+                    (source,)
+                )
+            else:
+                cursor = conn.execute("SELECT DISTINCT source_id FROM people")
 
         return {row[0] for row in cursor}
 
@@ -2630,32 +3489,66 @@ class PersonDatabase:
         """Iterate over all person records, optionally filtered by source."""
         conn = self._connect()
 
-        if source:
-            cursor = conn.execute("""
-                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
-                FROM people
-                WHERE source = ?
-            """, (source,))
+        if self._is_v2:
+            if source:
+                source_type_id = SOURCE_NAME_TO_ID.get(source, 4)
+                cursor = conn.execute("""
+                    SELECT v.name, v.source, v.source_identifier, v.country, v.person_type,
+                           v.known_for_role, v.known_for_org, v.known_for_org_id,
+                           v.birth_date, v.death_date, p.record
+                    FROM people_view v
+                    JOIN people p ON v.id = p.id
+                    WHERE p.source_id = ?
+                """, (source_type_id,))
+            else:
+                cursor = conn.execute("""
+                    SELECT v.name, v.source, v.source_identifier, v.country, v.person_type,
+                           v.known_for_role, v.known_for_org, v.known_for_org_id,
+                           v.birth_date, v.death_date, p.record
+                    FROM people_view v
+                    JOIN people p ON v.id = p.id
+                """)
+            for row in cursor:
+                yield PersonRecord(
+                    name=row["name"],
+                    source=row["source"],
+                    source_id=row["source_identifier"],
+                    country=row["country"] or "",
+                    person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
+                    known_for_role=row["known_for_role"] or "",
+                    known_for_org=row["known_for_org"] or "",
+                    known_for_org_id=row["known_for_org_id"],  # Can be None
+                    birth_date=row["birth_date"] or "",
+                    death_date=row["death_date"] or "",
+                    record=json.loads(row["record"]),
+                )
         else:
-            cursor = conn.execute("""
-                SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
-                FROM people
-            """)
+            if source:
+                cursor = conn.execute("""
+                    SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
+                    FROM people
+                    WHERE source = ?
+                """, (source,))
+            else:
+                cursor = conn.execute("""
+                    SELECT name, source, source_id, country, person_type, known_for_role, known_for_org, known_for_org_id, birth_date, death_date, record
+                    FROM people
+                """)
 
-        for row in cursor:
-            yield PersonRecord(
-                name=row["name"],
-                source=row["source"],
-                source_id=row["source_id"],
-                country=row["country"] or "",
-                person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
-                known_for_role=row["known_for_role"] or "",
-                known_for_org=row["known_for_org"] or "",
-                known_for_org_id=row["known_for_org_id"],  # Can be None
-                birth_date=row["birth_date"] or "",
-                death_date=row["death_date"] or "",
-                record=json.loads(row["record"]),
-            )
+            for row in cursor:
+                yield PersonRecord(
+                    name=row["name"],
+                    source=row["source"],
+                    source_id=row["source_id"],
+                    country=row["country"] or "",
+                    person_type=PersonType(row["person_type"]) if row["person_type"] else PersonType.UNKNOWN,
+                    known_for_role=row["known_for_role"] or "",
+                    known_for_org=row["known_for_org"] or "",
+                    known_for_org_id=row["known_for_org_id"],  # Can be None
+                    birth_date=row["birth_date"] or "",
+                    death_date=row["death_date"] or "",
+                    record=json.loads(row["record"]),
+                )
 
     def resolve_qid_labels(
         self,
@@ -2679,6 +3572,11 @@ class PersonDatabase:
             Tuple of (updates, deletes)
         """
         conn = self._connect()
+
+        # v2 schema stores QIDs as integers, not text - this method doesn't apply
+        if self._is_v2:
+            logger.debug("Skipping resolve_qid_labels for v2 schema (QIDs stored as integers)")
+            return 0, 0
 
         # Find all records with QIDs in any field (role or org - these are in unique constraint)
         # Country is not part of unique constraint so can be updated directly
@@ -2752,6 +3650,11 @@ class PersonDatabase:
             Set of QIDs (starting with 'Q') found in country, role, or org fields
         """
         conn = self._connect()
+
+        # v2 schema stores QIDs as integers, not text - this method doesn't apply
+        if self._is_v2:
+            return set()
+
         qids: set[str] = set()
 
         # Get QIDs from country field
@@ -2797,11 +3700,27 @@ class PersonDatabase:
         """
         conn = self._connect()
         count = 0
+        skipped = 0
 
         for qid, label in label_map.items():
+            # Skip non-Q IDs (e.g., property IDs like P19)
+            if not qid.startswith("Q"):
+                skipped += 1
+                continue
+
+            # v2 schema stores QID as integer without Q prefix
+            if self._is_v2:
+                try:
+                    qid_val: str | int = int(qid[1:])
+                except ValueError:
+                    skipped += 1
+                    continue
+            else:
+                qid_val = qid
+
             conn.execute(
                 "INSERT OR REPLACE INTO qid_labels (qid, label) VALUES (?, ?)",
-                (qid, label)
+                (qid_val, label)
             )
             count += 1
 
@@ -2824,9 +3743,16 @@ class PersonDatabase:
             Label string or None if not found
         """
         conn = self._connect()
+
+        # v2 schema stores QID as integer without Q prefix
+        if self._is_v2:
+            qid_val: str | int = int(qid[1:]) if qid.startswith("Q") else int(qid)
+        else:
+            qid_val = qid
+
         cursor = conn.execute(
             "SELECT label FROM qid_labels WHERE qid = ?",
-            (qid,)
+            (qid_val,)
         )
         row = cursor.fetchone()
         return row["label"] if row else None
@@ -2879,11 +3805,19 @@ class PersonDatabase:
         logger.info("Phase 1: Building person index...")
 
         # Load all people with their normalized names and org info
-        cursor = conn.execute("""
-            SELECT id, name, name_normalized, source, source_id,
-                   known_for_org, known_for_org_id, from_date, to_date
-            FROM people
-        """)
+        if self._is_v2:
+            cursor = conn.execute("""
+                SELECT p.id, p.name, p.name_normalized, s.name as source, p.source_identifier as source_id,
+                       p.known_for_org, p.known_for_org_id, p.from_date, p.to_date
+                FROM people p
+                JOIN source_types s ON p.source_id = s.id
+            """)
+        else:
+            cursor = conn.execute("""
+                SELECT id, name, name_normalized, source, source_id,
+                       known_for_org, known_for_org_id, from_date, to_date
+                FROM people
+            """)
 
         people: list[dict] = []
         for row in cursor:
@@ -3032,3 +3966,860 @@ class PersonDatabase:
                 "UPDATE people SET canon_id = ?, canon_size = ? WHERE id = ?",
                 (canon_id, canon_size, person_id)
             )
+
+
+# =============================================================================
+# Module-level singletons for new v2 databases
+# =============================================================================
+
+_roles_database_instances: dict[str, "RolesDatabase"] = {}
+_locations_database_instances: dict[str, "LocationsDatabase"] = {}
+
+
+def get_roles_database(db_path: Optional[str | Path] = None) -> "RolesDatabase":
+    """
+    Get a singleton RolesDatabase instance for the given path.
+
+    Args:
+        db_path: Path to database file
+
+    Returns:
+        Shared RolesDatabase instance
+    """
+    path_key = str(db_path or DEFAULT_DB_PATH)
+    if path_key not in _roles_database_instances:
+        logger.debug(f"Creating new RolesDatabase instance for {path_key}")
+        _roles_database_instances[path_key] = RolesDatabase(db_path=db_path)
+    return _roles_database_instances[path_key]
+
+
+def get_locations_database(db_path: Optional[str | Path] = None) -> "LocationsDatabase":
+    """
+    Get a singleton LocationsDatabase instance for the given path.
+
+    Args:
+        db_path: Path to database file
+
+    Returns:
+        Shared LocationsDatabase instance
+    """
+    path_key = str(db_path or DEFAULT_DB_PATH)
+    if path_key not in _locations_database_instances:
+        logger.debug(f"Creating new LocationsDatabase instance for {path_key}")
+        _locations_database_instances[path_key] = LocationsDatabase(db_path=db_path)
+    return _locations_database_instances[path_key]
+
+
+# =============================================================================
+# ROLES DATABASE (v2)
+# =============================================================================
+
+
+class RolesDatabase:
+    """
+    SQLite database for job titles/roles.
+
+    Stores normalized role records with source tracking and supports
+    canonicalization to group equivalent roles (e.g., CEO, Chief Executive).
+    """
+
+    def __init__(self, db_path: Optional[str | Path] = None):
+        """
+        Initialize the roles database.
+
+        Args:
+            db_path: Path to database file (creates if not exists)
+        """
+        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._conn: Optional[sqlite3.Connection] = None
+        self._role_cache: dict[str, int] = {}  # name_normalized -> role_id
+
+    def _connect(self) -> sqlite3.Connection:
+        """Get or create database connection using shared connection pool."""
+        if self._conn is not None:
+            return self._conn
+
+        self._conn = _get_shared_connection(self._db_path)
+        self._create_tables()
+        return self._conn
+
+    def _create_tables(self) -> None:
+        """Create roles table and indexes."""
+        conn = self._conn
+        assert conn is not None
+
+        # Check if enum tables exist, create and seed if not
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='source_types'"
+        )
+        if not cursor.fetchone():
+            logger.info("Creating enum tables for v2 schema...")
+            from .schema_v2 import (
+                CREATE_SOURCE_TYPES,
+                CREATE_PEOPLE_TYPES,
+                CREATE_ORGANIZATION_TYPES,
+                CREATE_SIMPLIFIED_LOCATION_TYPES,
+                CREATE_LOCATION_TYPES,
+            )
+            conn.execute(CREATE_SOURCE_TYPES)
+            conn.execute(CREATE_PEOPLE_TYPES)
+            conn.execute(CREATE_ORGANIZATION_TYPES)
+            conn.execute(CREATE_SIMPLIFIED_LOCATION_TYPES)
+            conn.execute(CREATE_LOCATION_TYPES)
+            seed_all_enums(conn)
+
+        # Create roles table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                qid INTEGER,
+                name TEXT NOT NULL,
+                name_normalized TEXT NOT NULL,
+                source_id INTEGER NOT NULL DEFAULT 4,
+                source_identifier TEXT,
+                record TEXT NOT NULL DEFAULT '{}',
+                canon_id INTEGER DEFAULT NULL,
+                canon_size INTEGER DEFAULT 1,
+                UNIQUE(name_normalized, source_id)
+            )
+        """)
+
+        # Create indexes
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_roles_name ON roles(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_roles_name_normalized ON roles(name_normalized)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_roles_qid ON roles(qid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_roles_source_id ON roles(source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_roles_canon_id ON roles(canon_id)")
+
+        conn.commit()
+
+    def close(self) -> None:
+        """Clear connection reference."""
+        self._conn = None
+
+    def get_or_create(
+        self,
+        name: str,
+        source_id: int = 4,  # wikidata
+        qid: Optional[int] = None,
+        source_identifier: Optional[str] = None,
+    ) -> int:
+        """
+        Get or create a role record.
+
+        Args:
+            name: Role/title name
+            source_id: FK to source_types table
+            qid: Optional Wikidata QID as integer
+            source_identifier: Optional source-specific identifier
+
+        Returns:
+            Role ID
+        """
+        if not name:
+            raise ValueError("Role name cannot be empty")
+
+        conn = self._connect()
+        name_normalized = name.lower().strip()
+
+        # Check cache
+        cache_key = f"{name_normalized}:{source_id}"
+        if cache_key in self._role_cache:
+            return self._role_cache[cache_key]
+
+        # Check database
+        cursor = conn.execute(
+            "SELECT id FROM roles WHERE name_normalized = ? AND source_id = ?",
+            (name_normalized, source_id)
+        )
+        row = cursor.fetchone()
+        if row:
+            role_id = row["id"]
+            self._role_cache[cache_key] = role_id
+            return role_id
+
+        # Create new role
+        cursor = conn.execute(
+            """
+            INSERT INTO roles (name, name_normalized, source_id, qid, source_identifier)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, name_normalized, source_id, qid, source_identifier)
+        )
+        role_id = cursor.lastrowid
+        assert role_id is not None
+        conn.commit()
+
+        self._role_cache[cache_key] = role_id
+        return role_id
+
+    def get_by_id(self, role_id: int) -> Optional[RoleRecord]:
+        """Get a role record by ID."""
+        conn = self._connect()
+
+        cursor = conn.execute(
+            "SELECT id, qid, name, source_id, source_identifier, record FROM roles WHERE id = ?",
+            (role_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            source_name = SOURCE_ID_TO_NAME.get(row["source_id"], "wikidata")
+            return RoleRecord(
+                name=row["name"],
+                source=source_name,
+                source_id=row["source_identifier"],
+                qid=row["qid"],
+                record=json.loads(row["record"]) if row["record"] else {},
+            )
+        return None
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+    ) -> list[tuple[int, str, float]]:
+        """
+        Search for roles by name.
+
+        Args:
+            query: Search query
+            top_k: Maximum results to return
+
+        Returns:
+            List of (role_id, role_name, score) tuples
+        """
+        conn = self._connect()
+        query_normalized = query.lower().strip()
+
+        # Exact match first
+        cursor = conn.execute(
+            "SELECT id, name FROM roles WHERE name_normalized = ? LIMIT 1",
+            (query_normalized,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return [(row["id"], row["name"], 1.0)]
+
+        # LIKE match
+        cursor = conn.execute(
+            """
+            SELECT id, name FROM roles
+            WHERE name_normalized LIKE ?
+            ORDER BY length(name)
+            LIMIT ?
+            """,
+            (f"%{query_normalized}%", top_k)
+        )
+
+        results = []
+        for row in cursor:
+            # Simple score based on match quality
+            name_normalized = row["name"].lower()
+            if query_normalized == name_normalized:
+                score = 1.0
+            elif name_normalized.startswith(query_normalized):
+                score = 0.9
+            else:
+                score = 0.7
+            results.append((row["id"], row["name"], score))
+
+        return results
+
+    def get_stats(self) -> dict[str, int]:
+        """Get statistics about the roles table."""
+        conn = self._connect()
+
+        cursor = conn.execute("SELECT COUNT(*) FROM roles")
+        total = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(*) FROM roles WHERE canon_id IS NOT NULL")
+        canonicalized = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(DISTINCT canon_id) FROM roles WHERE canon_id IS NOT NULL")
+        groups = cursor.fetchone()[0]
+
+        return {
+            "total_roles": total,
+            "canonicalized": canonicalized,
+            "canonical_groups": groups,
+        }
+
+
+# =============================================================================
+# LOCATIONS DATABASE (v2)
+# =============================================================================
+
+
+class LocationsDatabase:
+    """
+    SQLite database for geopolitical locations.
+
+    Stores countries, states, cities with hierarchical relationships
+    and type classification. Supports pycountry integration.
+    """
+
+    def __init__(self, db_path: Optional[str | Path] = None):
+        """
+        Initialize the locations database.
+
+        Args:
+            db_path: Path to database file (creates if not exists)
+        """
+        self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._conn: Optional[sqlite3.Connection] = None
+        self._location_cache: dict[str, int] = {}  # lookup_key -> location_id
+        self._location_type_cache: dict[str, int] = {}  # type_name -> type_id
+        self._location_type_qid_cache: dict[int, int] = {}  # qid -> type_id
+
+    def _connect(self) -> sqlite3.Connection:
+        """Get or create database connection using shared connection pool."""
+        if self._conn is not None:
+            return self._conn
+
+        self._conn = _get_shared_connection(self._db_path)
+        self._create_tables()
+        self._build_caches()
+        return self._conn
+
+    def _create_tables(self) -> None:
+        """Create locations table and indexes."""
+        conn = self._conn
+        assert conn is not None
+
+        # Check if enum tables exist, create and seed if not
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='source_types'"
+        )
+        if not cursor.fetchone():
+            logger.info("Creating enum tables for v2 schema...")
+            from .schema_v2 import (
+                CREATE_SOURCE_TYPES,
+                CREATE_PEOPLE_TYPES,
+                CREATE_ORGANIZATION_TYPES,
+                CREATE_SIMPLIFIED_LOCATION_TYPES,
+                CREATE_LOCATION_TYPES,
+            )
+            conn.execute(CREATE_SOURCE_TYPES)
+            conn.execute(CREATE_PEOPLE_TYPES)
+            conn.execute(CREATE_ORGANIZATION_TYPES)
+            conn.execute(CREATE_SIMPLIFIED_LOCATION_TYPES)
+            conn.execute(CREATE_LOCATION_TYPES)
+            seed_all_enums(conn)
+
+        # Create locations table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                qid INTEGER,
+                name TEXT NOT NULL,
+                name_normalized TEXT NOT NULL,
+                source_id INTEGER NOT NULL DEFAULT 4,
+                source_identifier TEXT,
+                parent_ids TEXT,
+                location_type_id INTEGER NOT NULL DEFAULT 2,
+                record TEXT NOT NULL DEFAULT '{}',
+                from_date TEXT DEFAULT NULL,
+                to_date TEXT DEFAULT NULL,
+                canon_id INTEGER DEFAULT NULL,
+                canon_size INTEGER DEFAULT 1,
+                UNIQUE(source_identifier, source_id)
+            )
+        """)
+
+        # Create indexes
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_locations_name ON locations(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_locations_name_normalized ON locations(name_normalized)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_locations_qid ON locations(qid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_locations_source_id ON locations(source_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_locations_location_type_id ON locations(location_type_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_locations_canon_id ON locations(canon_id)")
+
+        conn.commit()
+
+    def _build_caches(self) -> None:
+        """Build lookup caches from database and seed data."""
+        # Load location type caches from seed data
+        self._location_type_cache = dict(LOCATION_TYPE_NAME_TO_ID)
+        self._location_type_qid_cache = dict(LOCATION_TYPE_QID_TO_ID)
+
+        # Load existing locations into cache
+        conn = self._conn
+        if conn:
+            cursor = conn.execute(
+                "SELECT id, name_normalized, source_identifier FROM locations"
+            )
+            for row in cursor:
+                # Cache by normalized name
+                self._location_cache[row["name_normalized"]] = row["id"]
+                # Also cache by source_identifier
+                if row["source_identifier"]:
+                    self._location_cache[row["source_identifier"].lower()] = row["id"]
+
+    def close(self) -> None:
+        """Clear connection reference."""
+        self._conn = None
+
+    def get_or_create(
+        self,
+        name: str,
+        location_type_id: int,
+        source_id: int = 4,  # wikidata
+        qid: Optional[int] = None,
+        source_identifier: Optional[str] = None,
+        parent_ids: Optional[list[int]] = None,
+    ) -> int:
+        """
+        Get or create a location record.
+
+        Args:
+            name: Location name
+            location_type_id: FK to location_types table
+            source_id: FK to source_types table
+            qid: Optional Wikidata QID as integer
+            source_identifier: Optional source-specific identifier (e.g., "US", "CA")
+            parent_ids: Optional list of parent location IDs
+
+        Returns:
+            Location ID
+        """
+        if not name:
+            raise ValueError("Location name cannot be empty")
+
+        conn = self._connect()
+        name_normalized = name.lower().strip()
+
+        # Check cache by source_identifier first (more specific)
+        if source_identifier:
+            cache_key = source_identifier.lower()
+            if cache_key in self._location_cache:
+                return self._location_cache[cache_key]
+
+        # Check cache by normalized name
+        if name_normalized in self._location_cache:
+            return self._location_cache[name_normalized]
+
+        # Check database
+        if source_identifier:
+            cursor = conn.execute(
+                "SELECT id FROM locations WHERE source_identifier = ? AND source_id = ?",
+                (source_identifier, source_id)
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT id FROM locations WHERE name_normalized = ? AND source_id = ?",
+                (name_normalized, source_id)
+            )
+
+        row = cursor.fetchone()
+        if row:
+            location_id = row["id"]
+            self._location_cache[name_normalized] = location_id
+            if source_identifier:
+                self._location_cache[source_identifier.lower()] = location_id
+            return location_id
+
+        # Create new location
+        parent_ids_json = json.dumps(parent_ids) if parent_ids else None
+        cursor = conn.execute(
+            """
+            INSERT INTO locations
+            (name, name_normalized, source_id, source_identifier, qid, location_type_id, parent_ids)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (name, name_normalized, source_id, source_identifier, qid, location_type_id, parent_ids_json)
+        )
+        location_id = cursor.lastrowid
+        assert location_id is not None
+        conn.commit()
+
+        self._location_cache[name_normalized] = location_id
+        if source_identifier:
+            self._location_cache[source_identifier.lower()] = location_id
+        return location_id
+
+    def get_or_create_by_qid(
+        self,
+        name: str,
+        wikidata_type_qid: int,
+        source_id: int = 4,
+        entity_qid: Optional[int] = None,
+        source_identifier: Optional[str] = None,
+        parent_ids: Optional[list[int]] = None,
+    ) -> int:
+        """
+        Get or create a location using Wikidata P31 type QID.
+
+        Args:
+            name: Location name
+            wikidata_type_qid: Wikidata instance-of QID (e.g., 515 for city)
+            source_id: FK to source_types table
+            entity_qid: Wikidata QID of the entity itself
+            source_identifier: Optional source-specific identifier
+            parent_ids: Optional list of parent location IDs
+
+        Returns:
+            Location ID
+        """
+        location_type_id = self.get_location_type_id_from_qid(wikidata_type_qid)
+        return self.get_or_create(
+            name=name,
+            location_type_id=location_type_id,
+            source_id=source_id,
+            qid=entity_qid,
+            source_identifier=source_identifier,
+            parent_ids=parent_ids,
+        )
+
+    def get_by_id(self, location_id: int) -> Optional[LocationRecord]:
+        """Get a location record by ID."""
+        conn = self._connect()
+
+        cursor = conn.execute(
+            """
+            SELECT id, qid, name, source_id, source_identifier, location_type_id,
+                   parent_ids, from_date, to_date, record
+            FROM locations WHERE id = ?
+            """,
+            (location_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            source_name = SOURCE_ID_TO_NAME.get(row["source_id"], "wikidata")
+            location_type_id = row["location_type_id"]
+            location_type_name = self._get_location_type_name(location_type_id)
+            simplified_id = LOCATION_TYPE_TO_SIMPLIFIED.get(location_type_id, 7)
+            simplified_name = SIMPLIFIED_LOCATION_TYPE_ID_TO_NAME.get(simplified_id, "other")
+
+            parent_ids = json.loads(row["parent_ids"]) if row["parent_ids"] else []
+
+            return LocationRecord(
+                name=row["name"],
+                source=source_name,
+                source_id=row["source_identifier"],
+                qid=row["qid"],
+                location_type=location_type_name,
+                simplified_type=SimplifiedLocationType(simplified_name),
+                parent_ids=parent_ids,
+                from_date=row["from_date"],
+                to_date=row["to_date"],
+                record=json.loads(row["record"]) if row["record"] else {},
+            )
+        return None
+
+    def _get_location_type_name(self, type_id: int) -> str:
+        """Get location type name from ID."""
+        # Reverse lookup in cache
+        for name, id_ in self._location_type_cache.items():
+            if id_ == type_id:
+                return name
+        return "other"
+
+    def get_location_type_id(self, type_name: str) -> int:
+        """Get location_type_id for a type name."""
+        return self._location_type_cache.get(type_name, 36)  # default to "other"
+
+    def get_location_type_id_from_qid(self, wikidata_qid: int) -> int:
+        """Get location_type_id from Wikidata P31 QID."""
+        return self._location_type_qid_cache.get(wikidata_qid, 36)  # default to "other"
+
+    def get_simplified_type(self, location_type_id: int) -> str:
+        """Get simplified type name for a location_type_id."""
+        simplified_id = LOCATION_TYPE_TO_SIMPLIFIED.get(location_type_id, 7)
+        return SIMPLIFIED_LOCATION_TYPE_ID_TO_NAME.get(simplified_id, "other")
+
+    def resolve_region_text(self, text: str) -> Optional[int]:
+        """
+        Resolve a region/country text to a location ID.
+
+        Uses pycountry for country resolution, then falls back to search.
+
+        Args:
+            text: Region text (country code, name, or QID)
+
+        Returns:
+            Location ID or None if not resolved
+        """
+        if not text:
+            return None
+
+        text_lower = text.lower().strip()
+
+        # Check cache first
+        if text_lower in self._location_cache:
+            return self._location_cache[text_lower]
+
+        # Try pycountry resolution
+        alpha_2 = self._resolve_via_pycountry(text)
+        if alpha_2:
+            alpha_2_lower = alpha_2.lower()
+            if alpha_2_lower in self._location_cache:
+                location_id = self._location_cache[alpha_2_lower]
+                self._location_cache[text_lower] = location_id  # Cache the input too
+                return location_id
+
+            # Country not in database yet, import it
+            try:
+                country = pycountry.countries.get(alpha_2=alpha_2)
+                if country:
+                    country_type_id = self._location_type_cache.get("country", 2)
+                    location_id = self.get_or_create(
+                        name=country.name,
+                        location_type_id=country_type_id,
+                        source_id=4,  # wikidata
+                        source_identifier=alpha_2,
+                    )
+                    self._location_cache[text_lower] = location_id
+                    return location_id
+            except Exception:
+                pass
+
+        return None
+
+    def _resolve_via_pycountry(self, region: str) -> Optional[str]:
+        """Try to resolve region via pycountry."""
+        region_clean = region.strip()
+        if not region_clean:
+            return None
+
+        # Try as 2-letter code
+        if len(region_clean) == 2:
+            country = pycountry.countries.get(alpha_2=region_clean.upper())
+            if country:
+                return country.alpha_2
+
+        # Try as 3-letter code
+        if len(region_clean) == 3:
+            country = pycountry.countries.get(alpha_3=region_clean.upper())
+            if country:
+                return country.alpha_2
+
+        # Try fuzzy search
+        try:
+            matches = pycountry.countries.search_fuzzy(region_clean)
+            if matches:
+                return matches[0].alpha_2
+        except LookupError:
+            pass
+
+        return None
+
+    def import_from_pycountry(self) -> int:
+        """
+        Import all countries from pycountry.
+
+        Returns:
+            Number of locations imported
+        """
+        conn = self._connect()
+        country_type_id = self._location_type_cache.get("country", 2)
+        count = 0
+
+        for country in pycountry.countries:
+            name = country.name
+            alpha_2 = country.alpha_2
+            name_normalized = name.lower()
+
+            # Check if already exists
+            if alpha_2.lower() in self._location_cache:
+                continue
+
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO locations
+                (name, name_normalized, source_id, source_identifier, location_type_id)
+                VALUES (?, ?, 4, ?, ?)
+                """,
+                (name, name_normalized, alpha_2, country_type_id)
+            )
+
+            if cursor.lastrowid:
+                self._location_cache[name_normalized] = cursor.lastrowid
+                self._location_cache[alpha_2.lower()] = cursor.lastrowid
+                count += 1
+
+        conn.commit()
+        logger.info(f"Imported {count} countries from pycountry")
+        return count
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        simplified_type: Optional[str] = None,
+    ) -> list[tuple[int, str, float]]:
+        """
+        Search for locations by name.
+
+        Args:
+            query: Search query
+            top_k: Maximum results to return
+            simplified_type: Optional filter by simplified type (e.g., "country", "city")
+
+        Returns:
+            List of (location_id, location_name, score) tuples
+        """
+        conn = self._connect()
+        query_normalized = query.lower().strip()
+
+        # Build query with optional type filter
+        if simplified_type:
+            # Get all location_type_ids for this simplified type
+            simplified_id = {
+                name: id_ for id_, name in SIMPLIFIED_LOCATION_TYPE_ID_TO_NAME.items()
+            }.get(simplified_type)
+            if simplified_id:
+                type_ids = [
+                    type_id for type_id, simp_id in LOCATION_TYPE_TO_SIMPLIFIED.items()
+                    if simp_id == simplified_id
+                ]
+                if type_ids:
+                    placeholders = ",".join("?" * len(type_ids))
+                    cursor = conn.execute(
+                        f"""
+                        SELECT id, name FROM locations
+                        WHERE name_normalized LIKE ? AND location_type_id IN ({placeholders})
+                        ORDER BY length(name)
+                        LIMIT ?
+                        """,
+                        [f"%{query_normalized}%"] + type_ids + [top_k]
+                    )
+                else:
+                    return []
+            else:
+                return []
+        else:
+            cursor = conn.execute(
+                """
+                SELECT id, name FROM locations
+                WHERE name_normalized LIKE ?
+                ORDER BY length(name)
+                LIMIT ?
+                """,
+                (f"%{query_normalized}%", top_k)
+            )
+
+        results = []
+        for row in cursor:
+            name_normalized = row["name"].lower()
+            if query_normalized == name_normalized:
+                score = 1.0
+            elif name_normalized.startswith(query_normalized):
+                score = 0.9
+            else:
+                score = 0.7
+            results.append((row["id"], row["name"], score))
+
+        return results
+
+    def get_stats(self) -> dict[str, Any]:
+        """Get statistics about the locations table."""
+        conn = self._connect()
+
+        cursor = conn.execute("SELECT COUNT(*) FROM locations")
+        total = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(*) FROM locations WHERE canon_id IS NOT NULL")
+        canonicalized = cursor.fetchone()[0]
+
+        cursor = conn.execute("SELECT COUNT(DISTINCT canon_id) FROM locations WHERE canon_id IS NOT NULL")
+        groups = cursor.fetchone()[0]
+
+        # Count by simplified type
+        by_type: dict[str, int] = {}
+        cursor = conn.execute("""
+            SELECT lt.simplified_id, COUNT(*) as cnt
+            FROM locations l
+            JOIN location_types lt ON l.location_type_id = lt.id
+            GROUP BY lt.simplified_id
+        """)
+        for row in cursor:
+            type_name = SIMPLIFIED_LOCATION_TYPE_ID_TO_NAME.get(row["simplified_id"], "other")
+            by_type[type_name] = row["cnt"]
+
+        return {
+            "total_locations": total,
+            "canonicalized": canonicalized,
+            "canonical_groups": groups,
+            "by_type": by_type,
+        }
+
+    def insert_batch(self, records: list[LocationRecord]) -> int:
+        """
+        Insert a batch of location records.
+
+        Args:
+            records: List of LocationRecord objects to insert
+
+        Returns:
+            Number of records inserted
+        """
+        if not records:
+            return 0
+
+        conn = self._connect()
+        inserted = 0
+
+        for record in records:
+            name_normalized = record.name.lower().strip()
+            source_identifier = record.source_id  # Q code in source_id field
+
+            # Check cache first
+            cache_key = source_identifier.lower() if source_identifier else name_normalized
+            if cache_key in self._location_cache:
+                continue
+
+            # Get location_type_id from type name
+            location_type_id = self._location_type_cache.get(record.location_type, 36)  # default "other"
+            source_id = SOURCE_NAME_TO_ID.get(record.source, 4)  # default wikidata
+
+            parent_ids_json = json.dumps(record.parent_ids) if record.parent_ids else None
+            record_json = json.dumps(record.record) if record.record else "{}"
+
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO locations
+                    (name, name_normalized, source_id, source_identifier, qid, location_type_id, parent_ids, record, from_date, to_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.name,
+                        name_normalized,
+                        source_id,
+                        source_identifier,
+                        record.qid,
+                        location_type_id,
+                        parent_ids_json,
+                        record_json,
+                        record.from_date,
+                        record.to_date,
+                    )
+                )
+                if cursor.lastrowid:
+                    self._location_cache[name_normalized] = cursor.lastrowid
+                    if source_identifier:
+                        self._location_cache[source_identifier.lower()] = cursor.lastrowid
+                    inserted += 1
+            except Exception as e:
+                logger.warning(f"Failed to insert location {record.name}: {e}")
+
+        conn.commit()
+        return inserted
+
+    def get_all_source_ids(self, source: str = "wikidata") -> set[str]:
+        """
+        Get all source_identifiers for a given source.
+
+        Args:
+            source: Source name (e.g., "wikidata")
+
+        Returns:
+            Set of source_identifiers
+        """
+        conn = self._connect()
+        source_id = SOURCE_NAME_TO_ID.get(source, 4)
+        cursor = conn.execute(
+            "SELECT source_identifier FROM locations WHERE source_id = ? AND source_identifier IS NOT NULL",
+            (source_id,)
+        )
+        return {row["source_identifier"] for row in cursor}

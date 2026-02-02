@@ -1,6 +1,6 @@
 # Corp Extractor
 
-Extract structured subject-predicate-object statements from unstructured text using the T5-Gemma 2 model.
+Analyze complex text to extract relationship information about people and organizations. Runs entirely on your hardware (RTX 4090+, Apple M1 16GB+) with no external API dependencies. Uses fine-tuned T5-Gemma 2 for statement splitting and coreference resolution, plus GLiNER2 for entity extraction. Includes a database of 10M+ organizations and 40M+ people with quantized embeddings for fast entity qualification.
 
 [![PyPI version](https://img.shields.io/pypi/v/corp-extractor.svg)](https://pypi.org/project/corp-extractor/)
 [![Python 3.10+](https://img.shields.io/pypi/pyversions/corp-extractor.svg)](https://pypi.org/project/corp-extractor/)
@@ -8,6 +8,7 @@ Extract structured subject-predicate-object statements from unstructured text us
 
 ## Features
 
+- **Database v2 Schema** *(v0.9.4)*: Normalized schema with INTEGER FK references, new roles/locations tables, int8 scalar embeddings (75% smaller)
 - **Person Database** *(v0.9.2)*: Qualify notable people (executives, politicians, athletes, etc.) against Wikidata with canonical IDs
 - **Organization Canonicalization** *(v0.9.2)*: Link equivalent records across sources (LEI, ticker, CIK, name matching)
 - **5-Stage Pipeline** *(v0.8.0)*: Modular plugin-based architecture for full entity resolution
@@ -340,9 +341,33 @@ The library includes an **entity embedding database** for fast entity qualificat
 corp-extractor db download              # Download pre-built database
 corp-extractor db search "Microsoft"    # Search organizations
 corp-extractor db search-people "Tim Cook"  # Search people
+corp-extractor db search-roles "CEO"    # Search roles (v0.9.4)
+corp-extractor db search-locations "California"  # Search locations (v0.9.4)
 ```
 
 For comprehensive documentation including schema, CLI reference, Python API, and build instructions, see **[ENTITY_DATABASE.md](./ENTITY_DATABASE.md)**.
+
+## New in v0.9.4: Database v2 Schema
+
+v0.9.4 introduces a **normalized v2 schema** with significant improvements:
+
+- **INTEGER FK references** replace TEXT enum columns for better query performance
+- **New enum lookup tables**: `source_types`, `people_types`, `organization_types`, `location_types`
+- **New tables**: `roles` (job titles with Wikidata QID), `locations` (countries/states/cities with hierarchy)
+- **Scalar (int8) embeddings**: 75% storage reduction with ~92% recall at top-100
+- **QID as integers**: Wikidata QIDs stored as integers (Q prefix stripped)
+- **Human-readable views**: `organizations_view`, `people_view`, `roles_view`, `locations_view`
+
+**Migration:**
+```bash
+# Migrate existing v1 database to v2
+corp-extractor db migrate-v2 entities.db entities-v2.db
+
+# Generate int8 scalar embeddings
+corp-extractor db backfill-scalar
+```
+
+**Default database path**: `~/.cache/corp-extractor/entities-v2.db`
 
 ## New in v0.6.0: Entity Embedding Database
 
@@ -404,6 +429,11 @@ corp-extractor db import-people --type executive --enrich-dates   # Fetch role s
 # Import from Wikidata dump (v0.9.1) - avoids SPARQL timeouts
 corp-extractor db import-wikidata-dump --download --limit 50000   # Downloads ~100GB dump
 corp-extractor db import-wikidata-dump --dump /path/to/dump.bz2 --people --no-orgs  # Local dump
+corp-extractor db import-wikidata-dump --dump dump.bz2 --locations --no-people --no-orgs  # Locations only (v0.9.4)
+
+# Migrate to v2 schema (v0.9.4)
+corp-extractor db migrate-v2 entities.db entities-v2.db
+corp-extractor db backfill-scalar        # Generate int8 embeddings (75% smaller)
 
 # Check status
 corp-extractor db status
@@ -448,7 +478,7 @@ corp-extractor db create-lite entities.db    # Create lite version
 corp-extractor db compress entities.db       # Compress with gzip
 ```
 
-See [COMPANY_DB.md](../COMPANY_DB.md) for complete build and publish instructions.
+See [ENTITY_DATABASE.md](./ENTITY_DATABASE.md) for complete build and publish instructions.
 
 ## New in v0.7.0: Document Processing
 

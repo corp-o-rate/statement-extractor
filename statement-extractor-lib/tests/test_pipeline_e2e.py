@@ -216,20 +216,10 @@ class TestPipelineContextE2E:
             source_metadata={"doc_id": "test-001"},
         )
 
-        # Simulate Stage 1 output
-        ctx.raw_triples = [
-            RawTriple(
-                subject_text="Apple Inc.",
-                predicate_text="announced",
-                object_text="iPhone 15",
-                source_sentence="Apple Inc. announced the new iPhone 15.",
-            ),
-            RawTriple(
-                subject_text="Tim Cook",
-                predicate_text="presented",
-                object_text="new features",
-                source_sentence="Tim Cook presented the new features.",
-            ),
+        # Simulate Stage 1 output (SplitSentence stores atomic sentence text)
+        ctx.split_sentences = [
+            RawTriple(text="Apple Inc. announced the new iPhone 15."),
+            RawTriple(text="Tim Cook presented the new features."),
         ]
 
         # Simulate Stage 2 output
@@ -272,7 +262,7 @@ class TestPipelineContextE2E:
             ctx.labeled_statements.append(labeled)
 
         # Verify all stages have data
-        assert len(ctx.raw_triples) == 2
+        assert len(ctx.split_sentences) == 2
         assert len(ctx.statements) == 2
         assert len(ctx.qualified_entities) == 4  # 2 statements * 2 entities each
         assert len(ctx.canonical_entities) == 4
@@ -515,7 +505,7 @@ class TestPipelineE2EWithModels:
         # Should have processed through all stages
         # Note: qualified_entities is no longer populated since Stage 3 (Qualification)
         # now directly produces canonical_entities with merged qualification/canonicalization
-        assert len(ctx.raw_triples) >= 1
+        assert len(ctx.split_sentences) >= 1
         assert len(ctx.statements) >= 1
         assert len(ctx.canonical_entities) >= 1
         assert len(ctx.labeled_statements) >= 1
@@ -563,7 +553,7 @@ class TestPipelineE2EWithModels:
         ctx = pipeline.process(SIMPLE_TEXT)
 
         # Should have output from stages 1 and 2
-        assert len(ctx.raw_triples) >= 1
+        assert len(ctx.split_sentences) >= 1
         assert len(ctx.statements) >= 1
 
         # Should NOT have output from stages 3-5 (skipped)
@@ -680,8 +670,8 @@ class TestCLIPipelineCommand:
         # Should be valid JSON
         output = json.loads(output_text)
         assert "statement_count" in output
-        # May have statements, raw_triples, or labeled_statements depending on what stages ran
-        assert any(key in output for key in ["statements", "raw_triples", "labeled_statements"])
+        # May have statements, split_sentences, or labeled_statements depending on what stages ran
+        assert any(key in output for key in ["statements", "split_sentences", "labeled_statements"])
 
     def test_cli_pipeline_verbose(self):
         """Test CLI pipeline with verbose output."""

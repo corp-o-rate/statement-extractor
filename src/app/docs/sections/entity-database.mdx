@@ -2,9 +2,9 @@
 
 <span id="entity-database" />
 
-The entity database provides fast lookup and qualification of organizations and people using vector similarity search. It stores records from authoritative sources with 768-dimensional embeddings for semantic matching.
+The entity database provides fast lookup and qualification of organizations, people, roles, and locations using vector similarity search. It stores records from authoritative sources with 768-dimensional embeddings for semantic matching.
 
-<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">NEW in v0.9.0</span>
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">UPDATED in v0.9.4</span>
 
 ---
 
@@ -24,6 +24,12 @@ corp-extractor db search "Microsoft"
 
 # Search for people
 corp-extractor db search-people "Tim Cook"
+
+# Search for roles (v0.9.4)
+corp-extractor db search-roles "CEO"
+
+# Search for locations (v0.9.4)
+corp-extractor db search-locations "California"
 ```
 
 The database is automatically used by the pipeline's qualification stage (Stage 3) to resolve entity names to canonical identifiers.
@@ -70,7 +76,7 @@ corp-extractor db download --full
   </tbody>
 </table>
 
-**Storage location:** `~/.cache/corp-extractor/entities.db`
+**Storage location:** `~/.cache/corp-extractor/entities-v2.db` (v0.9.4+)
 
 **HuggingFace repo:** [Corp-o-Rate-Community/entity-references](https://huggingface.co/datasets/Corp-o-Rate-Community/entity-references)
 
@@ -94,26 +100,44 @@ ctx = pipeline.process("Microsoft CEO Satya Nadella announced...")
 
 The database uses SQLite with the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension for vector similarity search.
 
+#### Schema v2 (Normalized)
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.4</span>
+
+The v2 schema uses INTEGER foreign keys to enum lookup tables instead of TEXT columns:
+
+```sql
+-- Enum tables: source_types, people_types, organization_types, location_types
+-- Organization: source_id (FK), entity_type_id (FK), region_id (FK to locations)
+-- People: source_id (FK), person_type_id (FK), country_id (FK), known_for_role_id (FK)
+-- Roles: qid, name, source_id (FK), canon_id
+-- Locations: qid, name, source_id (FK), location_type_id (FK), parent_ids (hierarchy)
+```
+
 #### Organizations Table
 
 ```sql
 CREATE TABLE organizations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qid INTEGER,                 -- Wikidata QID as integer (v0.9.4)
     name TEXT NOT NULL,
     name_normalized TEXT NOT NULL,
-    source TEXT NOT NULL,        -- 'gleif', 'sec_edgar', 'companies_house', 'wikipedia'
-    source_id TEXT NOT NULL,     -- LEI, CIK, UK Company Number, or QID
-    region TEXT NOT NULL DEFAULT '',
-    entity_type TEXT NOT NULL DEFAULT 'unknown',
+    source_id INTEGER NOT NULL,  -- FK to source_types(id)
+    source_identifier TEXT NOT NULL,  -- LEI, CIK, Company Number
+    region_id INTEGER,           -- FK to locations(id) (v0.9.4)
+    entity_type_id INTEGER NOT NULL,  -- FK to organization_types(id)
     from_date TEXT,              -- ISO YYYY-MM-DD
     to_date TEXT,                -- ISO YYYY-MM-DD
     record TEXT NOT NULL,        -- JSON (empty in lite version)
-    UNIQUE(source, source_id)
+    UNIQUE(source_identifier, source_id)
 );
 
+-- Both float32 and int8 embeddings supported (v0.9.4)
 CREATE VIRTUAL TABLE organization_embeddings USING vec0(
-    org_id INTEGER PRIMARY KEY,
-    embedding float[768]
+    org_id INTEGER PRIMARY KEY, embedding float[768]
+);
+CREATE VIRTUAL TABLE organization_embeddings_scalar USING vec0(
+    org_id INTEGER PRIMARY KEY, embedding int8[768]
 );
 ```
 
@@ -122,26 +146,57 @@ CREATE VIRTUAL TABLE organization_embeddings USING vec0(
 ```sql
 CREATE TABLE people (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qid INTEGER,                 -- Wikidata QID as integer (v0.9.4)
     name TEXT NOT NULL,
     name_normalized TEXT NOT NULL,
-    source TEXT NOT NULL,        -- 'wikidata'
-    source_id TEXT NOT NULL,     -- Wikidata QID
-    country TEXT NOT NULL DEFAULT '',
-    person_type TEXT NOT NULL DEFAULT 'unknown',
-    known_for_role TEXT DEFAULT '',
+    source_id INTEGER NOT NULL,  -- FK to source_types(id)
+    source_identifier TEXT NOT NULL,  -- QID, Owner CIK, Person number
+    country_id INTEGER,          -- FK to locations(id) (v0.9.4)
+    person_type_id INTEGER NOT NULL,  -- FK to people_types(id)
+    known_for_role_id INTEGER,   -- FK to roles(id) (v0.9.4)
     known_for_org TEXT DEFAULT '',
-    known_for_org_id INTEGER,    -- FK to organizations table
+    known_for_org_id INTEGER,    -- FK to organizations(id)
     from_date TEXT,              -- Role start date (ISO)
     to_date TEXT,                -- Role end date (ISO)
     birth_date TEXT,             -- ISO YYYY-MM-DD
     death_date TEXT,             -- ISO YYYY-MM-DD
     record TEXT NOT NULL,
-    UNIQUE(source, source_id, known_for_role, known_for_org)
+    UNIQUE(source_identifier, source_id, known_for_role_id, known_for_org_id)
 );
 
 CREATE VIRTUAL TABLE person_embeddings USING vec0(
-    person_id INTEGER PRIMARY KEY,
-    embedding float[768]
+    person_id INTEGER PRIMARY KEY, embedding float[768]
+);
+CREATE VIRTUAL TABLE person_embeddings_scalar USING vec0(
+    person_id INTEGER PRIMARY KEY, embedding int8[768]
+);
+```
+
+#### New Tables (v0.9.4)
+
+```sql
+-- Roles table for job titles
+CREATE TABLE roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qid INTEGER,                 -- Wikidata QID (e.g., 484876 for CEO)
+    name TEXT NOT NULL,          -- "Chief Executive Officer"
+    name_normalized TEXT NOT NULL,
+    source_id INTEGER NOT NULL,  -- FK to source_types(id)
+    canon_id INTEGER DEFAULT NULL,
+    UNIQUE(name_normalized, source_id)
+);
+
+-- Locations table for geopolitical entities
+CREATE TABLE locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qid INTEGER,                 -- Wikidata QID (e.g., 30 for USA)
+    name TEXT NOT NULL,          -- "United States", "California"
+    name_normalized TEXT NOT NULL,
+    source_id INTEGER NOT NULL,  -- FK to source_types(id)
+    source_identifier TEXT,      -- "US", "CA"
+    parent_ids TEXT,             -- JSON array of parent location IDs
+    location_type_id INTEGER NOT NULL,  -- FK to location_types(id)
+    UNIQUE(source_identifier, source_id)
 );
 ```
 
@@ -268,6 +323,52 @@ CREATE VIRTUAL TABLE person_embeddings USING vec0(
   </tbody>
 </table>
 
+#### Simplified Location Types
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.4</span>
+
+<table>
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th>Description</th>
+      <th>Examples</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>continent</code></td>
+      <td>Continents</td>
+      <td>Europe, Asia, Africa</td>
+    </tr>
+    <tr>
+      <td><code>country</code></td>
+      <td>Sovereign states</td>
+      <td>United States, Germany, Japan</td>
+    </tr>
+    <tr>
+      <td><code>subdivision</code></td>
+      <td>States, provinces, regions</td>
+      <td>California, Bavaria, Ontario</td>
+    </tr>
+    <tr>
+      <td><code>city</code></td>
+      <td>Cities, towns, municipalities</td>
+      <td>New York, Paris, Tokyo</td>
+    </tr>
+    <tr>
+      <td><code>district</code></td>
+      <td>Districts, boroughs, neighborhoods</td>
+      <td>Manhattan, Westminster</td>
+    </tr>
+    <tr>
+      <td><code>historic</code></td>
+      <td>Former countries, historic territories</td>
+      <td>Soviet Union, Prussia</td>
+    </tr>
+  </tbody>
+</table>
+
 ---
 
 ### Data Sources
@@ -330,6 +431,18 @@ CREATE VIRTUAL TABLE person_embeddings USING vec0(
       <td>Variable</td>
       <td>QID</td>
       <td>Notable people worldwide</td>
+    </tr>
+    <tr>
+      <td>SEC Form 4</td>
+      <td>~280K/year</td>
+      <td>Owner CIK</td>
+      <td>US public company officers/directors</td>
+    </tr>
+    <tr>
+      <td>Companies House</td>
+      <td>~15M+</td>
+      <td>Person number</td>
+      <td>UK company officers</td>
     </tr>
   </tbody>
 </table>
@@ -453,7 +566,7 @@ corp-extractor db import-people --type executive --enrich-dates
 
 #### Wikidata Dump Import
 
-<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.1</span>
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.4</span>
 
 For large imports without SPARQL query timeouts:
 
@@ -466,6 +579,9 @@ corp-extractor db import-wikidata-dump --dump /path/to/latest-all.json.bz2
 
 # Import only people (no organizations)
 corp-extractor db import-wikidata-dump --dump dump.bz2 --people --no-orgs
+
+# Import only locations (countries, states, cities) - v0.9.4
+corp-extractor db import-wikidata-dump --dump dump.bz2 --locations --no-people --no-orgs
 
 # Resume interrupted import
 corp-extractor db import-wikidata-dump --dump dump.bz2 --resume
@@ -493,13 +609,37 @@ corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 100
 # 2. Link equivalent records
 corp-extractor db canonicalize
 
-# 3. Check status
+# 3. Generate scalar embeddings (75% storage reduction)
+corp-extractor db backfill-scalar
+
+# 4. Check status
 corp-extractor db status
 
-# 4. Upload to HuggingFace
+# 5. Upload to HuggingFace
 export HF_TOKEN="hf_..."
 corp-extractor db upload
 ```
+
+#### Migrate to v2 Schema
+
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.4</span>
+
+To migrate an existing v1 database to the normalized v2 schema:
+
+```bash
+# Create new v2 database (preserves original)
+corp-extractor db migrate-v2 entities.db entities-v2.db
+
+# Resume interrupted migration
+corp-extractor db migrate-v2 entities.db entities-v2.db --resume
+```
+
+The v2 schema provides:
+- INTEGER FK columns instead of TEXT enums (better performance)
+- New enum lookup tables for type filtering
+- New roles and locations tables
+- QIDs as integers (Q prefix stripped)
+- Human-readable views with JOINs
 
 ---
 

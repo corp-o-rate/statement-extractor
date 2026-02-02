@@ -48,12 +48,17 @@ uv run corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --pe
 uv run corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Resume from file position
 uv run corp-extractor db import-wikidata-dump --dump dump.json.bz2 --skip-updates  # Skip existing Q codes
 uv run corp-extractor db import-wikidata-dump --download --require-enwiki  # Only orgs with English Wikipedia
+uv run corp-extractor db import-wikidata-dump --dump dump.bz2 --locations --no-people --no-orgs  # Locations only (v0.9.4)
 uv run corp-extractor db canonicalize        # Link equivalent records across sources
+uv run corp-extractor db search-roles "CEO"  # Search roles (v0.9.4)
+uv run corp-extractor db search-locations "California"  # Search locations (v0.9.4)
 uv run corp-extractor db upload              # Upload with lite/compressed variants
 uv run corp-extractor db download            # Download lite version (default)
 uv run corp-extractor db download --full     # Download full version
 uv run corp-extractor db create-lite entities.db  # Create lite version locally
 uv run corp-extractor db compress entities.db     # Compress with gzip
+uv run corp-extractor db migrate-v2 entities.db entities-v2.db  # Migrate to v2 schema (v0.9.4)
+uv run corp-extractor db backfill-scalar     # Generate int8 embeddings (v0.9.4)
 
 # Document processing commands
 uv run corp-extractor document process article.txt
@@ -109,13 +114,16 @@ Plugins are sorted by `priority` property (lower = runs first). Default is 100.
 
 ### Entity Database Module
 
-The `database/` module provides organization and person embedding storage and search:
+The `database/` module provides organization, person, role, and location embedding storage and search:
 
-- `database/models.py` - `CompanyRecord`, `CompanyMatch`, `PersonRecord`, `PersonMatch`, `PersonType`, `DatabaseStats`, `EntityType` Pydantic models
-- `database/store.py` - `OrganizationDatabase` and `PersonDatabase` SQLite+sqlite-vec storage (shared connection pool)
-- `database/embeddings.py` - `CompanyEmbedder` using google/embeddinggemma-300m
+- `database/models.py` - `CompanyRecord`, `CompanyMatch`, `PersonRecord`, `PersonMatch`, `PersonType`, `RoleRecord`, `LocationRecord`, `SimplifiedLocationType`, `DatabaseStats`, `EntityType` Pydantic models
+- `database/store.py` - `OrganizationDatabase`, `PersonDatabase`, `RolesDatabase`, `LocationsDatabase` SQLite+sqlite-vec storage (shared connection pool)
+- `database/embeddings.py` - `CompanyEmbedder` using google/embeddinggemma-300m (supports both float32 and int8 quantization)
 - `database/hub.py` - HuggingFace Hub upload/download with lite/compressed variants
 - `database/resolver.py` - `OrganizationResolver` shared utility for org lookups (used by person.py and embedding_company.py)
+- `database/schema_v2.py` - DDL for v2 normalized schema with INTEGER FK references (v0.9.4)
+- `database/seed_data.py` - Enum lookup tables and pycountry integration (v0.9.4)
+- `database/migrate_v2.py` - Migration script from v1 to v2 schema (v0.9.4)
 - `database/importers/` - Data source importers (all support `from_date`/`to_date`):
   - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records) - `from_date` from InitialRegistrationDate
   - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers) - `from_date` from oldest filingDate
@@ -124,7 +132,7 @@ The `database/` module provides organization and person embedding storage and se
   - `companies_house_officers.py` - UK Companies House officers bulk data (Prod195, v0.9.3) - requires request to CH
   - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - `from_date`/`to_date` from P571/P576
   - `wikidata_people.py` - Wikidata SPARQL queries for notable people - `from_date`/`to_date` from position qualifiers
-  - `wikidata_dump.py` - Wikidata JSON dump importer (~100GB) for people and orgs without SPARQL timeouts (v0.9.1)
+  - `wikidata_dump.py` - Wikidata JSON dump importer (~100GB) for people, orgs, and locations without SPARQL timeouts (v0.9.1, locations in v0.9.4)
 
 **EntityType Classification:**
 Each organization record is classified with an `entity_type` field:
@@ -160,8 +168,9 @@ Each person record is classified with a `person_type` field:
 - `birth_date` and `death_date` fields track life dates; `is_historic` property for deceased people
 - `--require-enwiki` flag to only import orgs with English Wikipedia articles
 
-**Wikidata Dump Import Features (v0.9.2):**
-- Single-pass import: people and orgs are extracted in one scan of the ~100GB dump file
+**Wikidata Dump Import Features (v0.9.4):**
+- Single-pass import: people, orgs, and locations are extracted in one scan of the ~100GB dump file
+- `--locations` flag to import geopolitical entities (countries, states, cities) with hierarchy
 - `--resume` flag to resume from last position in file (tracks entity index in progress file)
 - `--skip-updates` flag to skip Q codes already in database (no updates to existing records)
 - Progress file stored at `~/.cache/corp-extractor/wikidata-dump-progress.json`
@@ -180,8 +189,18 @@ The `db canonicalize` command also links equivalent people records:
 - Records matched by normalized name + overlapping date ranges
 - Source priority: wikidata > sec_edgar > companies_house
 
+**Database Schema v2 (v0.9.4):**
+The database uses a normalized schema with INTEGER FK references instead of TEXT enum columns:
+- Enum lookup tables: `source_types`, `people_types`, `organization_types`, `location_types`, `simplified_location_types`
+- New tables: `roles` (job titles with QID), `locations` (countries/states/cities with hierarchy)
+- QIDs stored as integers (Q prefix stripped) in `qid` column
+- Human-readable views: `organizations_view`, `people_view`, `roles_view`, `locations_view`
+- Both float32 and int8 scalar embeddings supported (75% storage reduction with ~92% recall)
+- Default database path: `~/.cache/corp-extractor/entities-v2.db`
+
 **Database variants:**
-- `entities.db` - Full database with complete record metadata
+- `entities-v2.db` - Full v2 database with normalized schema (v0.9.4+)
+- `entities.db` - Legacy v1 database (for migration)
 - `entities-lite.db` - Lite version without record data (default download, smaller)
 - `.gz` compressed versions for efficient transfer
 

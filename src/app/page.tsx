@@ -309,7 +309,9 @@ export default function Home() {
                 <span className="text-gray-400">MAP RELATIONSHIPS.</span>
               </h1>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                This demo showcases a python library which uses a custom fine-tuned{' '}
+                A Python library designed to analyze complex text and extract relationship information
+                about people and organizations. Runs entirely on your hardware (RTX 4090+, Apple M1 16GB+)
+                with no external API dependencies. Uses fine-tuned{' '}
                 <a
                   href="https://blog.google/technology/developers/t5gemma-2/"
                   target="_blank"
@@ -318,19 +320,17 @@ export default function Home() {
                 >
                   T5-Gemma 2
                 </a>{' '}
-                model that extracts atomic subject-predicate-object statements from unstructured text and resolves coreferences (e.g., pronouns to named entities),
-                inspired by{' '}
+                for statement splitting and coreference resolution, plus{' '}
                 <a
-                  href="https://www.microsoft.com/en-us/research/publication/towards-effective-extraction-and-evaluation-of-factual-claims/"
+                  href="https://github.com/urchade/GLiNER"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-red-600 hover:underline font-medium"
                 >
-                  Microsoft Research&apos;s work on factual claim extraction
-                </a>.
-                The library then identifies entities (organizations, people, locations, dates, etc. ) and their
-                relationships using GLiNER2, and outputs structured data for downstream tasks like fact-checking,
-                knowledge graph construction, and information retrieval.
+                  GLiNER2
+                </a>{' '}
+                for entity extraction. Includes a database of 10M+ organizations and 40M+ people
+                with quantized embeddings for fast entity qualification (~100GB disk for all models and data).
               </p>
             </div>
 
@@ -449,27 +449,26 @@ export default function Home() {
         {/* About Section */}
         <section className="py-16 px-4 sm:px-6 lg:px-8 bg-gray-50 border-t">
           <div className="max-w-4xl mx-auto text-center">
-            <span className="section-label">ABOUT THE MODEL</span>
+            <span className="section-label">THE PIPELINE</span>
             <h2 className="text-2xl md:text-3xl font-black mt-4">
-              T5-Gemma 2 Statement Extractor
+              Multiple Models, One Pipeline
             </h2>
             <div className="mt-6 text-gray-600 space-y-4 text-left max-w-2xl mx-auto">
               <p>
-                This model is based on Google&apos;s T5-Gemma 2 architecture (540M parameters) and has been
-                fine-tuned on 77,515 examples of statement extraction from corporate and news documents.
+                Corp-extractor uses multiple fine-tuned small models to transform unstructured text into
+                structured relationship data—all running locally on your hardware with no external services.
               </p>
               <p>
-                <strong>Key capabilities:</strong>
+                <strong>Pipeline stages:</strong>
               </p>
               <ul className="list-disc list-inside space-y-1 ml-4">
-                <li>Extract subject-predicate-object triples from text</li>
-                <li>Identify entity types (ORG, PERSON, GPE, EVENT, etc.)</li>
-                <li>Resolve coreferences (pronouns → entity names)</li>
-                <li>Generate full resolved statement text</li>
+                <li><strong>T5-Gemma 2</strong> (540M params) — Splits text into atomic statements and resolves coreferences. Trained on 70,000+ pages of corporate and news documents.</li>
+                <li><strong>GLiNER2</strong> (205M params) — Extracts subject/predicate/object with entity types (ORG, PERSON, GPE, etc.) and 324 predefined predicates.</li>
+                <li><strong>Entity Database</strong> — Qualifies entities against 10M+ organizations and 40M+ people with quantized embeddings for sub-second lookups.</li>
+                <li><strong>BERT classifiers</strong> — Small models for sentiment labeling and embedding similarity for taxonomy classification.</li>
               </ul>
               <p>
-                <strong>Training details:</strong> Final eval loss of 0.209, trained with beam search
-                (num_beams=4) for high-quality outputs.
+                <strong>Hardware:</strong> Requires ~100GB disk for all models and database. Runs on RTX 4090+ or Apple M1/M2/M3 with 16GB+ RAM.
               </p>
             </div>
           </div>

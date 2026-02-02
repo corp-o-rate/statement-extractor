@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 # Default HuggingFace repo for entity database
 DEFAULT_REPO_ID = "Corp-o-Rate-Community/entity-references"
-DEFAULT_DB_FILENAME = "entities-lite.db"  # Lite is the default (smaller download)
-DEFAULT_DB_FULL_FILENAME = "entities.db"
-DEFAULT_DB_LITE_FILENAME = "entities-lite.db"
+DEFAULT_DB_FILENAME = "entities-v2-lite.db"  # Lite is the default (smaller download)
+DEFAULT_DB_FULL_FILENAME = "entities-v2.db"
+DEFAULT_DB_LITE_FILENAME = "entities-v2-lite.db"
 
 # Local cache directory
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "corp-extractor"
@@ -55,7 +55,8 @@ def get_database_path(
     # Check common locations
     possible_paths = [
         cache_dir / filename,
-        cache_dir / "entities.db",
+        cache_dir / "entities-v2.db",
+        cache_dir / "entities.db",  # Legacy fallback
         Path.home() / ".cache" / "huggingface" / "hub" / f"datasets--{repo_id.replace('/', '--')}" / filename,
     ]
 
@@ -219,8 +220,10 @@ def create_lite_database(
     """
     Create a lite version of the database without full records.
 
-    The lite version strips the `record` column content (sets to empty {}),
-    significantly reducing file size while keeping embeddings and core fields.
+    The lite version:
+    - Strips the `record` column content (sets to empty {})
+    - Drops float32 embedding tables (keeps only scalar int8 embeddings)
+    - Significantly reduces file size (~75% reduction)
 
     Args:
         source_db_path: Path to the full database
@@ -229,6 +232,8 @@ def create_lite_database(
     Returns:
         Path to the lite database
     """
+    import sqlite_vec
+
     source_db_path = Path(source_db_path)
     if not source_db_path.exists():
         raise FileNotFoundError(f"Source database not found: {source_db_path}")
@@ -246,13 +251,50 @@ def create_lite_database(
     # Connect and strip record contents
     # Use isolation_level=None for autocommit (required for VACUUM)
     conn = sqlite3.connect(str(output_path), isolation_level=None)
+
+    # Load sqlite-vec extension (required for vec0 virtual tables)
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+
     try:
         # Update all records to have empty record JSON
         conn.execute("BEGIN")
         cursor = conn.execute("UPDATE organizations SET record = '{}'")
         updated = cursor.rowcount
-        logger.info(f"Stripped {updated} record fields")
+        logger.info(f"Stripped {updated} organization record fields")
+
+        # Also strip people records if table exists
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='people'")
+        if cursor.fetchone():
+            cursor = conn.execute("UPDATE people SET record = '{}'")
+            logger.info(f"Stripped {cursor.rowcount} people record fields")
+
         conn.execute("COMMIT")
+
+        # Drop float32 embedding tables (keep only scalar int8 for 75% storage savings)
+        # Check if scalar tables exist before dropping float32 tables
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='organization_embeddings_scalar'"
+        )
+        has_org_scalar = cursor.fetchone() is not None
+
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='person_embeddings_scalar'"
+        )
+        has_person_scalar = cursor.fetchone() is not None
+
+        if has_org_scalar:
+            logger.info("Dropping float32 organization_embeddings table (keeping scalar)")
+            conn.execute("DROP TABLE IF EXISTS organization_embeddings")
+        else:
+            logger.warning("No scalar organization embeddings found, keeping float32 table")
+
+        if has_person_scalar:
+            logger.info("Dropping float32 person_embeddings table (keeping scalar)")
+            conn.execute("DROP TABLE IF EXISTS person_embeddings")
+        else:
+            logger.warning("No scalar person embeddings found, keeping float32 table")
 
         # Vacuum to reclaim space (must be outside transaction)
         conn.execute("VACUUM")
@@ -283,8 +325,8 @@ def upload_database_with_variants(
     Upload entity database with optional lite variant.
 
     First VACUUMs the database, then creates and uploads:
-    - entities.db (full database)
-    - entities-lite.db (without record data, smaller)
+    - entities-v2.db (full database with v2 normalized schema)
+    - entities-v2-lite.db (without record data, smaller)
     - README.md (dataset card from HUGGINGFACE_README.md)
 
     Args:

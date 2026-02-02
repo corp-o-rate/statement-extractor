@@ -1,6 +1,8 @@
 # Entity Database Guide
 
-The entity database provides fast lookup and qualification of organizations and people using vector similarity search. It stores records from authoritative sources (GLEIF, SEC, Companies House, Wikidata) with 768-dimensional embeddings for semantic matching.
+The entity database provides fast lookup and qualification of organizations, people, roles, and locations using vector similarity search. It stores records from authoritative sources (GLEIF, SEC, Companies House, Wikidata) with 768-dimensional embeddings for semantic matching.
+
+**v0.9.4 Schema Update:** The database now uses a normalized v2 schema with INTEGER foreign keys instead of TEXT enum columns. This improves query performance and enables new tables for roles and locations. Both float32 and int8 (scalar) embeddings are supported for 75% storage reduction.
 
 ## Quick Start
 
@@ -16,6 +18,12 @@ corp-extractor db search "Microsoft"
 
 # Search for people
 corp-extractor db search-people "Tim Cook"
+
+# Search for roles (v0.9.4)
+corp-extractor db search-roles "CEO"
+
+# Search for locations (v0.9.4)
+corp-extractor db search-locations "California"
 ```
 
 The database is automatically used by the pipeline's qualification stage (Stage 3) to resolve entity names to canonical identifiers.
@@ -43,7 +51,7 @@ corp-extractor db download --full
 
 The lite version is recommended for most use cases. It contains all the information needed for entity resolution.
 
-**Storage location:** `~/.cache/corp-extractor/entities.db`
+**Storage location:** `~/.cache/corp-extractor/entities-v2.db` (v0.9.4+) or `~/.cache/corp-extractor/entities.db` (legacy)
 
 **HuggingFace repo:** [Corp-o-Rate-Community/entity-references](https://huggingface.co/datasets/Corp-o-Rate-Community/entity-references)
 
@@ -63,59 +71,108 @@ ctx = pipeline.process("Microsoft CEO Satya Nadella announced...")
 
 The database uses SQLite with the [sqlite-vec](https://github.com/asg017/sqlite-vec) extension for vector similarity search.
 
-### Schema
+### Schema (v2 - Normalized)
+
+**v0.9.4** introduces a normalized schema with INTEGER foreign keys to enum lookup tables:
 
 ```
++===========================================================================+
+|                     Entity Database v2 (Normalized)                       |
++===========================================================================+
+| ENUM LOOKUP TABLES                                                        |
 +---------------------------------------------------------------------------+
-|                           Entity Database                                  |
+|  source_types: 1=gleif, 2=sec_edgar, 3=companies_house, 4=wikidata        |
+|  people_types: 1=executive, 2=politician, 3=government, ... 15=unknown    |
+|  organization_types: 1=business, 2=fund, 3=branch, ... 17=unknown         |
+|  simplified_location_types: 1=continent, 2=country, 3=subdivision, ...    |
+|  location_types: Maps Wikidata QIDs to simplified types (36 types)        |
 +---------------------------------------------------------------------------+
-|  organizations table (SQLite)                                              |
-|  +-- id (INTEGER PRIMARY KEY)                                              |
-|  +-- name (TEXT)                                                           |
-|  +-- name_normalized (TEXT)                                                |
-|  +-- region (TEXT)                                                         |
-|  +-- entity_type (TEXT)                                                    |
-|  +-- source (TEXT: gleif|sec_edgar|companies_house|wikidata)               |
-|  +-- source_id (TEXT)                                                      |
-|  +-- from_date (TEXT) - founding/registration date (ISO format)            |
-|  +-- to_date (TEXT) - dissolution date (ISO format)                        |
-|  +-- canon_id (INTEGER) - ID of canonical record (v0.9.2)                  |
-|  +-- canon_size (INTEGER) - size of canonical group (v0.9.2)               |
-|  +-- record (JSON) - omitted in lite version                               |
-|  UNIQUE(source, source_id)                                                 |
+| ORGANIZATIONS TABLE                                                       |
 +---------------------------------------------------------------------------+
-|  organization_embeddings (sqlite-vec virtual table)                        |
-|  +-- org_id (INTEGER)                                                      |
-|  +-- embedding (FLOAT[768])                                                |
+|  +-- id (INTEGER PRIMARY KEY)                                             |
+|  +-- qid (INTEGER) - Wikidata QID as integer (e.g., 2283 for Q2283)       |
+|  +-- name (TEXT)                                                          |
+|  +-- name_normalized (TEXT)                                               |
+|  +-- source_id (INTEGER FK) -> source_types(id)                           |
+|  +-- source_identifier (TEXT) - LEI, CIK, Company Number, etc.            |
+|  +-- region_id (INTEGER FK) -> locations(id)                              |
+|  +-- entity_type_id (INTEGER FK) -> organization_types(id)                |
+|  +-- from_date (TEXT) - founding/registration date (ISO format)           |
+|  +-- to_date (TEXT) - dissolution date (ISO format)                       |
+|  +-- canon_id (INTEGER) - ID of canonical record                          |
+|  +-- canon_size (INTEGER) - size of canonical group                       |
+|  +-- record (JSON) - omitted in lite version                              |
+|  UNIQUE(source_identifier, source_id)                                     |
 +---------------------------------------------------------------------------+
-|  people table (SQLite) - v0.9.3                                            |
-|  +-- id (INTEGER PRIMARY KEY)                                              |
-|  +-- name (TEXT)                                                           |
-|  +-- name_normalized (TEXT)                                                |
-|  +-- source (TEXT: wikidata|sec_edgar|companies_house)                     |
-|  +-- source_id (TEXT)                                                      |
-|  +-- country (TEXT)                                                        |
-|  +-- person_type (TEXT: executive|politician|government|military|...)      |
-|  +-- known_for_role (TEXT) - e.g., "CEO", "President"                      |
-|  +-- known_for_org (TEXT) - e.g., "Apple Inc", "Tesla"                     |
-|  +-- known_for_org_id (INTEGER FK) - references organizations(id)          |
-|  +-- from_date (TEXT) - role start date (ISO format)                       |
-|  +-- to_date (TEXT) - role end date (ISO format)                           |
-|  +-- birth_date (TEXT) - date of birth (ISO format) (v0.9.2)               |
-|  +-- death_date (TEXT) - date of death (ISO format) (v0.9.2)               |
-|  +-- record (JSON) - omitted in lite version                               |
-|  UNIQUE(source, source_id, known_for_role, known_for_org)                  |
+| PEOPLE TABLE                                                              |
 +---------------------------------------------------------------------------+
-|  person_embeddings (sqlite-vec virtual table)                              |
-|  +-- person_id (INTEGER)                                                   |
-|  +-- embedding (FLOAT[768]) - combines name|role|org                       |
+|  +-- id (INTEGER PRIMARY KEY)                                             |
+|  +-- qid (INTEGER) - Wikidata QID as integer                              |
+|  +-- name (TEXT)                                                          |
+|  +-- name_normalized (TEXT)                                               |
+|  +-- source_id (INTEGER FK) -> source_types(id)                           |
+|  +-- source_identifier (TEXT) - QID, Owner CIK, Person number             |
+|  +-- country_id (INTEGER FK) -> locations(id)                             |
+|  +-- person_type_id (INTEGER FK) -> people_types(id)                      |
+|  +-- known_for_role_id (INTEGER FK) -> roles(id)                          |
+|  +-- known_for_org (TEXT) - e.g., "Apple Inc", "Tesla"                    |
+|  +-- known_for_org_id (INTEGER FK) -> organizations(id)                   |
+|  +-- from_date (TEXT) - role start date (ISO format)                      |
+|  +-- to_date (TEXT) - role end date (ISO format)                          |
+|  +-- birth_date (TEXT) - date of birth (ISO format)                       |
+|  +-- death_date (TEXT) - date of death (ISO format)                       |
+|  +-- record (JSON) - omitted in lite version                              |
+|  UNIQUE(source_identifier, source_id, known_for_role_id, known_for_org_id)|
 +---------------------------------------------------------------------------+
-|  qid_labels table (SQLite) - v0.9.2                                        |
-|  +-- qid (TEXT PRIMARY KEY) - Wikidata QID (e.g., "Q30")                   |
-|  +-- label (TEXT) - resolved label (e.g., "United States")                 |
-|  Used for caching QID -> label mappings during import                      |
+| ROLES TABLE (v0.9.4)                                                      |
 +---------------------------------------------------------------------------+
+|  +-- id (INTEGER PRIMARY KEY)                                             |
+|  +-- qid (INTEGER) - Wikidata QID (e.g., 484876 for CEO Q484876)          |
+|  +-- name (TEXT) - e.g., "Chief Executive Officer"                        |
+|  +-- name_normalized (TEXT)                                               |
+|  +-- source_id (INTEGER FK) -> source_types(id)                           |
+|  +-- source_identifier (TEXT)                                             |
+|  +-- canon_id (INTEGER) - ID of canonical role                            |
+|  +-- canon_size (INTEGER) - size of canonical group                       |
+|  UNIQUE(name_normalized, source_id)                                       |
++---------------------------------------------------------------------------+
+| LOCATIONS TABLE (v0.9.4)                                                  |
++---------------------------------------------------------------------------+
+|  +-- id (INTEGER PRIMARY KEY)                                             |
+|  +-- qid (INTEGER) - Wikidata QID (e.g., 30 for USA Q30)                  |
+|  +-- name (TEXT) - e.g., "United States", "California"                    |
+|  +-- name_normalized (TEXT)                                               |
+|  +-- source_id (INTEGER FK) -> source_types(id)                           |
+|  +-- source_identifier (TEXT) - e.g., "US", "CA"                          |
+|  +-- parent_ids (TEXT JSON) - parent location IDs in hierarchy            |
+|  +-- location_type_id (INTEGER FK) -> location_types(id)                  |
+|  +-- from_date (TEXT) - start date (for historic territories)             |
+|  +-- to_date (TEXT) - end date (for historic territories)                 |
+|  +-- canon_id (INTEGER)                                                   |
+|  UNIQUE(source_identifier, source_id)                                     |
++---------------------------------------------------------------------------+
+| EMBEDDING TABLES (sqlite-vec)                                             |
++---------------------------------------------------------------------------+
+|  organization_embeddings: org_id INTEGER, embedding FLOAT[768]            |
+|  organization_embeddings_scalar: org_id INTEGER, embedding INT8[768]      |
+|  person_embeddings: person_id INTEGER, embedding FLOAT[768]               |
+|  person_embeddings_scalar: person_id INTEGER, embedding INT8[768]         |
++---------------------------------------------------------------------------+
+| QID LABELS                                                                |
++---------------------------------------------------------------------------+
+|  qid_labels: qid (INTEGER PK), label (TEXT)                               |
+|  Note: QID stored as integer (Q prefix stripped) in v2                    |
++---------------------------------------------------------------------------+
+| HUMAN-READABLE VIEWS                                                      |
++---------------------------------------------------------------------------+
+|  organizations_view: JOINs orgs with source_types, locations, org_types   |
+|  people_view: JOINs people with source_types, locations, people_types     |
+|  roles_view: JOINs roles with source_types                                |
+|  locations_view: JOINs locations with source_types, location_types        |
++===========================================================================+
 ```
+
+**Scalar (int8) Embeddings:** The v2 schema includes `_scalar` embedding tables with int8 quantized vectors. This provides 75% storage reduction (768 bytes vs 3072 bytes per vector) with approximately 92% recall at top-100. Use `db backfill-scalar` to populate these tables.
 
 ### Entity Types
 
@@ -334,6 +391,9 @@ corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 100
 # Import only organizations
 corp-extractor db import-wikidata-dump --download --orgs --no-people --limit 100000
 
+# Import only locations (countries, cities, regions) - v0.9.4
+corp-extractor db import-wikidata-dump --dump dump.json.bz2 --locations --no-people --no-orgs
+
 # Use an existing dump file
 corp-extractor db import-wikidata-dump --dump /path/to/latest-all.json.bz2 --limit 50000
 
@@ -410,11 +470,45 @@ Records by source:
 
 ### Database Location
 
-Default: `~/.cache/corp-extractor/entities.db`
+Default: `~/.cache/corp-extractor/entities-v2.db` (v0.9.4+)
 
 Override with `--db` flag:
 ```bash
 corp-extractor db import-gleif --download --db /path/to/entities.db
+```
+
+### Migrate to v2 Schema *(v0.9.4)*
+
+To migrate an existing v1 database to the v2 normalized schema:
+
+```bash
+# Migrate to new database file (preserves original)
+corp-extractor db migrate-v2 entities.db entities-v2.db
+
+# Resume interrupted migration
+corp-extractor db migrate-v2 entities.db entities-v2.db --resume
+```
+
+The migration creates a new database with:
+- INTEGER FK columns replacing TEXT enum columns
+- New enum lookup tables (source_types, people_types, organization_types, location_types)
+- New roles and locations tables
+- QIDs stored as integers (Q prefix stripped)
+- Human-readable views with JOINs
+
+### Generate Scalar Embeddings *(v0.9.4)*
+
+After importing data, generate int8 scalar embeddings for 75% storage reduction:
+
+```bash
+# Quantize existing float32 embeddings to int8
+corp-extractor db backfill-scalar
+
+# Verbose output
+corp-extractor db backfill-scalar -v
+
+# Skip generating missing float32 (only quantize existing)
+corp-extractor db backfill-scalar --skip-generate
 ```
 
 ## Canonicalization
@@ -467,9 +561,11 @@ corp-extractor db canonicalize
 
 | Command | Description |
 |---------|-------------|
-| `db status` | Show database statistics |
+| `db status` | Show database statistics (incl. embedding counts) |
 | `db search QUERY` | Search for an organization |
 | `db search-people QUERY` | Search for a person *(v0.9.0)* |
+| `db search-roles QUERY` | Search for a role *(v0.9.4)* |
+| `db search-locations QUERY` | Search for a location *(v0.9.4)* |
 | `db canonicalize` | Link equivalent records across sources *(v0.9.2)* |
 
 ### Import Commands
@@ -484,7 +580,16 @@ corp-extractor db canonicalize
 | `db import-sec-officers` | Import SEC Form 4 officers/directors *(v0.9.3)* |
 | `db import-ch-officers` | Import Companies House officers (Prod195) *(v0.9.3)* |
 | `db import-wikidata-dump` | Import from Wikidata JSON dump (recommended) *(v0.9.1)* |
+| `db import-locations` | Import locations from pycountry *(v0.9.4)* |
 | `db gleif-info` | Show latest GLEIF file info |
+
+### Migration & Maintenance *(v0.9.4)*
+
+| Command | Description |
+|---------|-------------|
+| `db migrate-v2 SRC DST` | Migrate v1 database to v2 normalized schema |
+| `db backfill-scalar` | Generate int8 scalar embeddings (75% smaller) |
+| `db repair-embeddings` | Fix missing embeddings |
 
 ### Hub Commands
 

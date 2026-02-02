@@ -783,10 +783,10 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
         records.append(record)
 
         if len(records) >= batch_size:
-            # Embed and insert batch
+            # Embed and insert batch (both float32 and int8)
             names = [r.name for r in records]
-            embeddings = embedder.embed_batch(names)
-            database.insert_batch(records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+            database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
             count += len(records)
             click.echo(f"Imported {count} records...", err=True)
             records = []
@@ -794,8 +794,8 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
     # Final batch
     if records:
         names = [r.name for r in records]
-        embeddings = embedder.embed_batch(names)
-        database.insert_batch(records, embeddings)
+        embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+        database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
         count += len(records)
 
     click.echo(f"\nImported {count} GLEIF records successfully.", err=True)
@@ -853,8 +853,8 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
 
         if len(records) >= batch_size:
             names = [r.name for r in records]
-            embeddings = embedder.embed_batch(names)
-            database.insert_batch(records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+            database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
             count += len(records)
             click.echo(f"Imported {count} records...", err=True)
             records = []
@@ -862,8 +862,8 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
     # Final batch
     if records:
         names = [r.name for r in records]
-        embeddings = embedder.embed_batch(names)
-        database.insert_batch(records, embeddings)
+        embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+        database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
         count += len(records)
 
     click.echo(f"\nImported {count} SEC Edgar records successfully.", err=True)
@@ -955,8 +955,8 @@ def db_import_sec_officers(db_path: Optional[str], start_year: int, end_year: Op
 
         if len(records) >= batch_size:
             embedding_texts = [r.get_embedding_text() for r in records]
-            embeddings = embedder.embed_batch(embedding_texts)
-            database.insert_batch(records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(embedding_texts)
+            database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
             count += len(records)
             click.echo(f"Imported {count} records...", err=True)
             records = []
@@ -964,8 +964,8 @@ def db_import_sec_officers(db_path: Optional[str], start_year: int, end_year: Op
     # Final batch
     if records:
         embedding_texts = [r.get_embedding_text() for r in records]
-        embeddings = embedder.embed_batch(embedding_texts)
-        database.insert_batch(records, embeddings)
+        embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(embedding_texts)
+        database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
         count += len(records)
 
     if skip_existing and skipped_existing > 0:
@@ -1055,8 +1055,8 @@ def db_import_ch_officers(file_path: str, db_path: Optional[str], limit: Optiona
 
         if len(records) >= batch_size:
             embedding_texts = [r.get_embedding_text() for r in records]
-            embeddings = embedder.embed_batch(embedding_texts)
-            database.insert_batch(records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(embedding_texts)
+            database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
             count += len(records)
             click.echo(f"Imported {count} records...", err=True)
             records = []
@@ -1064,8 +1064,8 @@ def db_import_ch_officers(file_path: str, db_path: Optional[str], limit: Optiona
     # Final batch
     if records:
         embedding_texts = [r.get_embedding_text() for r in records]
-        embeddings = embedder.embed_batch(embedding_texts)
-        database.insert_batch(records, embeddings)
+        embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(embedding_texts)
+        database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
         count += len(records)
 
     if skip_existing and skipped_existing > 0:
@@ -1130,8 +1130,8 @@ def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size:
 
         if len(records) >= batch_size:
             names = [r.name for r in records]
-            embeddings = embedder.embed_batch(names)
-            database.insert_batch(records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+            database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
             count += len(records)
             click.echo(f"Imported {count} records...", err=True)
             records = []
@@ -1139,8 +1139,8 @@ def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size:
     # Final batch
     if records:
         names = [r.name for r in records]
-        embeddings = embedder.embed_batch(names)
-        database.insert_batch(records, embeddings)
+        embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+        database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
         count += len(records)
 
     click.echo(f"\nImported {count} Wikidata records successfully.", err=True)
@@ -1219,10 +1219,10 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
             records.append(record)
 
             if len(records) >= batch_size:
-                # Generate embeddings (just name for now, will re-embed after enrichment)
+                # Generate embeddings (both float32 and int8)
                 embedding_texts = [r.get_embedding_text() for r in records]
-                embeddings = embedder.embed_batch(embedding_texts)
-                database.insert_batch(records, embeddings)
+                embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(embedding_texts)
+                database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
                 count += len(records)
 
                 click.echo(f"  Imported {count} people...", err=True)
@@ -1231,8 +1231,8 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
         # Final batch
         if records:
             embedding_texts = [r.get_embedding_text() for r in records]
-            embeddings = embedder.embed_batch(embedding_texts)
-            database.insert_batch(records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(embedding_texts)
+            database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
             count += len(records)
 
         if skip_existing and skipped_existing > 0:
@@ -1333,6 +1333,7 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
 @click.option("--db", "db_path", type=click.Path(), help="Database path")
 @click.option("--people/--no-people", default=True, help="Import people (default: yes)")
 @click.option("--orgs/--no-orgs", default=True, help="Import organizations (default: yes)")
+@click.option("--locations/--no-locations", default=False, help="Import locations (default: no)")
 @click.option("--require-enwiki", is_flag=True, help="Only import orgs with English Wikipedia articles")
 @click.option("--resume", is_flag=True, help="Resume from last position in dump file (tracks entity index)")
 @click.option("--skip-updates", is_flag=True, help="Skip Q codes already in database (no updates)")
@@ -1347,6 +1348,7 @@ def db_import_wikidata_dump(
     db_path: Optional[str],
     people: bool,
     orgs: bool,
+    locations: bool,
     require_enwiki: bool,
     resume: bool,
     skip_updates: bool,
@@ -1355,7 +1357,7 @@ def db_import_wikidata_dump(
     verbose: bool,
 ):
     """
-    Import people and organizations from Wikidata JSON dump.
+    Import people, organizations, and locations from Wikidata JSON dump.
 
     This uses the full Wikidata JSON dump (~100GB compressed) to import
     all humans and organizations with English Wikipedia articles. This
@@ -1370,6 +1372,7 @@ def db_import_wikidata_dump(
     - Resumable with --resume (tracks position in dump file)
     - Skip existing with --skip-updates (loads existing Q codes)
     - People like Andy Burnham are captured via occupation (P106)
+    - Locations (countries, cities, regions) with parent hierarchy
 
     \b
     Resume options:
@@ -1383,6 +1386,7 @@ def db_import_wikidata_dump(
         corp-extractor db import-wikidata-dump --dump /path/to/dump.json.bz2 --limit 10000
         corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 50000
         corp-extractor db import-wikidata-dump --dump dump.json.bz2 --orgs --no-people
+        corp-extractor db import-wikidata-dump --dump dump.json.bz2 --locations --no-people --no-orgs  # Locations only
         corp-extractor db import-wikidata-dump --dump dump.json.bz2 --resume  # Resume interrupted import
         corp-extractor db import-wikidata-dump --dump dump.json.bz2 --skip-updates  # Skip existing Q codes
     """
@@ -1395,8 +1399,8 @@ def db_import_wikidata_dump(
     if not dump_path and not download:
         raise click.UsageError("Either --dump path or --download is required")
 
-    if not people and not orgs:
-        raise click.UsageError("Must import at least one of --people or --orgs")
+    if not people and not orgs and not locations:
+        raise click.UsageError("Must import at least one of --people, --orgs, or --locations")
 
     # Default database path
     if db_path is None:
@@ -1538,6 +1542,121 @@ def db_import_wikidata_dump(
             return len(new_labels)
         return 0
 
+    # ========================================
+    # Location-only import (separate pass)
+    # ========================================
+    if locations and not people and not orgs:
+        from .database.store import get_locations_database
+
+        click.echo("\n=== Location Import ===", err=True)
+        click.echo(f"  Locations: {'up to ' + str(limit) + ' records' if limit else 'unlimited'}", err=True)
+        if require_enwiki:
+            click.echo("    Filter: only locations with English Wikipedia articles", err=True)
+
+        # Initialize locations database
+        locations_database = get_locations_database(db_path=db_path_obj)
+
+        # Load existing location Q codes for skip_updates mode
+        existing_location_ids: set[str] = set()
+        if skip_updates:
+            existing_location_ids = locations_database.get_all_source_ids(source="wikidata")
+            click.echo(f"    Skip updates: {len(existing_location_ids):,} existing Q codes", err=True)
+
+        if start_index > 0:
+            click.echo(f"  Resuming from entity index {start_index:,}", err=True)
+
+        location_records: list = []
+        locations_count = 0
+        last_entity_index = start_index
+        last_entity_id = ""
+
+        def location_progress_callback(entity_index: int, entity_id: str, loc_count: int) -> None:
+            nonlocal last_entity_index, last_entity_id
+            last_entity_index = entity_index
+            last_entity_id = entity_id
+
+        def save_location_progress() -> None:
+            if progress:
+                progress.entity_index = last_entity_index
+                progress.last_entity_id = last_entity_id
+                progress.save()
+
+        def flush_location_batch() -> None:
+            nonlocal location_records, locations_count
+            if location_records:
+                inserted = locations_database.insert_batch(location_records)
+                locations_count += inserted
+                location_records = []
+
+        click.echo("Starting dump iteration...", err=True)
+        sys.stderr.flush()
+
+        try:
+            if limit:
+                # Use progress bar when we have limits
+                with click.progressbar(
+                    length=limit,
+                    label="Processing dump",
+                    show_percent=True,
+                    show_pos=True,
+                ) as pbar:
+                    for record in importer.import_locations(
+                        limit=limit,
+                        require_enwiki=require_enwiki,
+                        skip_ids=existing_location_ids if skip_updates else None,
+                        start_index=start_index,
+                        progress_callback=location_progress_callback,
+                    ):
+                        pbar.update(1)
+                        location_records.append(record)
+                        if len(location_records) >= batch_size:
+                            flush_location_batch()
+                            persist_new_labels()
+                            save_location_progress()
+            else:
+                # No limit - show counter updates
+                for record in importer.import_locations(
+                    limit=None,
+                    require_enwiki=require_enwiki,
+                    skip_ids=existing_location_ids if skip_updates else None,
+                    start_index=start_index,
+                    progress_callback=location_progress_callback,
+                ):
+                    location_records.append(record)
+                    if len(location_records) >= batch_size:
+                        flush_location_batch()
+                        persist_new_labels()
+                        save_location_progress()
+                        click.echo(f"\r  Progress: {locations_count:,} locations...", nl=False, err=True)
+                        sys.stderr.flush()
+
+                click.echo("", err=True)  # Newline after counter
+
+            # Final batches
+            flush_location_batch()
+            persist_new_labels()
+            save_location_progress()
+
+        finally:
+            # Ensure we save progress even on interrupt
+            save_location_progress()
+
+        click.echo(f"\nLocation import complete: {locations_count:,} locations", err=True)
+
+        # Final label resolution
+        click.echo("\n=== Final QID Label Resolution ===", err=True)
+        all_labels = importer.get_label_cache()
+        click.echo(f"  Total labels in cache: {len(all_labels):,}", err=True)
+
+        # Final stats
+        final_label_count = database.get_qid_labels_count()
+        click.echo(f"  Total labels in DB: {final_label_count:,}", err=True)
+
+        locations_database.close()
+        database.close()
+        click.echo("\nWikidata dump import complete!", err=True)
+        return
+
     # Combined import - single pass through the dump for both people and orgs
     click.echo("\n=== Combined Import (single dump pass) ===", err=True)
     sys.stderr.flush()  # Ensure output is visible immediately
@@ -1583,8 +1702,8 @@ def db_import_wikidata_dump(
         nonlocal people_records, people_count
         if people_records:
             embedding_texts = [r.get_embedding_text() for r in people_records]
-            embeddings = embedder.embed_batch(embedding_texts)
-            person_database.insert_batch(people_records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(embedding_texts)
+            person_database.insert_batch(people_records, embeddings, scalar_embeddings=scalar_embeddings)
             people_count += len(people_records)
             people_records = []
 
@@ -1592,8 +1711,8 @@ def db_import_wikidata_dump(
         nonlocal org_records, orgs_count
         if org_records and org_database:
             names = [r.name for r in org_records]
-            embeddings = embedder.embed_batch(names)
-            org_database.insert_batch(org_records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+            org_database.insert_batch(org_records, embeddings, scalar_embeddings=scalar_embeddings)
             orgs_count += len(org_records)
             org_records = []
 
@@ -1735,9 +1854,9 @@ def db_import_wikidata_dump(
 
         if orgs:
             org_database = get_database(db_path=db_path_obj)
-            org_updates = org_database.resolve_qid_labels(all_labels)
-            if org_updates:
-                click.echo(f"  Updated orgs: {org_updates:,} regions", err=True)
+            org_updates, org_deletes = org_database.resolve_qid_labels(all_labels)
+            if org_updates or org_deletes:
+                click.echo(f"  Orgs: {org_updates:,} updated, {org_deletes:,} duplicates deleted", err=True)
             org_database.close()
 
     # Final stats
@@ -1875,8 +1994,8 @@ def db_import_companies_house(
 
         if len(records) >= batch_size:
             names = [r.name for r in records]
-            embeddings = embedder.embed_batch(names)
-            database.insert_batch(records, embeddings)
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+            database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
             count += len(records)
             click.echo(f"Imported {count} records...", err=True)
             records = []
@@ -1884,8 +2003,8 @@ def db_import_companies_house(
     # Final batch
     if records:
         names = [r.name for r in records]
-        embeddings = embedder.embed_batch(names)
-        database.insert_batch(records, embeddings)
+        embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+        database.insert_batch(records, embeddings, scalar_embeddings=scalar_embeddings)
         count += len(records)
 
     click.echo(f"\nImported {count} Companies House records successfully.", err=True)
@@ -1904,6 +2023,7 @@ def db_status(db_path: Optional[str]):
         corp-extractor db status --db /path/to/entities.db
     """
     from .database import OrganizationDatabase
+    from .database.store import get_person_database
 
     try:
         database = OrganizationDatabase(db_path=db_path)
@@ -1920,6 +2040,27 @@ def db_status(db_path: Optional[str]):
         if missing_embeddings > 0:
             click.echo(f"\n⚠️  Missing embeddings: {missing_embeddings:,}")
             click.echo("   Run 'corp-extractor db repair-embeddings' to fix")
+
+        # Show embedding counts (float32 and scalar)
+        org_fp32 = database.get_float32_embedding_count()
+        org_int8 = database.get_scalar_embedding_count()
+        click.echo(f"\nOrganization embeddings:")
+        click.echo(f"  float32: {org_fp32:,}")
+        click.echo(f"  int8 (scalar): {org_int8:,}")
+        if org_fp32 > 0 and org_int8 < org_fp32:
+            click.echo(f"  ⚠️  {org_fp32 - org_int8:,} missing scalar embeddings")
+            click.echo("     Run 'corp-extractor db backfill-scalar' to generate")
+
+        # Person embeddings
+        person_db = get_person_database(db_path=db_path)
+        person_fp32 = person_db.get_float32_embedding_count()
+        person_int8 = person_db.get_scalar_embedding_count()
+        if person_fp32 > 0:
+            click.echo(f"\nPerson embeddings:")
+            click.echo(f"  float32: {person_fp32:,}")
+            click.echo(f"  int8 (scalar): {person_int8:,}")
+            if person_int8 < person_fp32:
+                click.echo(f"  ⚠️  {person_fp32 - person_int8:,} missing scalar embeddings")
 
         if stats.by_source:
             click.echo("\nRecords by source:")
@@ -2230,9 +2371,9 @@ def db_repair_embeddings(db_path: Optional[str], batch_size: int, source: Option
         names.append(name)
 
         if len(names) >= batch_size:
-            # Generate embeddings
-            embeddings = embedder.embed_batch(names)
-            database.insert_embeddings_batch(org_ids, embeddings)
+            # Generate both float32 and int8 embeddings
+            embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+            database.insert_both_embeddings_batch(org_ids, embeddings, scalar_embeddings)
             count += len(names)
             click.echo(f"Repaired {count:,} / {missing_count:,} embeddings...", err=True)
             org_ids = []
@@ -2240,12 +2381,159 @@ def db_repair_embeddings(db_path: Optional[str], batch_size: int, source: Option
 
     # Final batch
     if names:
-        embeddings = embedder.embed_batch(names)
-        database.insert_embeddings_batch(org_ids, embeddings)
+        embeddings, scalar_embeddings = embedder.embed_batch_and_quantize(names)
+        database.insert_both_embeddings_batch(org_ids, embeddings, scalar_embeddings)
         count += len(names)
 
     click.echo(f"\nRepaired {count:,} embeddings successfully.", err=True)
     database.close()
+
+
+@db_cmd.command("backfill-scalar")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--batch-size", type=int, default=10000, help="Batch size for processing (default: 10000)")
+@click.option("--embed-batch-size", type=int, default=64, help="Batch size for embedding generation (default: 64)")
+@click.option("--skip-generate", is_flag=True, help="Skip generating missing float32 embeddings (only quantize existing)")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_backfill_scalar(db_path: Optional[str], batch_size: int, embed_batch_size: int, skip_generate: bool, verbose: bool):
+    """
+    Backfill scalar (int8) embeddings for the entity database.
+
+    This command handles two cases:
+    1. Records with float32 but missing scalar → quantize existing
+    2. Records missing both embeddings → generate both from scratch
+
+    Scalar embeddings provide 75% storage reduction with ~92% recall at top-100.
+
+    \b
+    Examples:
+        corp-extractor db backfill-scalar
+        corp-extractor db backfill-scalar --batch-size 5000 -v
+        corp-extractor db backfill-scalar --skip-generate  # Only quantize existing
+    """
+    _configure_logging(verbose)
+    import numpy as np
+
+    from .database import OrganizationDatabase, CompanyEmbedder
+    from .database.store import get_person_database
+
+    embedder = None  # Lazy load only if needed
+
+    # Process organizations
+    org_db = OrganizationDatabase(db_path=db_path)
+
+    # Phase 1: Quantize existing float32 embeddings to scalar
+    org_quantized = 0
+    click.echo("Phase 1: Quantizing existing float32 embeddings to scalar...", err=True)
+    for batch_ids in org_db.get_missing_scalar_embedding_ids(batch_size=batch_size):
+        fp32_map = org_db.get_embeddings_by_ids(batch_ids)
+        if not fp32_map:
+            continue
+
+        ids = list(fp32_map.keys())
+        int8_embeddings = np.array([
+            np.clip(np.round(fp32_map[i] * 127), -127, 127).astype(np.int8)
+            for i in ids
+        ])
+
+        org_db.insert_scalar_embeddings_batch(ids, int8_embeddings)
+        org_quantized += len(ids)
+        click.echo(f"  Quantized {org_quantized:,} organization embeddings...", err=True)
+
+    click.echo(f"Quantized {org_quantized:,} organization embeddings.", err=True)
+
+    # Phase 2: Generate embeddings for records missing both
+    org_generated = 0
+    if not skip_generate:
+        click.echo("\nPhase 2: Generating embeddings for organizations missing both...", err=True)
+
+        for batch in org_db.get_missing_all_embedding_ids(batch_size=batch_size):
+            if not batch:
+                continue
+
+            # Lazy load embedder
+            if embedder is None:
+                click.echo("  Loading embedding model...", err=True)
+                embedder = CompanyEmbedder()
+
+            # Process in smaller batches for embedding generation
+            for i in range(0, len(batch), embed_batch_size):
+                sub_batch = batch[i:i + embed_batch_size]
+                ids = [item[0] for item in sub_batch]
+                names = [item[1] for item in sub_batch]
+
+                # Generate both float32 and int8 embeddings
+                fp32_batch, int8_batch = embedder.embed_batch_and_quantize(names, batch_size=embed_batch_size)
+
+                # Insert both
+                org_db.insert_both_embeddings_batch(ids, fp32_batch, int8_batch)
+                org_generated += len(ids)
+
+                if org_generated % 10000 == 0:
+                    click.echo(f"  Generated {org_generated:,} organization embeddings...", err=True)
+
+        click.echo(f"Generated {org_generated:,} organization embeddings.", err=True)
+
+    # Process people
+    person_db = get_person_database(db_path=db_path)
+
+    # Phase 1: Quantize existing float32 embeddings to scalar
+    person_quantized = 0
+    click.echo("\nPhase 1: Quantizing existing float32 person embeddings to scalar...", err=True)
+    for batch_ids in person_db.get_missing_scalar_embedding_ids(batch_size=batch_size):
+        fp32_map = person_db.get_embeddings_by_ids(batch_ids)
+        if not fp32_map:
+            continue
+
+        ids = list(fp32_map.keys())
+        int8_embeddings = np.array([
+            np.clip(np.round(fp32_map[i] * 127), -127, 127).astype(np.int8)
+            for i in ids
+        ])
+
+        person_db.insert_scalar_embeddings_batch(ids, int8_embeddings)
+        person_quantized += len(ids)
+        click.echo(f"  Quantized {person_quantized:,} person embeddings...", err=True)
+
+    click.echo(f"Quantized {person_quantized:,} person embeddings.", err=True)
+
+    # Phase 2: Generate embeddings for records missing both
+    person_generated = 0
+    if not skip_generate:
+        click.echo("\nPhase 2: Generating embeddings for people missing both...", err=True)
+
+        for batch in person_db.get_missing_all_embedding_ids(batch_size=batch_size):
+            if not batch:
+                continue
+
+            # Lazy load embedder
+            if embedder is None:
+                click.echo("  Loading embedding model...", err=True)
+                embedder = CompanyEmbedder()
+
+            # Process in smaller batches for embedding generation
+            for i in range(0, len(batch), embed_batch_size):
+                sub_batch = batch[i:i + embed_batch_size]
+                ids = [item[0] for item in sub_batch]
+                names = [item[1] for item in sub_batch]
+
+                # Generate both float32 and int8 embeddings
+                fp32_batch, int8_batch = embedder.embed_batch_and_quantize(names, batch_size=embed_batch_size)
+
+                # Insert both
+                person_db.insert_both_embeddings_batch(ids, fp32_batch, int8_batch)
+                person_generated += len(ids)
+
+                if person_generated % 10000 == 0:
+                    click.echo(f"  Generated {person_generated:,} person embeddings...", err=True)
+
+        click.echo(f"Generated {person_generated:,} person embeddings.", err=True)
+
+    # Summary
+    click.echo(f"\nSummary:", err=True)
+    click.echo(f"  Organizations: {org_quantized:,} quantized, {org_generated:,} generated", err=True)
+    click.echo(f"  People: {person_quantized:,} quantized, {person_generated:,} generated", err=True)
+    click.echo(f"  Total: {org_quantized + org_generated + person_quantized + person_generated:,} embeddings processed", err=True)
 
 
 @db_cmd.command("migrate")
@@ -2307,6 +2595,145 @@ def db_migrate(db_path: str, rename_file: bool, yes: bool, verbose: bool):
 
     except Exception as e:
         raise click.ClickException(f"Migration failed: {e}")
+
+
+@db_cmd.command("migrate-v2")
+@click.argument("source_db", type=click.Path(exists=True))
+@click.argument("target_db", type=click.Path())
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+@click.option("--resume", is_flag=True, help="Resume from last completed step")
+def db_migrate_v2(source_db: str, target_db: str, verbose: bool, resume: bool):
+    """
+    Migrate database from v1 schema to v2 normalized schema.
+
+    Creates a NEW database file with the v2 normalized schema.
+    The original database is preserved unchanged.
+
+    Use --resume to continue a migration that was interrupted.
+
+    \b
+    V2 changes:
+    - TEXT enum fields replaced with INTEGER foreign keys
+    - New enum lookup tables (source_types, people_types, etc.)
+    - New roles and locations tables
+    - QIDs stored as integers (Q prefix stripped)
+    - Human-readable views for queries
+
+    \b
+    Examples:
+        corp-extractor db migrate-v2 entities.db entities-v2.db
+        corp-extractor db migrate-v2 entities.db entities-v2.db --resume
+        corp-extractor db migrate-v2 ~/.cache/corp-extractor/entities.db ./entities-v2.db -v
+    """
+    _configure_logging(verbose)
+
+    from pathlib import Path
+    from .database.migrate_v2 import migrate_database
+
+    source_path = Path(source_db)
+    target_path = Path(target_db)
+
+    if target_path.exists() and not resume:
+        raise click.ClickException(
+            f"Target database already exists: {target_path}\n"
+            "Use --resume to continue an interrupted migration."
+        )
+
+    if resume:
+        click.echo(f"Resuming migration from {source_path} to {target_path}...")
+    else:
+        click.echo(f"Migrating {source_path} to {target_path}...")
+
+    try:
+        stats = migrate_database(source_path, target_path, resume=resume)
+
+        click.echo("\nMigration complete:")
+        for key, value in stats.items():
+            click.echo(f"  {key}: {value:,}")
+
+    except Exception as e:
+        raise click.ClickException(f"Migration failed: {e}")
+
+
+@db_cmd.command("search-roles")
+@click.argument("query")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--limit", default=10, help="Maximum results to return")
+def db_search_roles(query: str, db_path: Optional[str], limit: int):
+    """
+    Search for roles by name.
+
+    \b
+    Examples:
+        corp-extractor db search-roles "CEO"
+        corp-extractor db search-roles "Chief Executive" --limit 5
+    """
+    from .database.store import get_roles_database
+
+    roles_db = get_roles_database(db_path)
+    results = roles_db.search(query, top_k=limit)
+
+    if not results:
+        click.echo(f"No roles found matching '{query}'")
+        return
+
+    click.echo(f"Found {len(results)} role(s) matching '{query}':")
+    for role_id, name, score in results:
+        click.echo(f"  [{role_id}] {name} (score: {score:.2f})")
+
+
+@db_cmd.command("search-locations")
+@click.argument("query")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("--type", "location_type", type=str, help="Filter by simplified type (country, city, etc.)")
+@click.option("--limit", default=10, help="Maximum results to return")
+def db_search_locations(query: str, db_path: Optional[str], location_type: Optional[str], limit: int):
+    """
+    Search for locations by name.
+
+    \b
+    Examples:
+        corp-extractor db search-locations "California"
+        corp-extractor db search-locations "Paris" --type city
+        corp-extractor db search-locations "Germany" --type country
+    """
+    from .database.store import get_locations_database
+
+    locations_db = get_locations_database(db_path)
+    results = locations_db.search(query, top_k=limit, simplified_type=location_type)
+
+    if not results:
+        click.echo(f"No locations found matching '{query}'")
+        return
+
+    click.echo(f"Found {len(results)} location(s) matching '{query}':")
+    for loc_id, name, score in results:
+        click.echo(f"  [{loc_id}] {name} (score: {score:.2f})")
+
+
+@db_cmd.command("import-locations")
+@click.option("--from-pycountry", is_flag=True, help="Import countries from pycountry")
+@click.option("--db", "db_path", type=click.Path(), help="Database path")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose output")
+def db_import_locations(from_pycountry: bool, db_path: Optional[str], verbose: bool):
+    """
+    Import locations into the database.
+
+    \b
+    Examples:
+        corp-extractor db import-locations --from-pycountry
+    """
+    _configure_logging(verbose)
+
+    if not from_pycountry:
+        raise click.UsageError("Must specify --from-pycountry")
+
+    from .database.store import get_locations_database
+
+    locations_db = get_locations_database(db_path)
+    count = locations_db.import_from_pycountry()
+
+    click.echo(f"Imported {count:,} locations from pycountry")
 
 
 # =============================================================================

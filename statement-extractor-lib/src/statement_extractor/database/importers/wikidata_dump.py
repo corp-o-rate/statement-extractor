@@ -32,10 +32,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
-from ..models import CompanyRecord, EntityType, PersonRecord, PersonType
+from ..models import CompanyRecord, EntityType, LocationRecord, PersonRecord, PersonType, SimplifiedLocationType
 
-# Type alias for records that can be either people or orgs
-ImportRecord = PersonRecord | CompanyRecord
+# Type alias for records that can be either people or orgs or locations
+ImportRecord = PersonRecord | CompanyRecord | LocationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +455,111 @@ ORG_TYPE_TO_ENTITY_TYPE: dict[str, EntityType] = {
     "Q2994867": EntityType.RELIGIOUS,    # religious community
     "Q34651": EntityType.RELIGIOUS,      # church (building as org)
     "Q44613": EntityType.RELIGIOUS,      # monastery
+}
+
+
+# =============================================================================
+# LOCATION TYPE MAPPING (P31 - instance of)
+# Maps P31 QID -> (location_type_name, simplified_type)
+# =============================================================================
+
+LOCATION_TYPE_QIDS: dict[str, tuple[str, SimplifiedLocationType]] = {
+    # ==========================================================================
+    # IMPORTANT: The type names (first element of tuple) MUST match exactly
+    # the names in database/seed_data.py LOCATION_TYPES. Any new types need
+    # to be added there first, or use existing type names.
+    # ==========================================================================
+
+    # Continents (maps to: continent)
+    "Q5107": ("continent", SimplifiedLocationType.CONTINENT),
+
+    # Countries / Sovereign states (maps to: country, sovereign_state, dependent_territory)
+    "Q6256": ("country", SimplifiedLocationType.COUNTRY),
+    "Q3624078": ("sovereign_state", SimplifiedLocationType.COUNTRY),
+    "Q161243": ("dependent_territory", SimplifiedLocationType.COUNTRY),
+    # Additional country-like types -> map to country
+    "Q15634554": ("country", SimplifiedLocationType.COUNTRY),  # state with limited recognition
+    "Q1763527": ("country", SimplifiedLocationType.COUNTRY),   # constituent country
+    "Q46395": ("dependent_territory", SimplifiedLocationType.COUNTRY),  # british overseas territory
+
+    # Subdivisions (states/provinces) - US
+    "Q35657": ("us_state", SimplifiedLocationType.SUBDIVISION),
+    "Q47168": ("us_county", SimplifiedLocationType.SUBDIVISION),
+
+    # Subdivisions - Country-specific
+    "Q5852411": ("state_of_australia", SimplifiedLocationType.SUBDIVISION),
+    "Q1221156": ("state_of_germany", SimplifiedLocationType.SUBDIVISION),
+    "Q131541": ("state_of_india", SimplifiedLocationType.SUBDIVISION),
+    "Q6465": ("department_france", SimplifiedLocationType.SUBDIVISION),
+    "Q50337": ("prefecture_japan", SimplifiedLocationType.SUBDIVISION),
+    "Q23058": ("canton_switzerland", SimplifiedLocationType.SUBDIVISION),
+    "Q10742": ("autonomous_community_spain", SimplifiedLocationType.SUBDIVISION),
+    "Q150093": ("voivodeship_poland", SimplifiedLocationType.SUBDIVISION),
+    "Q835714": ("oblast_russia", SimplifiedLocationType.SUBDIVISION),
+
+    # Subdivisions - Generic (map to existing types)
+    "Q34876": ("province", SimplifiedLocationType.SUBDIVISION),
+    "Q82794": ("region", SimplifiedLocationType.SUBDIVISION),
+    "Q28575": ("county", SimplifiedLocationType.SUBDIVISION),
+    # Additional generic subdivision types -> map to region/province/county
+    "Q10864048": ("region", SimplifiedLocationType.SUBDIVISION),    # first-level admin
+    "Q11828004": ("county", SimplifiedLocationType.SUBDIVISION),    # second-level admin
+    "Q12483": ("region", SimplifiedLocationType.SUBDIVISION),       # territory
+    "Q515716": ("region", SimplifiedLocationType.SUBDIVISION),      # region of Italy
+    "Q1132541": ("county", SimplifiedLocationType.SUBDIVISION),     # county of Sweden
+    "Q1780990": ("region", SimplifiedLocationType.SUBDIVISION),     # council area Scotland
+    "Q211690": ("county", SimplifiedLocationType.SUBDIVISION),      # ceremonial county England
+    "Q180673": ("county", SimplifiedLocationType.SUBDIVISION),      # ceremonial county
+    "Q1136601": ("county", SimplifiedLocationType.SUBDIVISION),     # metropolitan county
+    "Q21451686": ("region", SimplifiedLocationType.SUBDIVISION),    # region of England
+    "Q1006876": ("region", SimplifiedLocationType.SUBDIVISION),     # unitary authority Wales
+    "Q179872": ("province", SimplifiedLocationType.SUBDIVISION),    # province of Canada
+    "Q1352230": ("region", SimplifiedLocationType.SUBDIVISION),     # territory of Canada
+    "Q13360155": ("province", SimplifiedLocationType.SUBDIVISION),  # province of China
+    "Q842112": ("region", SimplifiedLocationType.SUBDIVISION),      # autonomous region China
+    "Q1348006": ("municipality", SimplifiedLocationType.CITY),      # municipality of China (city-level)
+    "Q11774097": ("city", SimplifiedLocationType.CITY),             # prefecture-level city
+
+    # Cities/Towns/Municipalities (maps to: city, big_city, capital, town, municipality, village, hamlet)
+    "Q515": ("city", SimplifiedLocationType.CITY),
+    "Q1549591": ("big_city", SimplifiedLocationType.CITY),
+    "Q5119": ("capital", SimplifiedLocationType.CITY),
+    "Q3957": ("town", SimplifiedLocationType.CITY),
+    "Q15284": ("municipality", SimplifiedLocationType.CITY),
+    "Q532": ("village", SimplifiedLocationType.CITY),
+    "Q5084": ("hamlet", SimplifiedLocationType.CITY),
+    # Country-specific municipalities
+    "Q484170": ("commune_france", SimplifiedLocationType.CITY),
+    "Q262166": ("municipality_germany", SimplifiedLocationType.CITY),
+    "Q1054813": ("municipality_japan", SimplifiedLocationType.CITY),
+    # Additional city types -> map to city/town/village
+    "Q7930989": ("city", SimplifiedLocationType.CITY),         # city of US
+    "Q200250": ("big_city", SimplifiedLocationType.CITY),      # metropolis
+    "Q2264924": ("big_city", SimplifiedLocationType.CITY),     # conurbation
+    "Q174844": ("big_city", SimplifiedLocationType.CITY),      # megacity
+    "Q22865": ("city", SimplifiedLocationType.CITY),           # independent city
+    "Q5153359": ("municipality", SimplifiedLocationType.CITY), # commune (generic)
+    "Q4286337": ("village", SimplifiedLocationType.CITY),      # locality
+    "Q486972": ("village", SimplifiedLocationType.CITY),       # human settlement
+    "Q95993392": ("city", SimplifiedLocationType.CITY),        # city or town
+
+    # Districts (maps to: district, borough, neighborhood, ward)
+    "Q149621": ("district", SimplifiedLocationType.DISTRICT),
+    "Q5765681": ("borough", SimplifiedLocationType.DISTRICT),
+    "Q123705": ("neighborhood", SimplifiedLocationType.DISTRICT),
+    "Q12813115": ("ward", SimplifiedLocationType.DISTRICT),
+    # Additional district types -> map to district/borough
+    "Q2198484": ("borough", SimplifiedLocationType.DISTRICT),  # borough of London
+    "Q667509": ("district", SimplifiedLocationType.DISTRICT),  # arrondissement
+    "Q2100709": ("district", SimplifiedLocationType.DISTRICT), # city district
+
+    # Historic (maps to: former_country, ancient_civilization, historic_territory)
+    "Q3024240": ("former_country", SimplifiedLocationType.HISTORIC),
+    "Q28171280": ("ancient_civilization", SimplifiedLocationType.HISTORIC),
+    "Q1620908": ("historic_territory", SimplifiedLocationType.HISTORIC),
+    # Additional historic types
+    "Q19953632": ("historic_territory", SimplifiedLocationType.HISTORIC),  # historical region
+    "Q1307214": ("historic_territory", SimplifiedLocationType.HISTORIC),   # historical admin region
 }
 
 
@@ -1250,6 +1355,27 @@ class WikidataDumpImporter:
                     return ORG_TYPE_TO_ENTITY_TYPE[qid]
         return None
 
+    def _get_location_type(self, entity: dict) -> Optional[tuple[str, SimplifiedLocationType]]:
+        """
+        Check if entity has P31 (instance of) matching a location type.
+
+        Args:
+            entity: Parsed Wikidata entity dictionary
+
+        Returns:
+            Tuple of (location_type_name, SimplifiedLocationType) if entity is a location, None otherwise
+        """
+        claims = entity.get("claims", {})
+        for claim in claims.get("P31", []):
+            mainsnak = claim.get("mainsnak", {})
+            datavalue = mainsnak.get("datavalue", {})
+            value = datavalue.get("value", {})
+            if isinstance(value, dict):
+                qid = value.get("id", "")
+                if qid in LOCATION_TYPE_QIDS:
+                    return LOCATION_TYPE_QIDS[qid]
+        return None
+
     def _get_claim_values(self, entity: dict, prop: str) -> list[str]:
         """
         Get all QID values for a property (e.g., P39, P106).
@@ -1545,6 +1671,13 @@ class WikidataDumpImporter:
         # Get best role/org/dates from positions
         role_qid, _, org_qid, start_date, end_date, extra_context = self._get_best_role_org(positions)
 
+        # Fallback: if no org from positions, check top-level P108 (employer)
+        if not org_qid:
+            employers = self._get_claim_values(entity, "P108")
+            if employers:
+                org_qid = employers[0]
+                logger.debug(f"Using top-level P108 employer for {qid}: {org_qid}")
+
         # Get country (P27 - country of citizenship)
         countries = self._get_claim_values(entity, "P27")
         country_qid = countries[0] if countries else ""
@@ -1662,6 +1795,204 @@ class WikidataDumpImporter:
                 "country_qid": country_qid,
             },
         )
+
+    def _process_location_entity(
+        self,
+        entity: dict,
+        require_enwiki: bool = False,
+    ) -> Optional[LocationRecord]:
+        """
+        Process a single entity, return LocationRecord if it's a location.
+
+        Args:
+            entity: Parsed Wikidata entity dictionary
+            require_enwiki: If True, only include locations with English Wikipedia articles
+
+        Returns:
+            LocationRecord if entity qualifies, None otherwise
+        """
+        # Must be an item (not property)
+        if entity.get("type") != "item":
+            return None
+
+        # Get location type from P31
+        location_type_info = self._get_location_type(entity)
+        if location_type_info is None:
+            return None
+
+        location_type_name, simplified_type = location_type_info
+
+        # Optionally require English Wikipedia article
+        if require_enwiki:
+            sitelinks = entity.get("sitelinks", {})
+            if "enwiki" not in sitelinks:
+                return None
+
+        # Extract location data
+        return self._extract_location_data(entity, location_type_name, simplified_type)
+
+    def _extract_location_data(
+        self,
+        entity: dict,
+        location_type: str,
+        simplified_type: SimplifiedLocationType,
+    ) -> Optional[LocationRecord]:
+        """
+        Extract LocationRecord from entity dict.
+
+        Args:
+            entity: Parsed Wikidata entity dictionary
+            location_type: Detailed location type name
+            simplified_type: Simplified location type enum
+
+        Returns:
+            LocationRecord or None if essential data is missing
+        """
+        qid = entity.get("id", "")
+        labels = entity.get("labels", {})
+        label = labels.get("en", {}).get("value", "")
+
+        if not label or not qid:
+            return None
+
+        claims = entity.get("claims", {})
+
+        # Get parent locations from P131 (located in administrative territorial entity)
+        # This gives us the full hierarchy (city -> state -> country)
+        parent_qids = self._get_claim_values(entity, "P131")
+
+        # Get country from P17 as fallback/additional parent
+        country_qids = self._get_claim_values(entity, "P17")
+
+        # Get coordinates from P625 (coordinate location)
+        coordinates = self._get_coordinates(claims)
+
+        # Get description
+        descriptions = entity.get("descriptions", {})
+        description = descriptions.get("en", {}).get("value", "")
+
+        # Get inception date (P571) - when location was established
+        inception = self._get_time_claim(claims, "P571")
+
+        # Get dissolution date (P576) - when location ceased to exist
+        dissolution = self._get_time_claim(claims, "P576")
+
+        # Parse QID to integer
+        qid_int = int(qid[1:]) if qid.startswith("Q") and qid[1:].isdigit() else None
+
+        # Build record with extra details
+        record_data = {
+            "wikidata_id": qid,
+            "label": label,
+            "description": description,
+            "parent_qids": parent_qids,
+            "country_qids": country_qids,
+        }
+        if coordinates:
+            record_data["coordinates"] = coordinates
+
+        return LocationRecord(
+            name=label,
+            source="wikidata",
+            source_id=qid,
+            qid=qid_int,
+            location_type=location_type,
+            simplified_type=simplified_type,
+            parent_ids=[],  # Will be resolved later by looking up parent QIDs in the database
+            from_date=inception,
+            to_date=dissolution,
+            record=record_data,
+        )
+
+    def _get_coordinates(self, claims: dict) -> Optional[dict]:
+        """
+        Get coordinates from P625 (coordinate location).
+
+        Args:
+            claims: Claims dictionary
+
+        Returns:
+            Dict with lat/lon or None
+        """
+        for claim in claims.get("P625", []):
+            mainsnak = claim.get("mainsnak", {})
+            datavalue = mainsnak.get("datavalue", {})
+            value = datavalue.get("value", {})
+            if isinstance(value, dict):
+                lat = value.get("latitude")
+                lon = value.get("longitude")
+                if lat is not None and lon is not None:
+                    return {"lat": lat, "lon": lon}
+        return None
+
+    def import_locations(
+        self,
+        dump_path: Optional[Path] = None,
+        limit: Optional[int] = None,
+        require_enwiki: bool = False,
+        skip_ids: Optional[set[str]] = None,
+        start_index: int = 0,
+        progress_callback: Optional[Callable[[int, str, int], None]] = None,
+    ) -> Iterator[LocationRecord]:
+        """
+        Stream through dump, yielding locations (geopolitical entities).
+
+        This method filters the dump for:
+        - Items with type "item"
+        - Has P31 (instance of) matching a location type
+        - Optionally: Has English Wikipedia article (enwiki sitelink)
+
+        Args:
+            dump_path: Path to dump file (uses self._dump_path if not provided)
+            limit: Optional maximum number of records to return
+            require_enwiki: If True, only include locations with English Wikipedia articles
+            skip_ids: Optional set of source_ids (Q codes) to skip
+            start_index: Entity index to start from (for resume support)
+            progress_callback: Optional callback(entity_index, entity_id, records_yielded)
+
+        Yields:
+            LocationRecord for each qualifying location
+        """
+        path = dump_path or self._dump_path
+        count = 0
+        skipped_existing = 0
+        current_entity_index = start_index
+
+        logger.info("Starting location import from Wikidata dump...")
+        if start_index > 0:
+            logger.info(f"Resuming from entity index {start_index:,}")
+        if not require_enwiki:
+            logger.info("Importing ALL locations (no enwiki filter)")
+        if skip_ids:
+            logger.info(f"Skipping {len(skip_ids):,} existing Q codes")
+
+        def track_entity(entity_index: int, entity_id: str) -> None:
+            nonlocal current_entity_index
+            current_entity_index = entity_index
+
+        for entity in self.iter_entities(path, start_index=start_index, progress_callback=track_entity):
+            if limit and count >= limit:
+                break
+
+            # Check skip_ids early, before full processing
+            entity_id = entity.get("id", "")
+            if skip_ids and entity_id in skip_ids:
+                skipped_existing += 1
+                continue
+
+            record = self._process_location_entity(entity, require_enwiki=require_enwiki)
+            if record:
+                count += 1
+                if count % 10_000 == 0:
+                    logger.info(f"Yielded {count:,} location records (skipped {skipped_existing:,})...")
+
+                # Call progress callback with current position
+                if progress_callback:
+                    progress_callback(current_entity_index, entity_id, count)
+
+                yield record
+
+        logger.info(f"Location import complete: {count:,} records (skipped {skipped_existing:,})")
 
     def _get_string_claim(self, claims: dict, prop: str) -> str:
         """

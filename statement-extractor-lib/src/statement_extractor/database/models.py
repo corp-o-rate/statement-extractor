@@ -1,5 +1,11 @@
 """
 Pydantic models for organization/entity database records.
+
+v2 Schema Changes:
+- Added SimplifiedLocationType enum for location categorization
+- Added SourceTypeEnum for normalized source references
+- Added RoleRecord and LocationRecord models for new tables
+- Models support both TEXT-based v1 and FK-based v2 schemas
 """
 
 from enum import Enum
@@ -8,7 +14,36 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SourceType = Literal["gleif", "sec_edgar", "companies_house", "wikipedia"]
+# Legacy source types for backward compatibility with v1 schema
+SourceType = Literal["gleif", "sec_edgar", "companies_house", "wikipedia", "wikidata"]
+
+
+class SourceTypeEnum(str, Enum):
+    """
+    Data source enumeration for v2 normalized schema.
+
+    Used as foreign key reference to source_types table.
+    """
+    GLEIF = "gleif"               # id=1: GLEIF LEI data
+    SEC_EDGAR = "sec_edgar"       # id=2: SEC EDGAR filings
+    COMPANIES_HOUSE = "companies_house"  # id=3: UK Companies House
+    WIKIDATA = "wikidata"         # id=4: Wikidata/Wikipedia
+
+
+class SimplifiedLocationType(str, Enum):
+    """
+    Simplified location type categories for querying.
+
+    Maps detailed Wikidata location types to canonical categories.
+    Used for filtering searches (e.g., "find all cities").
+    """
+    CONTINENT = "continent"       # id=1: Continents (Q5107)
+    COUNTRY = "country"           # id=2: Countries and sovereign states
+    SUBDIVISION = "subdivision"   # id=3: States, provinces, regions, counties
+    CITY = "city"                 # id=4: Cities, towns, municipalities, communes
+    DISTRICT = "district"         # id=5: Districts, boroughs, neighborhoods
+    HISTORIC = "historic"         # id=6: Former countries, historic territories
+    OTHER = "other"               # id=7: Unclassified locations
 
 
 class EntityType(str, Enum):
@@ -105,7 +140,96 @@ class CompanyRecord(BaseModel):
         }
 
 
+# Person sources (same as org sources but without GLEIF)
 PersonSourceType = Literal["wikidata", "sec_edgar", "companies_house"]
+
+
+# =============================================================================
+# ROLE RECORD MODEL (v2)
+# =============================================================================
+
+
+class RoleRecord(BaseModel):
+    """
+    A role/job title record for the roles table.
+
+    Used for normalizing job titles across sources and enabling role-based search.
+    Supports canonicalization to group equivalent roles (e.g., CEO, Chief Executive).
+    """
+    name: str = Field(..., description="Role/title name (e.g., 'Chief Executive Officer')")
+    source: SourceType = Field(default="wikidata", description="Data source")
+    source_id: Optional[str] = Field(default=None, description="Source identifier (e.g., Q484876 for CEO)")
+    qid: Optional[int] = Field(default=None, description="Wikidata QID as integer (e.g., 484876)")
+    record: dict[str, Any] = Field(default_factory=dict, description="Original record from source")
+
+    @property
+    def canonical_id(self) -> str:
+        """Generate canonical ID in format source:source_id."""
+        if self.source_id:
+            return f"{self.source}:{self.source_id}"
+        return f"{self.source}:{self.name}"
+
+    def model_dump_for_db(self) -> dict[str, Any]:
+        """Convert to dict suitable for database storage."""
+        return {
+            "name": self.name,
+            "source": self.source,
+            "source_id": self.source_id or "",
+            "qid": self.qid,
+            "record": self.record,
+        }
+
+
+# =============================================================================
+# LOCATION RECORD MODEL (v2)
+# =============================================================================
+
+
+class LocationRecord(BaseModel):
+    """
+    A location/place record for the locations table.
+
+    Used for storing geopolitical entities (countries, states, cities) with
+    hierarchical relationships and type classification.
+    """
+    name: str = Field(..., description="Location name (e.g., 'United States', 'California')")
+    source: SourceType = Field(default="wikidata", description="Data source")
+    source_id: Optional[str] = Field(default=None, description="Source identifier (e.g., 'US', 'Q30')")
+    qid: Optional[int] = Field(default=None, description="Wikidata QID as integer (e.g., 30 for USA)")
+    location_type: str = Field(default="country", description="Detailed location type (e.g., 'us_state', 'city')")
+    simplified_type: SimplifiedLocationType = Field(
+        default=SimplifiedLocationType.COUNTRY,
+        description="Simplified type for filtering"
+    )
+    parent_ids: list[int] = Field(
+        default_factory=list,
+        description="Parent location IDs in hierarchy (e.g., [country_id, state_id])"
+    )
+    from_date: Optional[str] = Field(default=None, description="Start date (ISO format YYYY-MM-DD)")
+    to_date: Optional[str] = Field(default=None, description="End date (ISO format YYYY-MM-DD)")
+    record: dict[str, Any] = Field(default_factory=dict, description="Original record from source")
+
+    @property
+    def canonical_id(self) -> str:
+        """Generate canonical ID in format source:source_id."""
+        if self.source_id:
+            return f"{self.source}:{self.source_id}"
+        return f"{self.source}:{self.name}"
+
+    def model_dump_for_db(self) -> dict[str, Any]:
+        """Convert to dict suitable for database storage."""
+        import json
+        return {
+            "name": self.name,
+            "source": self.source,
+            "source_id": self.source_id or "",
+            "qid": self.qid,
+            "location_type": self.location_type,
+            "parent_ids": json.dumps(self.parent_ids),
+            "from_date": self.from_date or "",
+            "to_date": self.to_date or "",
+            "record": self.record,
+        }
 
 
 class PersonRecord(BaseModel):

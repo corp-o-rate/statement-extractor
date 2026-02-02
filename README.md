@@ -1,17 +1,20 @@
 # Statement Extractor
 
-A web demo for the T5-Gemma 2 statement extraction model from [corp-o-rate.com](https://corp-o-rate.com).
+A Python library and web demo for extracting relationship information about people and organizations from complex text. Runs entirely on your hardware (RTX 4090+, Apple M1 16GB+) with no external API dependencies.
+
+Uses fine-tuned [T5-Gemma 2](https://blog.google/technology/developers/t5gemma-2/) for statement splitting and coreference resolution (trained on 70,000+ pages), plus [GLiNER2](https://github.com/urchade/GLiNER) for entity extraction. Includes a database of 10M+ organizations and 40M+ people with quantized embeddings for fast entity qualification (~100GB disk for all models and data).
 
 ## Features
 
 - **Statement Extraction**: Transform unstructured text into structured subject-predicate-object triples
 - **5-Stage Pipeline** *(v0.8.0)*: Plugin-based architecture with entity qualification, labeling, and taxonomy classification
-- **Entity Database** *(v0.6.0)*: Embedding-based entity matching against GLEIF, SEC Edgar, Companies House, and Wikidata (~8M+ organizations)
+- **Entity Database** *(v0.9.4)*: 10M+ organizations and 40M+ people with int8 quantized embeddings (75% smaller)
+- **Database v2 Schema** *(v0.9.4)*: Normalized schema with roles, locations, and efficient INTEGER foreign keys
 - **EntityType Classification** *(v0.8.0)*: Classify organizations as business, nonprofit, government, educational, etc.
 - **Entity Recognition**: Automatic identification of entity types (ORG, PERSON, GPE, EVENT, etc.)
 - **Relationship Graph**: Interactive D3.js visualization of entity relationships
 - **Coreference Resolution**: Pronouns are resolved to their referenced entities
-- **Multiple Usage Options**: API, Python CLI, TypeScript, or run locally
+- **Local Execution**: No external services required—runs entirely on your hardware
 
 ## Quick Start
 
@@ -121,7 +124,7 @@ corp-extractor db search-people "Tim Cook"
 corp-extractor db download
 ```
 
-See [COMPANY_DB.md](COMPANY_DB.md) for complete build and publish instructions.
+See [ENTITY_DATABASE.md](statement-extractor-lib/ENTITY_DATABASE.md) for complete build and publish instructions.
 
 ### Direct Model Access
 

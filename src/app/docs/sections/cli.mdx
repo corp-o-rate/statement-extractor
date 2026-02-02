@@ -489,9 +489,9 @@ corp-extractor document process article.txt -o triples
 
 <span id="db-commands" />
 
-<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">UPDATED in v0.9.1</span>
+<span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">UPDATED in v0.9.4</span>
 
-The `db` command group manages the entity embedding database used for organization and person qualification.
+The `db` command group manages the entity embedding database used for organization, person, role, and location qualification.
 
 ```bash
 # Show database status
@@ -504,6 +504,14 @@ corp-extractor db search "Barclays" --source companies_house
 # Search for a person (v0.9.0)
 corp-extractor db search-people "Tim Cook"
 corp-extractor db search-people "Elon Musk" --top-k 5
+
+# Search for roles (v0.9.4)
+corp-extractor db search-roles "CEO"
+corp-extractor db search-roles "Chief Financial Officer"
+
+# Search for locations (v0.9.4)
+corp-extractor db search-locations "California"
+corp-extractor db search-locations "Germany" --type country
 
 # Import organizations from data sources
 corp-extractor db import-gleif --download
@@ -526,6 +534,14 @@ corp-extractor db upload                          # Upload with all variants
 
 # Migrate from old schema (companies.db → entities.db)
 corp-extractor db migrate companies.db --rename-file
+
+# Migrate to v2 normalized schema (v0.9.4)
+corp-extractor db migrate-v2 entities.db entities-v2.db
+corp-extractor db migrate-v2 entities.db entities-v2.db --resume  # Resume interrupted
+
+# Generate int8 scalar embeddings (v0.9.4) - 75% smaller
+corp-extractor db backfill-scalar
+corp-extractor db backfill-scalar --skip-generate  # Only quantize existing
 
 # Local database management
 corp-extractor db create-lite entities.db         # Create lite version
@@ -651,6 +667,9 @@ corp-extractor db import-wikidata-dump --download --people --no-orgs --limit 100
 # Import only organizations
 corp-extractor db import-wikidata-dump --download --orgs --no-people --limit 100000
 
+# Import only locations (v0.9.4)
+corp-extractor db import-wikidata-dump --dump dump.bz2 --locations --no-people --no-orgs
+
 # Use existing dump file
 corp-extractor db import-wikidata-dump --dump /path/to/latest-all.json.bz2
 ```
@@ -686,6 +705,10 @@ apt install aria2    # Ubuntu/Debian
       <td>Import organizations (default: yes)</td>
     </tr>
     <tr>
+      <td><code>--locations/--no-locations</code></td>
+      <td>Import locations (default: no) <span className="text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-0.5 rounded">v0.9.4</span></td>
+    </tr>
+    <tr>
       <td><code>--no-aria2</code></td>
       <td>Don't use aria2c even if available</td>
     </tr>
@@ -697,6 +720,7 @@ apt install aria2    # Ubuntu/Debian
 - Complete coverage (all notable people/orgs with English Wikipedia)
 - Captures people via occupation (P106) even if position type is generic
 - Extracts role dates from position qualifiers (P580/P582)
+- Imports locations with hierarchical parent relationships (v0.9.4)
 
 **Download location:** `~/.cache/corp-extractor/wikidata-latest-all.json.bz2`
 

@@ -1049,6 +1049,12 @@ class WikidataPeopleImporter:
                     best_result = result
 
             if best_result:
+                # If we have a role but no org, try P108 (employer) as fallback
+                role_label, org_label, org_qid, from_date, to_date = best_result
+                if role_label and not org_label:
+                    fallback_org, fallback_org_qid = self._get_employer(person_qid)
+                    if fallback_org:
+                        return role_label, fallback_org, fallback_org_qid, from_date, to_date
                 return best_result
 
             return "", "", "", None, None
@@ -1056,6 +1062,44 @@ class WikidataPeopleImporter:
         except Exception as e:
             logger.debug(f"Failed to enrich role/org for {person_qid}: {e}")
             return "", "", "", None, None
+
+    def _get_employer(self, person_qid: str) -> tuple[str, str]:
+        """
+        Query P108 (employer) as fallback for org.
+
+        Args:
+            person_qid: Wikidata QID of the person
+
+        Returns:
+            Tuple of (org_label, org_qid) or ("", "") if not found
+        """
+        query = """
+        SELECT ?org ?orgLabel WHERE {
+          wd:%s wdt:P108 ?org .
+          ?org rdfs:label ?orgLabel FILTER(LANG(?orgLabel) = "en") .
+        }
+        LIMIT 1
+        """ % person_qid
+
+        try:
+            url = f"{WIKIDATA_SPARQL_URL}?query={urllib.parse.quote(query)}&format=json"
+            req = urllib.request.Request(url, headers={"User-Agent": "corp-extractor/1.0"})
+
+            with urllib.request.urlopen(req, timeout=15) as response:
+                data = json.loads(response.read().decode("utf-8"))
+
+            bindings = data.get("results", {}).get("bindings", [])
+            if bindings:
+                org_label = bindings[0].get("orgLabel", {}).get("value", "")
+                org_uri = bindings[0].get("org", {}).get("value", "")
+                org_qid = org_uri.split("/")[-1] if org_uri else ""
+                if org_label and not org_label.startswith("Q"):
+                    return org_label, org_qid
+
+        except Exception as e:
+            logger.debug(f"Failed to get employer for {person_qid}: {e}")
+
+        return "", ""
 
     def enrich_people_role_org_batch(
         self,

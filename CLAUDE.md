@@ -100,6 +100,7 @@ The frontend can connect to the model via three backends (configured by environm
 - RunPod requires `--platform linux/amd64` when building Docker on Mac
 - Model uses bfloat16 on GPU, float32 on CPU
 - Generation stops at `</statements>` tag to prevent runaway output
+- **v0.9.4**: Database v2 schema with normalized FK references (replaces TEXT enums with INTEGER FKs). New tables: `roles`, `locations`, `location_types`. Scalar (int8) embeddings for 75% storage reduction (~92% recall). New CLI: `db migrate-v2`, `db backfill-scalar`, `db search-roles`, `db search-locations`. Locations import via `--locations` flag.
 - **v0.9.3**: Added SEC Form 4 officers import (`import-sec-officers`) and Companies House officers import (`import-ch-officers`). People now sourced from wikidata, sec_edgar, and companies_house. People canonicalization with priority wikidata > sec_edgar > companies_house.
 - **v0.9.1**: Added Wikidata dump importer (`import-wikidata-dump`) for large imports without SPARQL timeouts. Uses aria2c for fast parallel downloads. Extracts people via occupation (P106) and position dates (P580/P582).
 - **v0.9.0**: Added person database with Wikidata import and person qualification with canonical IDs. People import auto-inserts discovered organizations with `known_for_org_id` FK. New flags: `--skip-existing`, `--enrich-dates`
@@ -240,10 +241,15 @@ corp-extractor db import-wikidata-dump --dump /path/to/dump.bz2 --people --no-or
 corp-extractor db import-wikidata-dump --dump dump.bz2 --resume  # Resume from file position
 corp-extractor db import-wikidata-dump --dump dump.bz2 --skip-updates  # Skip existing Q codes
 corp-extractor db import-wikidata-dump --download --require-enwiki  # Only orgs with English Wikipedia
+corp-extractor db import-wikidata-dump --dump dump.bz2 --locations --no-people --no-orgs  # Locations only (v0.9.4)
 corp-extractor db canonicalize           # Link equivalent records across sources
 corp-extractor db search "Microsoft"     # Search organizations
 corp-extractor db search-people "Tim Cook"  # Search people (v0.9.0)
+corp-extractor db search-roles "CEO"     # Search roles (v0.9.4)
+corp-extractor db search-locations "California"  # Search locations (v0.9.4)
 corp-extractor db upload                 # Upload with lite/compressed variants
 corp-extractor db download               # Download lite version (default)
 corp-extractor db download --full        # Download full version
+corp-extractor db migrate-v2 entities.db entities-v2.db  # Migrate to v2 schema (v0.9.4)
+corp-extractor db backfill-scalar        # Generate int8 embeddings (v0.9.4)
 ```
