@@ -29,10 +29,11 @@ uv run corp-extractor plugins list           # List registered plugins
 
 # Entity database commands
 uv run corp-extractor db status              # Show database stats
+uv run corp-extractor db status --for-llm    # Output schema/enum tables for LLM docs
 uv run corp-extractor db search "Microsoft"  # Search for organization
 uv run corp-extractor db search-people "Tim Cook"  # Search for person (v0.9.0)
-uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF (~3M records)
-uv run corp-extractor db import-sec --download                  # Import SEC bulk (~100K+ filers)
+uv run corp-extractor db import-gleif --download --limit 10000  # Import GLEIF (2.6M records)
+uv run corp-extractor db import-sec --download                  # Import SEC bulk (73K filers)
 uv run corp-extractor db import-sec-officers --limit 10000      # Import SEC Form 4 officers/directors (v0.9.3)
 uv run corp-extractor db import-sec-officers --start-year 2023 --resume  # Resume from progress
 uv run corp-extractor db import-ch-officers --file officers.zip --limit 10000  # Import CH officers (v0.9.3)
@@ -75,8 +76,8 @@ The extraction pipeline processes text through sequential stages, each with its 
 
 | Stage | Plugin Type | Purpose | Interface |
 |-------|-------------|---------|-----------|
-| 1 | `BaseSplitterPlugin` | Text → `RawTriple[]` | `split(text, ctx)` |
-| 2 | `BaseExtractorPlugin` | `RawTriple[]` → `PipelineStatement[]` | `extract(triples, ctx)` |
+| 1 | `BaseSplitterPlugin` | Text → `SplitSentence[]` | `split(text, ctx)` |
+| 2 | `BaseExtractorPlugin` | `SplitSentence[]` → `PipelineStatement[]` | `extract(sentences, ctx)` |
 | 3 | `BaseQualifierPlugin` | Entity → `CanonicalEntity` | `qualify(entity, ctx)` |
 | 4 | `BaseLabelerPlugin` | Statement → `StatementLabel` | `label(stmt, subj, obj, ctx)` |
 | 5 | `BaseTaxonomyPlugin` | Statement → `TaxonomyResult[]` | `classify(stmt, subj, obj, ctx)` |
@@ -125,14 +126,14 @@ The `database/` module provides organization, person, role, and location embeddi
 - `database/seed_data.py` - Enum lookup tables and pycountry integration (v0.9.4)
 - `database/migrate_v2.py` - Migration script from v1 to v2 schema (v0.9.4)
 - `database/importers/` - Data source importers (all support `from_date`/`to_date`):
-  - `gleif.py` - GLEIF LEI data (XML/JSON, ~3M records) - `from_date` from InitialRegistrationDate
-  - `sec_edgar.py` - SEC bulk submissions.zip (~100K+ filers) - `from_date` from oldest filingDate
+  - `gleif.py` - GLEIF LEI data (XML/JSON, 2.6M records) - `from_date` from InitialRegistrationDate
+  - `sec_edgar.py` - SEC bulk submissions.zip (73K filers) - `from_date` from oldest filingDate
   - `sec_form4.py` - SEC Form 4 insider filings for officers/directors (v0.9.3) - extracts from quarterly indexes
-  - `companies_house.py` - UK Companies House bulk data (~5M records) - `from_date`/`to_date` from incorporation/dissolution
-  - `companies_house_officers.py` - UK Companies House officers bulk data (Prod195, v0.9.3) - requires request to CH
+  - `companies_house.py` - UK Companies House bulk data (5.5M records) - `from_date`/`to_date` from incorporation/dissolution
+  - `companies_house_officers.py` - UK Companies House officers bulk data (Prod195, v0.9.3) - requires request to CH, 27.5M people
   - `wikidata.py` - Wikidata SPARQL queries (35+ entity types) - `from_date`/`to_date` from P571/P576
   - `wikidata_people.py` - Wikidata SPARQL queries for notable people - `from_date`/`to_date` from position qualifiers
-  - `wikidata_dump.py` - Wikidata JSON dump importer (~100GB) for people, orgs, and locations without SPARQL timeouts (v0.9.1, locations in v0.9.4)
+  - `wikidata_dump.py` - Wikidata JSON dump importer (~100GB) for people (13.4M), orgs (1.5M), and locations without SPARQL timeouts (v0.9.1, locations in v0.9.4)
 
 **EntityType Classification:**
 Each organization record is classified with an `entity_type` field:
@@ -223,15 +224,24 @@ The `document/` module provides document-level extraction:
 ### Data Models Flow
 
 ```
-Text → RawTriple → PipelineStatement → QualifiedEntity → CanonicalEntity → LabeledStatement
-                   (with ExtractedEntity)                                   (with TaxonomyResult[])
+Text → SplitSentence → PipelineStatement → QualifiedEntity → CanonicalEntity → LabeledStatement
+       (Stage 1)       (with ExtractedEntity)                                   (with TaxonomyResult[])
+                       (Stage 2)             (Stage 3)        (Stage 3)          (Stage 4-5)
 ```
 
 Models are defined in `models/` subdirectory: `entity.py`, `statement.py`, `qualifiers.py`, `canonical.py`, `labels.py`.
 
+Note: `RawTriple` is a deprecated alias for `SplitSentence` (backwards compatibility).
+
 ### GLiNER2 Relation Extraction
 
-The `gliner2_extractor` uses 324 default predicates from `data/default_predicates.json` organized into 21 categories. Relations below `min_confidence` (default 0.75) are filtered out.
+The `gliner2_extractor` uses 324 default predicates from `data/default_predicates.json` organized into 21 categories:
+
+- **All matching relations returned** - Every relation above confidence threshold is kept (not just the best one)
+- **Category-based iteration** - Processes each category separately to stay under GLiNER2's ~25 label limit
+- **Confidence filtering** - Relations below `min_confidence` (default 0.75) are filtered out
+- **Entity type inference** - Subject/object types determined via separate GLiNER2 entity extraction on source text
+- **Classification schemas** - Labeler plugins can provide schemas that run in Stage 2 (stored in `ctx.classification_results`)
 
 ### Taxonomy Classification
 

@@ -13,15 +13,13 @@ Analyze complex text to extract relationship information about people and organi
 - **Organization Canonicalization** *(v0.9.2)*: Link equivalent records across sources (LEI, ticker, CIK, name matching)
 - **5-Stage Pipeline** *(v0.8.0)*: Modular plugin-based architecture for full entity resolution
 - **Document Processing** *(v0.7.0)*: Process documents, URLs, and PDFs with chunking and deduplication
-- **Entity Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (~100K+ SEC, ~3M GLEIF, ~5M UK organizations)
+- **Entity Embedding Database** *(v0.6.0)*: Fast entity qualification using vector similarity (9.6M organizations, 41M people)
 - **Structured Extraction**: Converts unstructured text into subject-predicate-object triples
 - **Entity Type Recognition**: Identifies 12 entity types (ORG, PERSON, GPE, LOC, PRODUCT, EVENT, etc.)
 - **Entity Qualification** *(v0.8.0)*: Adds identifiers (LEI, ticker, company numbers), canonical names, and FQN via embedding database
 - **Statement Labeling** *(v0.5.0)*: Sentiment analysis, relation type classification, confidence scoring
-- **GLiNER2 Integration** *(v0.4.0)*: Uses GLiNER2 (205M params) for entity recognition and relation extraction
-- **Predefined Predicates**: Optional `--predicates` list for GLiNER2 relation extraction mode
-- **Beam Merging**: Combines top beams for better coverage instead of picking one
-- **Embedding-based Dedup**: Uses semantic similarity to detect near-duplicate predicates
+- **GLiNER2 Integration** *(v0.4.0)*: Uses GLiNER2 (205M params) for relation extraction with 324 predicates across 21 categories
+- **All Relations Returned**: Every matching relation above confidence threshold (0.75) is returned, not just the best one
 - **Predicate Taxonomies**: Normalize predicates to canonical forms via embeddings
 - **Command Line Interface**: Full-featured CLI with `split`, `pipeline`, `document`, and `db` commands
 - **Multiple Output Formats**: Get results as Pydantic models, JSON, XML, or dictionaries
@@ -266,11 +264,11 @@ The library uses a **5-stage plugin-based pipeline** for comprehensive entity re
 
 | Stage | Name | Input | Output | Key Tech |
 |-------|------|-------|--------|----------|
-| 1 | Splitting | Text | `RawTriple[]` | T5-Gemma2 |
-| 2 | Extraction | `RawTriple[]` | `PipelineStatement[]` | GLiNER2 |
+| 1 | Splitting | Text | `SplitSentence[]` | T5-Gemma2 |
+| 2 | Extraction | `SplitSentence[]` | `PipelineStatement[]` | GLiNER2 |
 | 3 | Qualification | Entities | `CanonicalEntity[]` | Embedding DB |
 | 4 | Labeling | Statements | `LabeledStatement[]` | Sentiment, etc. |
-| 5 | Taxonomy | Statements | `TaxonomyResult[]` | MNLI, Embeddings |
+| 5 | Taxonomy | Statements | `TaxonomyResult[]` | Embeddings |
 
 ### Pipeline Python API
 
@@ -282,7 +280,7 @@ pipeline = ExtractionPipeline()
 ctx = pipeline.process("Amazon CEO Andy Jassy announced plans to hire workers.")
 
 # Access results at each stage
-print(f"Raw triples: {len(ctx.raw_triples)}")
+print(f"Split sentences: {len(ctx.split_sentences)}")
 print(f"Statements: {len(ctx.statements)}")
 print(f"Labeled: {len(ctx.labeled_statements)}")
 
@@ -379,16 +377,17 @@ v0.6.0 introduces an **entity embedding database** for fast entity qualification
 
 | Source | Records | Identifier | EntityType Mapping |
 |--------|---------|------------|-------------------|
-| GLEIF | ~3.2M | LEI (Legal Entity Identifier) | GENERAL→business, FUND→fund, BRANCH→branch, INTERNATIONAL_ORGANIZATION→international_org |
-| SEC Edgar | ~100K+ | CIK (Central Index Key) | business (or fund via SIC codes) |
-| Companies House | ~5M | UK Company Number | Maps company_type to business/nonprofit |
-| Wikidata | Variable | Wikidata QID | 35+ query types mapped to EntityType |
+| Companies House | 5.5M | UK Company Number | Maps company_type to business/nonprofit |
+| GLEIF | 2.6M | LEI (Legal Entity Identifier) | GENERAL→business, FUND→fund, BRANCH→branch, INTERNATIONAL_ORGANIZATION→international_org |
+| Wikidata | 1.5M | Wikidata QID | 35+ query types mapped to EntityType |
+| SEC Edgar | 73K | CIK (Central Index Key) | business (or fund via SIC codes) |
 
 **People** *(v0.9.0)*:
 
 | Source | Records | Identifier | PersonType Classification |
 |--------|---------|------------|--------------------------|
-| Wikidata (SPARQL) | Variable | Wikidata QID | executive, politician, athlete, artist, academic, scientist, journalist, entrepreneur, activist |
+| Companies House | 27.5M | Person number | UK company officers |
+| Wikidata | 13.4M | Wikidata QID | executive, politician, athlete, artist, academic, scientist, journalist, entrepreneur, activist |
 | Wikidata (Dump) | All humans with enwiki | Wikidata QID | Classified from positions (P39) and occupations (P106) |
 
 **Date Fields**: All importers now include `from_date` and `to_date` where available:
@@ -554,14 +553,13 @@ v0.4.0 replaces spaCy with **GLiNER2** (205M params) for entity recognition and 
 ### Why GLiNER2?
 
 The T5-Gemma model excels at:
-- **Triple isolation** - identifying that a relationship exists
+- **Atomic sentence splitting** - breaking complex text into simple statements
 - **Coreference resolution** - resolving pronouns to named entities
 
-GLiNER2 now handles:
-- **Entity recognition** - refining subject/object boundaries
+GLiNER2 handles:
 - **Relation extraction** - using 324 default predicates across 21 categories
-- **Entity scoring** - scoring how "entity-like" subjects/objects are
-- **Confidence scoring** - real confidence values via `include_confidence=True`
+- **Entity type inference** - classifying subjects/objects as ORG, PERSON, GPE, etc.
+- **Confidence scoring** - real confidence values for each extracted relation
 
 ### Default Predicates
 
@@ -612,70 +610,40 @@ Or via CLI:
 corp-extractor pipeline "John works for Apple Inc." --predicates-file custom_predicates.json
 ```
 
-### Two Candidate Extraction Methods
+### How Extraction Works
 
-For each statement, two candidates are generated and the best is selected:
+The pipeline uses a two-stage approach:
 
-| Method | Description |
-|--------|-------------|
-| `hybrid` | Model subject/object + GLiNER2/extracted predicate |
-| `gliner` | All components refined by GLiNER2 entity recognition |
+1. **Stage 1 (T5-Gemma2)**: Splits text into atomic sentences with coreference resolution
+2. **Stage 2 (GLiNER2)**: Extracts subject-predicate-object relations from each sentence
+
+**Key behavior:**
+- **All matching relations returned** - Every relation above the confidence threshold (default 0.75) is returned, not just the best one
+- **Category-based extraction** - Iterates through 21 predicate categories to stay under GLiNER2's ~25 label limit
+- **Confidence from GLiNER2** - Each relation includes the confidence score from GLiNER2's extraction
 
 ```python
 for stmt in result:
     print(f"{stmt.subject.text} --[{stmt.predicate}]--> {stmt.object.text}")
-    print(f"  Method: {stmt.extraction_method}")  # hybrid, gliner, or model
     print(f"  Confidence: {stmt.confidence_score:.2f}")
+    print(f"  Category: {stmt.predicate_category}")  # e.g., "employment_leadership"
 ```
 
-### Combined Quality Scoring
+### Entity Type Inference
 
-Confidence scores combine **semantic similarity** and **entity recognition**:
+For each subject and object, GLiNER2 performs entity extraction on the source sentence to determine the entity type:
 
-| Component | Weight | Description |
-|-----------|--------|-------------|
-| Semantic similarity | 50% | Cosine similarity between source text and reassembled triple |
-| Subject entity score | 25% | How entity-like the subject is (via GLiNER2) |
-| Object entity score | 25% | How entity-like the object is (via GLiNER2) |
-
-**Entity scoring (via GLiNER2):**
-- Recognized entity with high confidence: 1.0
-- Recognized entity with moderate confidence: 0.8
-- Partially recognized: 0.6
-- Not recognized: 0.2
-
-### Extraction Method Tracking
-
-Each statement includes an `extraction_method` field:
-- `hybrid` - Model subject/object + GLiNER2 predicate
-- `gliner` - All components refined by GLiNER2 entity recognition
-- `model` - All components from T5-Gemma model (only when `--no-gliner`)
-
-### Best Triple Selection
-
-By default, only the **highest-scoring triple** is kept for each source sentence.
-
-To keep all candidate triples:
-```python
-options = ExtractionOptions(all_triples=True)
-result = extract_statements(text, options)
-```
-
-Or via CLI:
-```bash
-corp-extractor "Your text" --all-triples --verbose
-```
-
-**Disable GLiNER2 extraction** to use only model output:
-```python
-options = ExtractionOptions(use_gliner_extraction=False)
-result = extract_statements(text, options)
-```
-
-Or via CLI:
-```bash
-corp-extractor "Your text" --no-gliner
-```
+| GLiNER2 Type | Mapped EntityType |
+|--------------|-------------------|
+| person | PERSON |
+| organization, company | ORG |
+| location, city, country | GPE/LOC |
+| product | PRODUCT |
+| event | EVENT |
+| date | DATE |
+| money | MONEY |
+| quantity | QUANTITY |
+| (unrecognized) | UNKNOWN |
 
 ## Disable Embeddings
 
@@ -743,17 +711,13 @@ for text in texts:
 
 ## How It Works
 
-This library uses the T5-Gemma 2 statement extraction model with **Diverse Beam Search** ([Vijayakumar et al., 2016](https://arxiv.org/abs/1610.02424)):
+The library uses a **5-stage pipeline** architecture:
 
-1. **Diverse Beam Search**: Generates 4+ candidate outputs using beam groups with diversity penalty
-2. **Quality Scoring**: Each triple scored via semantic similarity + GLiNER2 entity recognition
-3. **Beam Merging**: Top beams combined for better coverage
-4. **Embedding Dedup**: Semantic similarity removes near-duplicate predicates
-5. **Predicate Normalization**: Optional taxonomy matching via embeddings
-6. **Contextualized Matching**: Full statement context used for canonicalization and dedup
-7. **Entity Type Merging**: UNKNOWN types merged with specific types during dedup
-8. **Reversal Detection**: Subject-object reversals detected and corrected via embedding comparison
-9. **GLiNER2 Extraction** *(v0.4.0)*: Entity recognition and relation extraction for improved accuracy
+1. **Stage 1 - Splitting (T5-Gemma2)**: Splits text into atomic sentences using Diverse Beam Search ([Vijayakumar et al., 2016](https://arxiv.org/abs/1610.02424)) with coreference resolution
+2. **Stage 2 - Extraction (GLiNER2)**: Extracts subject-predicate-object relations using 324 predicates across 21 categories. Returns ALL relations above confidence threshold (0.75)
+3. **Stage 3 - Qualification**: Looks up entities against 10M+ organizations and 40M+ people in the embedding database, adding canonical IDs and FQNs
+4. **Stage 4 - Labeling**: Adds sentiment, confidence, and relation type labels (classifications pre-computed in Stage 2)
+5. **Stage 5 - Taxonomy**: Classifies statements against taxonomies (e.g., ESG topics) using embedding similarity
 
 ## Requirements
 

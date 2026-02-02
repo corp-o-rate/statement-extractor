@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { Github, ExternalLink, Package, Container } from 'lucide-react';
+import Image from 'next/image';
+import { Github } from 'lucide-react';
 
 export function Header() {
   return (
@@ -49,16 +50,16 @@ export function Header() {
               className="p-2 hover:bg-gray-100 rounded transition-colors"
               title="View on PyPI"
             >
-              <Package className="w-5 h-5" />
+              <Image src="https://pypi.org/static/images/logo-small.8998e9d1.svg" alt="PyPI" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
-              href="https://hub.docker.com/r/corporate/statement-extractor"
+              href="https://hub.docker.com/repository/docker/neilellis/statement-extractor-runpod"
               target="_blank"
               rel="noopener noreferrer"
               className="p-2 hover:bg-gray-100 rounded transition-colors"
               title="View on Docker Hub"
             >
-              <Container className="w-5 h-5" />
+              <Image src="https://www.docker.com/wp-content/uploads/2024/02/cropped-docker-logo-favicon-32x32.png" alt="Docker" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
               href="https://huggingface.co/Corp-o-Rate-Community"
@@ -67,9 +68,7 @@ export function Header() {
               className="p-2 hover:bg-gray-100 rounded transition-colors"
               title="View on Hugging Face"
             >
-              <svg className="w-5 h-5" viewBox="0 0 32 32" fill="currentColor">
-                <path d="M16 0C7.163 0 0 7.163 0 16s7.163 16 16 16 16-7.163 16-16S24.837 0 16 0zm-4.5 22.5c-1.933 0-3.5-1.567-3.5-3.5s1.567-3.5 3.5-3.5 3.5 1.567 3.5 3.5-1.567 3.5-3.5 3.5zm9 0c-1.933 0-3.5-1.567-3.5-3.5s1.567-3.5 3.5-3.5 3.5 1.567 3.5 3.5-1.567 3.5-3.5 3.5zM10 13c-.828 0-1.5-.672-1.5-1.5v-2c0-.828.672-1.5 1.5-1.5s1.5.672 1.5 1.5v2c0 .828-.672 1.5-1.5 1.5zm12 0c-.828 0-1.5-.672-1.5-1.5v-2c0-.828.672-1.5 1.5-1.5s1.5.672 1.5 1.5v2c0 .828-.672 1.5-1.5 1.5z"/>
-              </svg>
+              <Image src="https://huggingface.co/favicon.ico" alt="Hugging Face" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
               href="https://github.com/corp-o-rate/statement-extractor"
