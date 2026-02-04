@@ -50,7 +50,7 @@ export function Header() {
               className="p-2 hover:bg-gray-100 rounded transition-colors"
               title="View on PyPI"
             >
-              <Image src="https://pypi.org/static/images/logo-small.8998e9d1.svg" alt="PyPI" width={20} height={20} className="w-5 h-5" />
+              <Image src="/icons/pypi.svg" alt="PyPI" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
               href="https://hub.docker.com/repository/docker/neilellis/statement-extractor-runpod"
@@ -59,7 +59,7 @@ export function Header() {
               className="p-2 hover:bg-gray-100 rounded transition-colors"
               title="View on Docker Hub"
             >
-              <Image src="https://www.docker.com/wp-content/uploads/2024/02/cropped-docker-logo-favicon-32x32.png" alt="Docker" width={20} height={20} className="w-5 h-5" />
+              <Image src="/icons/docker.png" alt="Docker" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
               href="https://huggingface.co/Corp-o-Rate-Community"
@@ -68,7 +68,7 @@ export function Header() {
               className="p-2 hover:bg-gray-100 rounded transition-colors"
               title="View on Hugging Face"
             >
-              <Image src="https://huggingface.co/favicon.ico" alt="Hugging Face" width={20} height={20} className="w-5 h-5" />
+              <Image src="/icons/huggingface.ico" alt="Hugging Face" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
               href="https://colab.research.google.com/github/corp-o-rate/statement-extractor/blob/main/notebooks/statement_extractor_demo.ipynb"
@@ -77,7 +77,7 @@ export function Header() {
               className="p-2 hover:bg-gray-100 rounded transition-colors"
               title="Open in Google Colab"
             >
-              <Image src="https://colab.research.google.com/favicon.ico" alt="Google Colab" width={20} height={20} className="w-5 h-5" />
+              <Image src="/icons/colab.ico" alt="Google Colab" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
               href="https://github.com/corp-o-rate/statement-extractor"
