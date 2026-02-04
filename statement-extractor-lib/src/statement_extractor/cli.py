@@ -771,9 +771,9 @@ def db_import_gleif(file_path: Optional[str], download: bool, force: bool, db_pa
 
     click.echo(f"Importing GLEIF data from {file_path}...", err=True)
 
-    # Initialize components
+    # Initialize components (readonly=False for import operations)
     embedder = CompanyEmbedder()
-    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim, readonly=False)
 
     # Import records in batches
     records = []
@@ -831,9 +831,9 @@ def db_import_sec(download: bool, file_path: Optional[str], db_path: Optional[st
     if not download and not file_path:
         raise click.UsageError("Either --download or --file is required")
 
-    # Initialize components
+    # Initialize components (readonly=False for import operations)
     embedder = CompanyEmbedder()
-    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim, readonly=False)
     importer = SecEdgarImporter()
 
     # Get records
@@ -915,9 +915,9 @@ def db_import_sec_officers(db_path: Optional[str], start_year: int, end_year: Op
     if resume:
         click.echo("Resuming from saved progress...", err=True)
 
-    # Initialize components
-    database = get_person_database(db_path=db_path_obj)
-    org_database = get_database(db_path=db_path_obj)
+    # Initialize components (readonly=False for import operations)
+    database = get_person_database(db_path=db_path_obj, readonly=False)
+    org_database = get_database(db_path=db_path_obj, readonly=False)
     embedder = CompanyEmbedder()
     importer = SecForm4Importer()
 
@@ -1015,9 +1015,9 @@ def db_import_ch_officers(file_path: str, db_path: Optional[str], limit: Optiona
     if resume:
         click.echo("Resuming from saved progress...", err=True)
 
-    # Initialize components
-    database = get_person_database(db_path=db_path_obj)
-    org_database = get_database(db_path=db_path_obj)
+    # Initialize components (readonly=False for import operations)
+    database = get_person_database(db_path=db_path_obj, readonly=False)
+    org_database = get_database(db_path=db_path_obj, readonly=False)
     embedder = CompanyEmbedder()
     importer = CompaniesHouseOfficersImporter()
 
@@ -1116,9 +1116,9 @@ def db_import_wikidata(db_path: Optional[str], limit: Optional[int], batch_size:
 
     click.echo(f"Importing Wikidata organization data via SPARQL (type={query_type}, all={import_all})...", err=True)
 
-    # Initialize components
+    # Initialize components (readonly=False for import operations)
     embedder = CompanyEmbedder()
-    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim, readonly=False)
     importer = WikidataImporter(batch_size=500)  # Smaller SPARQL batch size for reliability
 
     # Import records in batches
@@ -1193,9 +1193,9 @@ def db_import_people(db_path: Optional[str], limit: Optional[int], batch_size: i
 
     click.echo(f"Importing Wikidata people to {db_path_obj}...", err=True)
 
-    # Initialize components
-    database = get_person_database(db_path=db_path_obj)
-    org_database = get_database(db_path=db_path_obj)
+    # Initialize components (readonly=False for import operations)
+    database = get_person_database(db_path=db_path_obj, readonly=False)
+    org_database = get_database(db_path=db_path_obj, readonly=False)
     embedder = CompanyEmbedder()
     importer = WikidataPeopleImporter(batch_size=batch_size)
 
@@ -1392,7 +1392,7 @@ def db_import_wikidata_dump(
     """
     _configure_logging(verbose)
 
-    from .database.store import get_person_database, get_database, DEFAULT_DB_PATH
+    from .database.store import get_person_database, get_database, get_locations_database, DEFAULT_DB_PATH
     from .database.embeddings import CompanyEmbedder
     from .database.importers.wikidata_dump import WikidataDumpImporter, DumpProgress
 
@@ -1486,7 +1486,8 @@ def db_import_wikidata_dump(
     sys.stderr.flush()
 
     # Load existing QID labels from database and seed the importer's cache
-    database = get_person_database(db_path=db_path_obj)
+    # readonly=False because we also write new labels via persist_new_labels()
+    database = get_person_database(db_path=db_path_obj, readonly=False)
     existing_labels = database.get_all_qid_labels()
     if existing_labels:
         click.echo(f"Loaded {len(existing_labels):,} existing QID labels from DB", err=True)
@@ -1502,7 +1503,8 @@ def db_import_wikidata_dump(
             existing_people_ids = database.get_all_source_ids(source="wikidata")
             click.echo(f"  Found {len(existing_people_ids):,} existing people Q codes", err=True)
         if orgs:
-            org_database = get_database(db_path=db_path_obj)
+            # readonly=False because we also write later via insert_batch
+            org_database = get_database(db_path=db_path_obj, readonly=False)
             existing_org_ids = org_database.get_all_source_ids(source="wikipedia")
             click.echo(f"  Found {len(existing_org_ids):,} existing org Q codes", err=True)
 
@@ -1553,8 +1555,8 @@ def db_import_wikidata_dump(
         if require_enwiki:
             click.echo("    Filter: only locations with English Wikipedia articles", err=True)
 
-        # Initialize locations database
-        locations_database = get_locations_database(db_path=db_path_obj)
+        # Initialize locations database (readonly=False for import operations)
+        locations_database = get_locations_database(db_path=db_path_obj, readonly=False)
 
         # Load existing location Q codes for skip_updates mode
         existing_location_ids: set[str] = set()
@@ -1673,9 +1675,9 @@ def db_import_wikidata_dump(
     if start_index > 0:
         click.echo(f"  Resuming from entity index {start_index:,}", err=True)
 
-    # Initialize databases
-    person_database = get_person_database(db_path=db_path_obj)
-    org_database = get_database(db_path=db_path_obj) if orgs else None
+    # Initialize databases (readonly=False for import operations)
+    person_database = get_person_database(db_path=db_path_obj, readonly=False)
+    org_database = get_database(db_path=db_path_obj, readonly=False) if orgs else None
 
     # Batches for each type
     people_records: list = []
@@ -1830,7 +1832,8 @@ def db_import_wikidata_dump(
 
     org_unresolved: set[str] = set()
     if orgs:
-        org_database = get_database(db_path=db_path_obj)
+        # readonly=False because we also call resolve_qid_labels later
+        org_database = get_database(db_path=db_path_obj, readonly=False)
         org_unresolved = org_database.get_unresolved_qids()
         click.echo(f"  Unresolved QIDs in orgs: {len(org_unresolved):,}", err=True)
 
@@ -1853,7 +1856,7 @@ def db_import_wikidata_dump(
             click.echo(f"  People: {updates:,} updated, {deletes:,} duplicates deleted", err=True)
 
         if orgs:
-            org_database = get_database(db_path=db_path_obj)
+            org_database = get_database(db_path=db_path_obj, readonly=False)
             org_updates, org_deletes = org_database.resolve_qid_labels(all_labels)
             if org_updates or org_deletes:
                 click.echo(f"  Orgs: {org_updates:,} updated, {org_deletes:,} duplicates deleted", err=True)
@@ -1963,9 +1966,9 @@ def db_import_companies_house(
 
     click.echo("Importing Companies House data...", err=True)
 
-    # Initialize components
+    # Initialize components (readonly=False for import operations)
     embedder = CompanyEmbedder()
-    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim)
+    database = OrganizationDatabase(db_path=db_path, embedding_dim=embedder.embedding_dim, readonly=False)
     importer = CompaniesHouseImporter()
 
     # Get records
@@ -2013,17 +2016,22 @@ def db_import_companies_house(
 
 @db_cmd.command("status")
 @click.option("--db", "db_path", type=click.Path(), help="Database path")
-def db_status(db_path: Optional[str]):
+@click.option("--for-llm", is_flag=True, help="Output schema and type details for LLM documentation")
+def db_status(db_path: Optional[str], for_llm: bool):
     """
     Show database status and statistics.
 
     \b
     Examples:
         corp-extractor db status
+        corp-extractor db status --for-llm
         corp-extractor db status --db /path/to/entities.db
     """
+    import sqlite3
+
     from .database import OrganizationDatabase
-    from .database.store import get_person_database
+    from .database.hub import DEFAULT_DB_FILENAME, DEFAULT_DB_FULL_FILENAME, DEFAULT_DB_LITE_FILENAME
+    from .database.store import DEFAULT_DB_PATH, get_locations_database, get_person_database, get_roles_database
 
     try:
         database = OrganizationDatabase(db_path=db_path)
@@ -2031,53 +2039,121 @@ def db_status(db_path: Optional[str]):
 
         click.echo("\nEntity Database Status")
         click.echo("=" * 40)
-        click.echo(f"Total records: {stats.total_records:,}")
+        click.echo(f"Total organizations: {stats.total_records:,}")
         click.echo(f"Embedding dimension: {stats.embedding_dimension}")
         click.echo(f"Database size: {stats.database_size_bytes / 1024 / 1024:.2f} MB")
 
-        # Check for missing embeddings
-        missing_embeddings = database.get_missing_embedding_count()
-        if missing_embeddings > 0:
-            click.echo(f"\n⚠️  Missing embeddings: {missing_embeddings:,}")
-            click.echo("   Run 'corp-extractor db repair-embeddings' to fix")
-
-        # Show embedding counts (float32 and scalar)
-        org_fp32 = database.get_float32_embedding_count()
-        org_int8 = database.get_scalar_embedding_count()
-        click.echo(f"\nOrganization embeddings:")
-        click.echo(f"  float32: {org_fp32:,}")
-        click.echo(f"  int8 (scalar): {org_int8:,}")
-        if org_fp32 > 0 and org_int8 < org_fp32:
-            click.echo(f"  ⚠️  {org_fp32 - org_int8:,} missing scalar embeddings")
-            click.echo("     Run 'corp-extractor db backfill-scalar' to generate")
-
-        # Person embeddings
+        # Get person stats
         person_db = get_person_database(db_path=db_path)
-        person_fp32 = person_db.get_float32_embedding_count()
-        person_int8 = person_db.get_scalar_embedding_count()
-        if person_fp32 > 0:
-            click.echo(f"\nPerson embeddings:")
-            click.echo(f"  float32: {person_fp32:,}")
-            click.echo(f"  int8 (scalar): {person_int8:,}")
-            if person_int8 < person_fp32:
-                click.echo(f"  ⚠️  {person_fp32 - person_int8:,} missing scalar embeddings")
+        person_stats = person_db.get_stats()
+        click.echo(f"Total people: {person_stats.get('total_records', 0):,}")
 
         if stats.by_source:
-            click.echo("\nRecords by source:")
-            for source, count in stats.by_source.items():
-                click.echo(f"  {source}: {count:,}")
+            click.echo("\n=== Organizations by Source ===")
+            click.echo(f"{'Source':<20} {'Records':>15}")
+            click.echo("-" * 36)
+            for source, count in sorted(stats.by_source.items(), key=lambda x: -x[1]):
+                click.echo(f"{source:<20} {count:>15,}")
 
-        # Show canonicalization stats
-        canon_stats = database.get_canon_stats()
-        if canon_stats["canonicalized_records"] > 0:
-            click.echo("\nCanonicalization:")
-            click.echo(f"  Canonicalized: {canon_stats['canonicalized_records']:,} / {canon_stats['total_records']:,}")
-            click.echo(f"  Canonical groups: {canon_stats['canonical_groups']:,}")
-            click.echo(f"  Multi-record groups: {canon_stats['multi_record_groups']:,}")
-            click.echo(f"  Records in multi-groups: {canon_stats['records_in_multi_groups']:,}")
-        else:
-            click.echo("\nCanonicalization: Not run yet")
-            click.echo("   Run 'corp-extractor db canonicalize' to link equivalent records")
+        # People by source
+        if person_stats.get("by_source"):
+            click.echo("\n=== People by Source ===")
+            click.echo(f"{'Source':<20} {'Records':>15}")
+            click.echo("-" * 36)
+            for source, count in sorted(person_stats["by_source"].items(), key=lambda x: -x[1]):
+                click.echo(f"{source:<20} {count:>15,}")
+
+        # Roles and Locations counts
+        try:
+            roles_db = get_roles_database(db_path=db_path)
+            roles_stats = roles_db.get_stats()
+            locations_db = get_locations_database(db_path=db_path)
+            locations_stats = locations_db.get_stats()
+
+            click.echo("\n=== Other Tables ===")
+            click.echo(f"{'Table':<20} {'Records':>15}")
+            click.echo("-" * 36)
+            click.echo(f"{'roles':<20} {roles_stats['total_roles']:>15,}")
+            click.echo(f"{'locations':<20} {locations_stats['total_locations']:>15,}")
+        except Exception:
+            pass  # Tables may not exist in older databases
+
+        # For LLM mode: output enum tables and schema details
+        if for_llm:
+            db_file = db_path or str(DEFAULT_DB_PATH)
+            conn = sqlite3.connect(f"file:{db_file}?immutable=1", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            click.echo("\n" + "=" * 60)
+            click.echo("LLM DOCUMENTATION DETAILS")
+            click.echo("=" * 60)
+
+            # Database file variants
+            click.echo("\n=== Database File Variants ===")
+            click.echo(f"Default filename: {DEFAULT_DB_FILENAME}")
+            click.echo(f"Full database: {DEFAULT_DB_FULL_FILENAME}")
+            click.echo(f"Lite database: {DEFAULT_DB_LITE_FILENAME}")
+            click.echo(f"Default path: {DEFAULT_DB_PATH}")
+
+            # Source types
+            click.echo("\n=== source_types (Data Sources) ===")
+            click.echo(f"{'ID':<5} {'Name':<20}")
+            click.echo("-" * 25)
+            cursor = conn.execute("SELECT id, name FROM source_types ORDER BY id")
+            for row in cursor:
+                click.echo(f"{row['id']:<5} {row['name']:<20}")
+
+            # Organization types
+            click.echo("\n=== organization_types (EntityType) ===")
+            click.echo(f"{'ID':<5} {'Name':<25}")
+            click.echo("-" * 30)
+            cursor = conn.execute("SELECT id, name FROM organization_types ORDER BY id")
+            for row in cursor:
+                click.echo(f"{row['id']:<5} {row['name']:<25}")
+
+            # People types
+            click.echo("\n=== people_types (PersonType) ===")
+            click.echo(f"{'ID':<5} {'Name':<20}")
+            click.echo("-" * 25)
+            cursor = conn.execute("SELECT id, name FROM people_types ORDER BY id")
+            for row in cursor:
+                click.echo(f"{row['id']:<5} {row['name']:<20}")
+
+            # Simplified location types
+            click.echo("\n=== simplified_location_types ===")
+            click.echo(f"{'ID':<5} {'Name':<20}")
+            click.echo("-" * 25)
+            cursor = conn.execute("SELECT id, name FROM simplified_location_types ORDER BY id")
+            for row in cursor:
+                click.echo(f"{row['id']:<5} {row['name']:<20}")
+
+            # Location types (sample)
+            click.echo("\n=== location_types (Sample - Wikidata QID mappings) ===")
+            click.echo(f"{'ID':<5} {'QID':<12} {'Name':<30} {'Simplified':<15}")
+            click.echo("-" * 65)
+            cursor = conn.execute("""
+                SELECT lt.id, lt.qid, lt.name, slt.name as simplified
+                FROM location_types lt
+                JOIN simplified_location_types slt ON lt.simplified_id = slt.id
+                ORDER BY lt.id
+                LIMIT 20
+            """)
+            for row in cursor:
+                qid = f"Q{row['qid']}" if row["qid"] else ""
+                click.echo(f"{row['id']:<5} {qid:<12} {row['name']:<30} {row['simplified']:<15}")
+            click.echo("... (showing first 20 of many)")
+
+            # Table schemas
+            click.echo("\n=== Table Schemas ===")
+            for table in ["organizations", "people", "roles", "locations"]:
+                click.echo(f"\n{table}:")
+                cursor = conn.execute(f"PRAGMA table_info({table})")
+                for row in cursor:
+                    nullable = "" if row["notnull"] else "NULL"
+                    pk = "PK" if row["pk"] else ""
+                    click.echo(f"  {row['name']:<25} {row['type']:<15} {pk:<3} {nullable}")
+
+            conn.close()
 
         database.close()
 
@@ -2118,8 +2194,8 @@ def db_canonicalize(db_path: Optional[str], batch_size: int, verbose: bool):
     from .database.store import get_person_database
 
     try:
-        # Canonicalize organizations
-        database = OrganizationDatabase(db_path=db_path)
+        # Canonicalize organizations (readonly=False for write operations)
+        database = OrganizationDatabase(db_path=db_path, readonly=False)
         click.echo("Running organization canonicalization...", err=True)
 
         result = database.canonicalize(batch_size=batch_size)
@@ -2133,9 +2209,9 @@ def db_canonicalize(db_path: Optional[str], batch_size: int, verbose: bool):
 
         database.close()
 
-        # Canonicalize people
+        # Canonicalize people (readonly=False for write operations)
         db_path_obj = Path(db_path) if db_path else None
-        person_db = get_person_database(db_path=db_path_obj)
+        person_db = get_person_database(db_path=db_path_obj, readonly=False)
         click.echo("\nRunning people canonicalization...", err=True)
 
         people_result = person_db.canonicalize(batch_size=batch_size)
@@ -2348,7 +2424,8 @@ def db_repair_embeddings(db_path: Optional[str], batch_size: int, source: Option
 
     from .database import OrganizationDatabase, CompanyEmbedder
 
-    database = OrganizationDatabase(db_path=db_path)
+    # readonly=False for write operations (embedding repair)
+    database = OrganizationDatabase(db_path=db_path, readonly=False)
     embedder = CompanyEmbedder()
 
     # Check how many need repair
@@ -2419,8 +2496,8 @@ def db_backfill_scalar(db_path: Optional[str], batch_size: int, embed_batch_size
 
     embedder = None  # Lazy load only if needed
 
-    # Process organizations
-    org_db = OrganizationDatabase(db_path=db_path)
+    # Process organizations (readonly=False for write operations)
+    org_db = OrganizationDatabase(db_path=db_path, readonly=False)
 
     # Phase 1: Quantize existing float32 embeddings to scalar
     org_quantized = 0
@@ -2474,8 +2551,8 @@ def db_backfill_scalar(db_path: Optional[str], batch_size: int, embed_batch_size
 
         click.echo(f"Generated {org_generated:,} organization embeddings.", err=True)
 
-    # Process people
-    person_db = get_person_database(db_path=db_path)
+    # Process people (readonly=False for write operations)
+    person_db = get_person_database(db_path=db_path, readonly=False)
 
     # Phase 1: Quantize existing float32 embeddings to scalar
     person_quantized = 0
@@ -2575,7 +2652,8 @@ def db_migrate(db_path: str, rename_file: bool, yes: bool, verbose: bool):
         )
 
     try:
-        database = OrganizationDatabase(db_path=db_path)
+        # readonly=False for schema migrations
+        database = OrganizationDatabase(db_path=db_path, readonly=False)
         migrations = database.migrate_from_legacy_schema()
         database.close()
 
@@ -2730,7 +2808,8 @@ def db_import_locations(from_pycountry: bool, db_path: Optional[str], verbose: b
 
     from .database.store import get_locations_database
 
-    locations_db = get_locations_database(db_path)
+    # readonly=False for import operations
+    locations_db = get_locations_database(db_path, readonly=False)
     count = locations_db.import_from_pycountry()
 
     click.echo(f"Imported {count:,} locations from pycountry")

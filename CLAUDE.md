@@ -230,7 +230,7 @@ corp-extractor document process https://example.com/article
 corp-extractor document process report.pdf --use-ocr
 
 # Entity database
-corp-extractor db import-sec --download  # Bulk SEC data (~100K+ filers)
+corp-extractor db import-sec --download  # Bulk SEC data (73K filers)
 corp-extractor db import-people --all    # Notable people from Wikidata (v0.9.0)
 corp-extractor db import-people --type executive --skip-existing  # Skip existing records
 corp-extractor db import-people --type executive --enrich-dates   # Fetch role dates (slower)
@@ -243,6 +243,8 @@ corp-extractor db import-wikidata-dump --dump dump.bz2 --skip-updates  # Skip ex
 corp-extractor db import-wikidata-dump --download --require-enwiki  # Only orgs with English Wikipedia
 corp-extractor db import-wikidata-dump --dump dump.bz2 --locations --no-people --no-orgs  # Locations only (v0.9.4)
 corp-extractor db canonicalize           # Link equivalent records across sources
+corp-extractor db status                 # Show database statistics
+corp-extractor db status --for-llm       # Output schema and enum tables for LLM docs
 corp-extractor db search "Microsoft"     # Search organizations
 corp-extractor db search-people "Tim Cook"  # Search people (v0.9.0)
 corp-extractor db search-roles "CEO"     # Search roles (v0.9.4)

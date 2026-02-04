@@ -71,7 +71,7 @@ export function Header() {
               <Image src="https://huggingface.co/favicon.ico" alt="Hugging Face" width={20} height={20} className="w-5 h-5" />
             </a>
             <a
-              href="https://colab.research.google.com/github/corp-o-rate/statement-extractor/blob/main/statement_extractor_demo.ipynb"
+              href="https://colab.research.google.com/github/corp-o-rate/statement-extractor/blob/main/notebooks/statement_extractor_demo.ipynb"
               target="_blank"
               rel="noopener noreferrer"
               className="p-2 hover:bg-gray-100 rounded transition-colors"

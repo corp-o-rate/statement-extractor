@@ -51,6 +51,9 @@ DEFAULT_DB_PATH = Path.home() / ".cache" / "corp-extractor" / "entities-v2.db"
 # Module-level shared connections by path (both databases share the same connection)
 _shared_connections: dict[str, sqlite3.Connection] = {}
 
+# Module-level shared read-only connections
+_shared_readonly_connections: dict[str, sqlite3.Connection] = {}
+
 # Module-level singleton for OrganizationDatabase to prevent multiple loads
 _database_instances: dict[str, "OrganizationDatabase"] = {}
 
@@ -58,9 +61,29 @@ _database_instances: dict[str, "OrganizationDatabase"] = {}
 _person_database_instances: dict[str, "PersonDatabase"] = {}
 
 
-def _get_shared_connection(db_path: Path, embedding_dim: int = 768) -> sqlite3.Connection:
+def _get_shared_connection(
+    db_path: Path, embedding_dim: int = 768, readonly: bool = False
+) -> sqlite3.Connection:
     """Get or create a shared database connection for the given path."""
     path_key = str(db_path)
+
+    # Use separate pools for read-only vs read-write connections
+    if readonly:
+        if path_key not in _shared_readonly_connections:
+            # Open in immutable mode for read-only access (avoids locking)
+            conn = sqlite3.connect(f"file:{db_path}?immutable=1", uri=True)
+            conn.row_factory = sqlite3.Row
+
+            # Load sqlite-vec extension
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+
+            _shared_readonly_connections[path_key] = conn
+            logger.debug(f"Created shared read-only database connection for {path_key}")
+
+        return _shared_readonly_connections[path_key]
+
     if path_key not in _shared_connections:
         # Ensure directory exists
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -481,21 +504,22 @@ def _normalize_person_name(name: str) -> str:
     return normalized if normalized else name.lower().strip()
 
 
-def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "OrganizationDatabase":
+def get_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768, readonly: bool = True) -> "OrganizationDatabase":
     """
     Get a singleton OrganizationDatabase instance for the given path.
 
     Args:
         db_path: Path to database file
         embedding_dim: Dimension of embeddings
+        readonly: If True (default), open in read-only mode.
 
     Returns:
-        Shared OrganizationDatabase instance
+        Shared OrganizationDatabase instance (readonly by default)
     """
-    path_key = str(db_path or DEFAULT_DB_PATH)
+    path_key = str(db_path or DEFAULT_DB_PATH) + (":ro" if readonly else ":rw")
     if path_key not in _database_instances:
         logger.debug(f"Creating new OrganizationDatabase instance for {path_key}")
-        _database_instances[path_key] = OrganizationDatabase(db_path=db_path, embedding_dim=embedding_dim)
+        _database_instances[path_key] = OrganizationDatabase(db_path=db_path, embedding_dim=embedding_dim, readonly=readonly)
     return _database_instances[path_key]
 
 
@@ -512,6 +536,7 @@ class OrganizationDatabase:
         self,
         db_path: Optional[str | Path] = None,
         embedding_dim: int = 768,  # Default for embeddinggemma-300m
+        readonly: bool = True,
     ):
         """
         Initialize the organization database.
@@ -519,9 +544,12 @@ class OrganizationDatabase:
         Args:
             db_path: Path to database file (creates if not exists)
             embedding_dim: Dimension of embeddings to store
+            readonly: If True (default), open in read-only mode (avoids locking).
+                      Set to False for import operations.
         """
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self._embedding_dim = embedding_dim
+        self._readonly = readonly
         self._conn: Optional[sqlite3.Connection] = None
         self._is_v2: Optional[bool] = None  # Detected on first connect
 
@@ -534,7 +562,7 @@ class OrganizationDatabase:
         if self._conn is not None:
             return self._conn
 
-        self._conn = _get_shared_connection(self._db_path, self._embedding_dim)
+        self._conn = _get_shared_connection(self._db_path, self._embedding_dim, self._readonly)
 
         # Detect schema version BEFORE creating tables
         # v2 has entity_type_id (FK) instead of entity_type (TEXT)
@@ -547,7 +575,8 @@ class OrganizationDatabase:
 
         # Create tables (idempotent) - only for v1 schema or fresh databases
         # v2 databases already have their schema from migration
-        if not self._is_v2:
+        # Skip table creation in readonly mode
+        if not self._is_v2 and not self._readonly:
             self._create_tables()
 
         return self._conn
@@ -752,8 +781,8 @@ class OrganizationDatabase:
                 # Resolve region to location_id if provided
                 region_id = None
                 if record.region:
-                    # Use locations database to resolve region
-                    locations_db = get_locations_database(db_path=self._db_path)
+                    # Use readonly=False to avoid immutable mode conflicts with write connection
+                    locations_db = get_locations_database(db_path=self._db_path, readonly=False)
                     region_id = locations_db.resolve_region_text(record.region)
 
                 cursor = conn.execute("""
@@ -2362,21 +2391,27 @@ class OrganizationDatabase:
         return qids
 
 
-def get_person_database(db_path: Optional[str | Path] = None, embedding_dim: int = 768) -> "PersonDatabase":
+def get_person_database(
+    db_path: Optional[str | Path] = None, embedding_dim: int = 768, readonly: bool = True
+) -> "PersonDatabase":
     """
     Get a singleton PersonDatabase instance for the given path.
 
     Args:
         db_path: Path to database file
         embedding_dim: Dimension of embeddings
+        readonly: If True (default), open in read-only mode.
+                  For write operations, create a PersonDatabase directly with readonly=False.
 
     Returns:
-        Shared PersonDatabase instance
+        Shared PersonDatabase instance (readonly by default)
     """
-    path_key = str(db_path or DEFAULT_DB_PATH)
+    path_key = str(db_path or DEFAULT_DB_PATH) + (":ro" if readonly else ":rw")
     if path_key not in _person_database_instances:
         logger.debug(f"Creating new PersonDatabase instance for {path_key}")
-        _person_database_instances[path_key] = PersonDatabase(db_path=db_path, embedding_dim=embedding_dim)
+        _person_database_instances[path_key] = PersonDatabase(
+            db_path=db_path, embedding_dim=embedding_dim, readonly=readonly
+        )
     return _person_database_instances[path_key]
 
 
@@ -2395,6 +2430,7 @@ class PersonDatabase:
         self,
         db_path: Optional[str | Path] = None,
         embedding_dim: int = 768,  # Default for embeddinggemma-300m
+        readonly: bool = True,
     ):
         """
         Initialize the person database.
@@ -2402,9 +2438,12 @@ class PersonDatabase:
         Args:
             db_path: Path to database file (creates if not exists)
             embedding_dim: Dimension of embeddings to store
+            readonly: If True (default), open in read-only mode (avoids locking).
+                      Set to False for import operations.
         """
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
         self._embedding_dim = embedding_dim
+        self._readonly = readonly
         self._conn: Optional[sqlite3.Connection] = None
         self._is_v2: Optional[bool] = None  # Detected on first connect
 
@@ -2417,7 +2456,7 @@ class PersonDatabase:
         if self._conn is not None:
             return self._conn
 
-        self._conn = _get_shared_connection(self._db_path, self._embedding_dim)
+        self._conn = _get_shared_connection(self._db_path, self._embedding_dim, self._readonly)
 
         # Detect schema version BEFORE creating tables
         # v2 has person_type_id (FK) instead of person_type (TEXT)
@@ -2430,7 +2469,7 @@ class PersonDatabase:
 
         # Create tables (idempotent) - only for v1 schema or fresh databases
         # v2 databases already have their schema from migration
-        if not self._is_v2:
+        if not self._is_v2 and not self._readonly:
             self._create_tables()
 
         return self._conn
@@ -2751,7 +2790,8 @@ class PersonDatabase:
                 # Resolve country to location_id if provided
                 country_id = None
                 if record.country:
-                    locations_db = get_locations_database(db_path=self._db_path)
+                    # Use readonly=False to avoid immutable mode conflicts with write connection
+                    locations_db = get_locations_database(db_path=self._db_path, readonly=False)
                     country_id = locations_db.resolve_region_text(record.country)
 
                 cursor = conn.execute("""
@@ -3976,37 +4016,39 @@ _roles_database_instances: dict[str, "RolesDatabase"] = {}
 _locations_database_instances: dict[str, "LocationsDatabase"] = {}
 
 
-def get_roles_database(db_path: Optional[str | Path] = None) -> "RolesDatabase":
+def get_roles_database(db_path: Optional[str | Path] = None, readonly: bool = True) -> "RolesDatabase":
     """
     Get a singleton RolesDatabase instance for the given path.
 
     Args:
         db_path: Path to database file
+        readonly: If True (default), open in read-only mode.
 
     Returns:
-        Shared RolesDatabase instance
+        Shared RolesDatabase instance (readonly by default)
     """
-    path_key = str(db_path or DEFAULT_DB_PATH)
+    path_key = str(db_path or DEFAULT_DB_PATH) + (":ro" if readonly else ":rw")
     if path_key not in _roles_database_instances:
         logger.debug(f"Creating new RolesDatabase instance for {path_key}")
-        _roles_database_instances[path_key] = RolesDatabase(db_path=db_path)
+        _roles_database_instances[path_key] = RolesDatabase(db_path=db_path, readonly=readonly)
     return _roles_database_instances[path_key]
 
 
-def get_locations_database(db_path: Optional[str | Path] = None) -> "LocationsDatabase":
+def get_locations_database(db_path: Optional[str | Path] = None, readonly: bool = True) -> "LocationsDatabase":
     """
     Get a singleton LocationsDatabase instance for the given path.
 
     Args:
         db_path: Path to database file
+        readonly: If True (default), open in read-only mode.
 
     Returns:
-        Shared LocationsDatabase instance
+        Shared LocationsDatabase instance (readonly by default)
     """
-    path_key = str(db_path or DEFAULT_DB_PATH)
+    path_key = str(db_path or DEFAULT_DB_PATH) + (":ro" if readonly else ":rw")
     if path_key not in _locations_database_instances:
         logger.debug(f"Creating new LocationsDatabase instance for {path_key}")
-        _locations_database_instances[path_key] = LocationsDatabase(db_path=db_path)
+        _locations_database_instances[path_key] = LocationsDatabase(db_path=db_path, readonly=readonly)
     return _locations_database_instances[path_key]
 
 
@@ -4023,14 +4065,16 @@ class RolesDatabase:
     canonicalization to group equivalent roles (e.g., CEO, Chief Executive).
     """
 
-    def __init__(self, db_path: Optional[str | Path] = None):
+    def __init__(self, db_path: Optional[str | Path] = None, readonly: bool = True):
         """
         Initialize the roles database.
 
         Args:
             db_path: Path to database file (creates if not exists)
+            readonly: If True (default), open in read-only mode (avoids locking).
         """
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._readonly = readonly
         self._conn: Optional[sqlite3.Connection] = None
         self._role_cache: dict[str, int] = {}  # name_normalized -> role_id
 
@@ -4039,8 +4083,9 @@ class RolesDatabase:
         if self._conn is not None:
             return self._conn
 
-        self._conn = _get_shared_connection(self._db_path)
-        self._create_tables()
+        self._conn = _get_shared_connection(self._db_path, readonly=self._readonly)
+        if not self._readonly:
+            self._create_tables()
         return self._conn
 
     def _create_tables(self) -> None:
@@ -4258,14 +4303,16 @@ class LocationsDatabase:
     and type classification. Supports pycountry integration.
     """
 
-    def __init__(self, db_path: Optional[str | Path] = None):
+    def __init__(self, db_path: Optional[str | Path] = None, readonly: bool = True):
         """
         Initialize the locations database.
 
         Args:
             db_path: Path to database file (creates if not exists)
+            readonly: If True (default), open in read-only mode (avoids locking).
         """
         self._db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self._readonly = readonly
         self._conn: Optional[sqlite3.Connection] = None
         self._location_cache: dict[str, int] = {}  # lookup_key -> location_id
         self._location_type_cache: dict[str, int] = {}  # type_name -> type_id
@@ -4276,8 +4323,9 @@ class LocationsDatabase:
         if self._conn is not None:
             return self._conn
 
-        self._conn = _get_shared_connection(self._db_path)
-        self._create_tables()
+        self._conn = _get_shared_connection(self._db_path, readonly=self._readonly)
+        if not self._readonly:
+            self._create_tables()
         self._build_caches()
         return self._conn
 

@@ -169,7 +169,7 @@ class TestDatabaseCanonicalization:
         """Create a temporary database for testing."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
-            db = OrganizationDatabase(db_path=db_path, embedding_dim=4)
+            db = OrganizationDatabase(db_path=db_path, embedding_dim=4, readonly=False)
             yield db
             db.close()
 

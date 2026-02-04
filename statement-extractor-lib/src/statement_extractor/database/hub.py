@@ -327,7 +327,7 @@ def upload_database_with_variants(
     First VACUUMs the database, then creates and uploads:
     - entities-v2.db (full database with v2 normalized schema)
     - entities-v2-lite.db (without record data, smaller)
-    - README.md (dataset card from HUGGINGFACE_README.md)
+    - README.md (dataset card from ENTITY_DATABASE.md)
 
     Args:
         db_path: Local path to full database file
@@ -396,17 +396,17 @@ def upload_database_with_variants(
             shutil.copy2(local_path, staging_dir / remote_filename)
             logger.info(f"Staged {remote_filename}")
 
-        # Add README.md from HUGGINGFACE_README.md
+        # Add README.md from ENTITY_DATABASE.md
         if include_readme:
-            # Look for HUGGINGFACE_README.md in the package directory
-            package_dir = Path(__file__).parent.parent.parent.parent  # Go up to statement-extractor-lib
-            readme_source = package_dir / "HUGGINGFACE_README.md"
+            # Look for ENTITY_DATABASE.md in the project root
+            project_root = Path(__file__).parent.parent.parent.parent.parent  # Go up to statement-extractor
+            readme_source = project_root / "ENTITY_DATABASE.md"
             if readme_source.exists():
                 shutil.copy2(readme_source, staging_dir / "README.md")
                 files_to_upload.append((readme_source, "README.md"))
-                logger.info("Staged README.md from HUGGINGFACE_README.md")
+                logger.info("Staged README.md from ENTITY_DATABASE.md")
             else:
-                logger.warning(f"HUGGINGFACE_README.md not found at {readme_source}")
+                logger.warning(f"ENTITY_DATABASE.md not found at {readme_source}")
 
         # Upload all files in a single commit to avoid LFS pointer issues
         logger.info(f"Uploading {len(files_to_upload)} files to {repo_id}...")

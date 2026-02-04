@@ -5,12 +5,12 @@ allowed-tools: Read, Edit, Write, Glob, Grep
 
 Please update all the docs (.mdx and .md) with all the changes.
 
-**Files to update:**
+## Files to update
 
 1. **Root documentation:**
    - `CLAUDE.md` - Claude Code guidance
    - `README.md` - Main project README
-   - `COMPANY_DB.md` - The companies database
+   - `ENTITY_DATABASE.md` - The companies database
 
 2. **Python library documentation:**
    - `statement-extractor-lib/README.md` - Library README
@@ -22,12 +22,35 @@ Please update all the docs (.mdx and .md) with all the changes.
 4. **Local Server Documentation:**
    - `local-server/README.md`
    
-4. **Website documentation (MDX):**
+5. **Website documentation (MDX):**
    - `src/app/docs/sections/*.mdx`
    - `src/components/documentation.tsx`
    - `src/components/llm-prompts.tsx`
    - `src/components/pipeline-diagram.tsx`
-**Process:**
+   
+6. ** Notebooks
+
+   Please update the documentation (and code if required) in the notebooks in the `notebooks` directory.
+
+## Specific periodic updates
+
+### Database Changes
+
+The embedding database documentation names approximate sizes and other info, please check the file size of the database in hugging face (https://huggingface.co/datasets/Corp-o-Rate-Community/entity-references/tree/main) and then run:
+
+`uv run corp-extractor db status --for-llm`
+
+To get the current sizes and other database information.
+
+Make sure you then update: 
+
+   - `src/app/docs/sections/core-concepts.mdx`
+   - `src/app/docs/sections/entity-database.mdx`
+   - `ENTITY_DATABASE.md`
+
+and anywhere else that refers to the database.
+
+## Process
 
 $ARGUMENTS$
 

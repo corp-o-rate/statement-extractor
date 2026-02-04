@@ -53,11 +53,11 @@ const tocItems: TocItem[] = [
       { id: 'gliner2-integration', label: 'GLiNER2 Integration', level: 3 },
       { id: 'pipeline-architecture', label: 'Pipeline Architecture', level: 3 },
       { id: 'document-processing', label: 'Document Processing', level: 3 },
-      { id: 'company-database', label: 'Company Database', level: 3 },
+      { id: 'entity-database', label: 'Entity Embedding Database', level: 3 },
     ],
   },
   {
-    id: 'entity-database',
+    id: 'entity-database-main',
     label: 'Entity Database',
     level: 2,
     children: [
